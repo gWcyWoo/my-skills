@@ -9,7 +9,7 @@ Fully automated pipeline from requirement to verified code. Zero human intervent
 
 ## Execution Model
 
-This skill orchestrates existing skills by **reading their SKILL.md files** for process details, then executing each phase inline. It does NOT invoke skills via the Skill tool — it executes their logic directly.
+This skill orchestrates existing skills by **reading their SKILL.md files** for process details. It does NOT invoke skills via the Skill tool. Phases execute either inline or in subagents — subagents are used when isolating context benefits subsequent phases (see individual phase instructions).
 
 **GATE OVERRIDE**: When following a sub-skill's process, bypass ALL **user-confirmation gates** — instructions that say "present to user and ask", "please confirm before I proceed", "wait for user confirmation", or "STOP" at the end of a completed phase. Treat these as phase-complete markers and proceed to the next phase automatically.
 
@@ -95,10 +95,10 @@ Any phase can fail. When a phase encounters an unresolvable error:
 3. Display the failure report to the user
 
 Specific failure scenarios:
-- **Phase 1**: Self-check gate (understand Step 3b) cannot be satisfied → fail
+- **Phase 1**: Self-check gate (subagent-instructions Step 3b) cannot be satisfied → fail
 - **Phase 2**: Codex audit violations cannot be fixed after applying all suggested fixes → fail
 - **Phase 2**: Codex subagent fails to execute (network error, CLI error) → retry once, then fail
-- **Phase 3**: Binding inputs missing (AC, Module Boundaries, etc.) → fail
+- **Phase 3**: Testcase subagent fails (binding inputs missing, lint errors unfixable, subagent error) → fail
 - **Phase 4**: Traceability or checklist verification has unfixable ❌ → fail
 - **Phase 5**: Verify fails after 3 retries → fail
 
@@ -106,15 +106,15 @@ Specific failure scenarios:
 
 ### Phase 1: Requirements + Design
 
-Read `~/.claude/skills/understand/SKILL.md` and `~/.claude/skills/hld/SKILL.md`. Execute their full process:
+Read `~/.claude/skills/understand/subagent-instructions.md` and `~/.claude/skills/hld/SKILL.md`. Execute their full process:
 
-1. Classify task type (understand Step 1)
-2. Analyze requirements (understand Step 2) — including Affected Files and Acceptance Criteria
-3. Execute HLD design (hld Step 0–2) — load architecture rules, design interfaces/signatures/boundaries/flows
-4. Execute self-check gate (understand Step 3b) — all 4 checks must pass with structured evidence
-5. Produce combined output (understand Step 4 format)
+1. Classify task type (subagent-instructions Step 1)
+2. Analyze requirements (subagent-instructions Step 2) — including Affected Files and Acceptance Criteria
+3. Execute HLD design (subagent-instructions Step 3 / hld Step 0–2) — load architecture rules, design interfaces/signatures/boundaries/flows
+4. Execute self-check gate (subagent-instructions Step 3b) — all 5 checks must pass with structured evidence
+5. Produce combined output (subagent-instructions Output section format)
 
-**Gate bypass**: Skip understand Step 3c user confirmation and Step 5 STOP. Proceed directly to Phase 2.
+**Gate bypass**: Skip understand Step 3 user confirmation. Proceed directly to Phase 2.
 
 **Record**: Read `~/.claude/skills/save-hld-record/SKILL.md`. Execute Step 2 to write `understand_hld.md` — use the pipeline's already-determined `{requirement_name}` (from Directory Structure), not save-hld-record Step 1's derivation logic. This file is the Phase 1 original output and is never modified after creation.
 
@@ -138,22 +138,18 @@ Read `~/.claude/skills/understand-hld-check/SKILL.md`. Execute:
 
 ### Phase 3: Test Cases
 
-Read `~/.claude/skills/testcase/SKILL.md`. Execute:
+Launch an Agent subagent (general-purpose) to execute testcase generation. This isolates test design noise from the main session, preserving context for Phase 4 (implementation).
 
-1. **Auto-determine test types** (testcase Step 0): Evaluate integration and e2e criteria against the HLD. Apply the recommendation logic — use the recommended types directly without confirmation.
-2. **Load type-specific rules**: After determining types, read ONLY the corresponding type files (`~/.claude/skills/testcase/integration.md`, `e2e.md`, `unit.md`).
-3. **Design test plan** (testcase Step 1): Follow the Binding Inputs and Design Process.
-4. **Supplementary unit tests** (testcase Step 1b): If AC Gap Check identifies unit-scope ACs, include unit test plan.
-5. **Write test code** (testcase Step 2): Load test standards, write test files to the project, produce correspondence table.
+**Subagent prompt must contain:**
+1. The authoritative HLD content — read `understand_hld_final.md` if it exists, otherwise `understand_hld.md`, and include the full text in the prompt
+2. The artifact directory path: `.auto-tdd/{requirement_name}/`
+3. Instruction: "Read `~/.claude/skills/testcase/SKILL.md` and execute the full process. Do NOT invoke any skills via the Skill tool — you are already executing the testcase workflow by reading SKILL.md directly. Bypass ALL user-confirmation STOP gates — proceed directly without waiting. After writing test code and passing lint, write the artifact file to `.auto-tdd/{requirement_name}/testcase.md` with sections: `## Test Types`, `## Test Plan`, `## Correspondence`. Return with `STATUS: COMPLETE` when done. Do NOT invoke the `code` skill."
 
-**Gate bypass**: Skip all three STOP gates (Step 0, Step 1, Step 2). Proceed directly to Phase 4.
+**Gate bypass**: The subagent bypasses all three STOP gates in testcase SKILL.md (Step 0, Step 1, Step 2).
 
-**Binding inputs**: Use the authoritative artifacts — if Phase 2 produced a `## Final Output`, use those; otherwise use Phase 1's `## Original Output`.
+**Binding inputs**: The authoritative HLD content is provided in the subagent prompt.
 
-**Record**: Write to `testcase.md`:
-- `## Test Types` — selected types and rationale (one line each)
-- `## Test Plan` — full test plan
-- `## Correspondence` — plan-to-code mapping table
+**On subagent completion**: Verify `testcase.md` artifact was written. Proceed to Phase 4.
 
 ---
 

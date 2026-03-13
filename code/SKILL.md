@@ -16,7 +16,7 @@ Determine project type by checking `package.json` dependencies and file extensio
 | Vue (`vue` in dependencies) | `~/.claude/shared-rules/frontend/vue3.md` |
 | React (`react` in dependencies) | `~/.claude/shared-rules/frontend/reactjs.md` |
 | Next.js (`next` in dependencies) | `~/.claude/shared-rules/frontend/nextjs.md` |
-| Next.js fullstack (`next` + server actions) | `~/.claude/shared-rules/frontend/nextjs-fullstack.md` |
+| Next.js fullstack (`next` + database operations) | `~/.claude/shared-rules/frontend/nextjs-fullstack.md` |
 | Any backend (non-frontend `.ts`/`.js` files) | `~/.claude/shared-rules/backend/ddd.md` |
 | Express (`express` in dependencies) | `~/.claude/shared-rules/backend/express.md` |
 | MongoDB (`mongoose`/`mongodb` in dependencies) | `~/.claude/shared-rules/backend/mongodb.md` |
@@ -32,7 +32,7 @@ From the HLD's Affected Files list (or `understand` output if no HLD exists), se
 - Same module type: if creating a custom hook, read an existing `hooks.ts` from another feature
 - Same layer: if modifying a route handler, read an existing `route.ts`
 
-**Purpose**: These files are the **concrete pattern reference** for implementation. When a rule states an abstract principle (e.g., "extract custom hook when 2+ hooks operate on same state"), the reference code shows the exact pattern this project uses to fulfill that principle. Implementation in Step 2 MUST follow the structural patterns observed in the reference code — naming conventions, file organization, hook composition style, component decomposition approach.
+**Purpose**: These files are the **concrete pattern reference** for implementation. When a rule states an abstract principle, the reference code shows the exact pattern this project uses to fulfill that principle. Implementation in Step 2 SHOULD follow the structural patterns observed in the reference code (naming conventions, file organization, module composition style) — but only when they do not conflict with HLD contracts. See Step 2b priority order for conflict resolution.
 
 If no structurally similar file exists in the project (e.g., entirely new module type), skip this step.
 
@@ -91,10 +91,21 @@ If NONE of the above exist in conversation, ask the user and STOP:
 
 **Flow Sequence Fidelity**: When the HLD defines a multi-step interaction flow (A → B → C → D), implement the steps in that exact causal order. Do NOT collapse steps, reorder them, or substitute one step's output as another step's trigger. Each step in the HLD flow must have a corresponding implementation that receives input from its immediate predecessor — not from an earlier step in the chain.
 
-Implement according to the Binding Inputs located in 2a. The code MUST simultaneously satisfy:
-1. The HLD contracts (interfaces, signatures, module boundaries) — exact match, not approximate
+**Per-file HLD contract extraction (MANDATORY when HLD exists)**: Before writing each file, extract every HLD constraint that applies to this file and list them explicitly:
+
+| HLD Dimension | Extract |
+|---|---|
+| Function Signatures | Parameter types, return type for every function in this file |
+| Module Boundaries | Internal Dependencies, External Boundary for this module |
+| Flow table | Every row where this module appears as Caller or Callee — note the Input and Expected Output |
+| Design Decisions | Any decision that names or constrains this module |
+
+This extraction brings HLD constraints to the foreground before writing. When reference code patterns (from Step 1b) conflict with any extracted HLD constraint, the HLD wins — reference code is a structural guide, not an architectural authority.
+
+Implement according to the Binding Inputs located in 2a. The code MUST satisfy all of the following (in priority order — higher number overrides lower when they conflict):
+1. The structural patterns from the reference code in Step 1b (when available) — lowest priority
 2. The Implementation Checklist from Step 1c (every numbered item)
-3. The structural patterns from the reference code in Step 1b (when available)
+3. The HLD contracts (interfaces, signatures, module boundaries) — exact match, not approximate — **highest priority**
 
 ### 2c. Traceability (only when HLD exists)
 

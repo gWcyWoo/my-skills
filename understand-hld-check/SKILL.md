@@ -11,7 +11,7 @@ Independent Codex audit of the combined understand + HLD output, invoked when th
 
 ## When to Use
 
-Invoked from `understand` Step 3c when the user requests a third-party audit. This is **user-initiated**, not automatic — the `understand` skill presents the combined output first and asks the user whether to run this audit.
+Invoked from `understand` Step 3 when the user requests a third-party audit. This is **user-initiated**, not automatic — the `understand` skill presents the combined output first and asks the user whether to run this audit.
 
 ## Process
 
@@ -20,8 +20,8 @@ Invoked from `understand` Step 3c when the user requests a third-party audit. Th
 Collect from the current conversation:
 
 1. **User's Original Request** — The raw task description/spec from the user
-2. **Requirements Analysis** — The `understand` Step 2 output (task type, analysis, affected files, acceptance criteria)
-3. **HLD Design** — The `hld` output (interfaces, signatures, module boundaries, interaction flow, design decisions)
+2. **Requirements Analysis** — The Requirements Analysis section of the combined document (task type, analysis, affected files, acceptance criteria)
+3. **HLD Design** — The HLD Design section of the combined document (interfaces, signatures, module boundaries, interaction flow, design decisions)
 4. **CLAUDE.md path** — The project's CLAUDE.md file path for architecture rules
 
 ### Step 2: Dispatch Subagent (main session)
@@ -34,7 +34,7 @@ Launch an Agent subagent with the following instructions:
 4. Invoke the `codex` skill with the constructed prompt. When executing the Codex Bash command, set `timeout: 600000` (10 minutes) on the Bash tool call
 5. Return the Codex output verbatim — do NOT interpret, summarize, or filter. If the command times out (exit code 124), return "CODEX_TIMEOUT" as the result
 
-**Subagent prompt must include**: All four inputs from Step 1 serialized as text, plus the CLAUDE.md path. Pass every input VERBATIM — do NOT summarize, compress, or strip type information. The codex skill requires the exact content to audit; missing details cause false positives.
+**Subagent prompt must include**: All four inputs from Step 1 serialized as text. Pass every input VERBATIM — do NOT summarize, compress, or strip type information. The codex skill requires the exact content to audit; missing details cause false positives.
 
 ### Step 3: Process Result (main session)
 
@@ -66,15 +66,15 @@ For each violation reported by Codex:
 
 ### Step 5: Return to Understand (main session)
 
-Once zero issues confirmed, return the audited output to the `understand` flow. The `understand` skill will re-present the updated combined output to the user in Step 3c.
+Once zero issues confirmed, return the audited output to the `understand` flow. The `understand` skill will re-present the updated combined output to the user in Step 3.
 
 ## Decision Summary
 
 ```
 Main session: Prepare inputs → Dispatch subagent
 Subagent: Read audit prompt → Read rules → Construct Codex prompt → Run Codex → Return result
-Main session: Parse result → PASS? → Return to understand Step 3c
-                           → FAIL? → Fix artifacts → Self-review → Return to understand Step 3c
+Main session: Parse result → PASS? → Return to understand Step 3
+                           → FAIL? → Fix artifacts → Self-review → Return to understand Step 3
 ```
 
 **Do NOT return artifacts with known unfixed violations to the understand flow.**

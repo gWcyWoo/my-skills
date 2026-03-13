@@ -9,18 +9,18 @@ Saves the current understand + HLD artifacts to disk for later quality analysis.
 
 ## When to Use
 
-- **Manual flow**: Invoked from `understand` Step 3c when the user selects the save option.
+- **Manual flow**: Invoked from `understand` Step 3 when the user selects the save option.
 - **auto-tdd flow**: Invoked by auto-tdd at Phase 1 and Phase 2 boundaries to record artifacts automatically.
 
 ## Process
 
 ### Step 1: Determine Requirement Name
 
-Derive a short, filesystem-safe name from the current task's summary (from `understand` Step 2 output). Use lowercase kebab-case, max 50 chars. Example: "home-v1-tab-switching", "fix-login-redirect".
+Derive a short, filesystem-safe name from the task summary in the combined document. Use lowercase kebab-case, max 50 chars. Example: "home-v1-tab-switching", "fix-login-redirect".
 
 ### Step 2: Write Original Output
 
-Write the combined Requirements Analysis + HLD Design (the full content produced by `understand` Step 4 format) to:
+Write the combined Requirements Analysis + HLD Design document to:
 
 ```
 .auto-tdd/{requirement_name}/understand_hld.md
@@ -28,7 +28,7 @@ Write the combined Requirements Analysis + HLD Design (the full content produced
 
 ### Step 3: Check for Audit Data
 
-Check whether `understand-hld-check` was run in the current conversation (option 3 in Step 3c).
+Check whether `understand-hld-check` was run in the current conversation (option 3 in `understand` Step 3).
 
 - **Audit was NOT run** → Skip Steps 4–5. Go to Step 6.
 - **Audit was run** → Proceed to Step 4.
@@ -59,7 +59,7 @@ Output exactly:
 
 > **HLD record saved to `.auto-tdd/{requirement_name}/`.**
 
-Then return to `understand` Step 3c — re-present the same four options (code / testcase / audit / save) so the user can continue the workflow.
+Then return to `understand` Step 3 — re-present the same four options (code / testcase / audit / save) so the user can continue the workflow.
 
 ## Rules
 
