@@ -49,6 +49,7 @@ Severity: **BLOCKER** (must fix before proceeding) | **WARN** (should fix) | **I
 ## Inputs
 
 ### [User's Original Request]
+<!-- Include the user's chat message AND the full content of any referenced spec/requirement files (PRDs, feature specs, etc.) that the understand subagent read to derive ACs. Without the spec content, AC traceability checks will produce false positives. -->
 <USER_REQUEST>
 </USER_REQUEST>
 

@@ -19,7 +19,10 @@ Invoked from `understand` Step 3 when the user requests a third-party audit. Thi
 
 Collect from the current conversation:
 
-1. **User's Original Request** — The raw task description/spec from the user
+1. **User's Original Request** — The complete source material the understand subagent used to derive ACs. This includes:
+   - The user's chat message (verbatim)
+   - **If the user's message references an external spec/requirement file** (e.g., `上传简历.md`, `feature-spec.md`, a PRD, or any document the understand subagent read to extract requirements): read that file and include its **full content** in this input. The auditor checks ACs against this input — if the spec content is missing, the auditor cannot verify AC traceability and will produce false `AC_OVERCLAIM` / `AC_MISSING` violations.
+   - To identify referenced spec files: check the understand subagent's output for file reads that occurred before AC generation, or look for file paths/names mentioned in the user's original message.
 2. **Requirements Analysis** — The Requirements Analysis section of the combined document (task type, analysis, affected files, acceptance criteria)
 3. **HLD Design** — The HLD Design section of the combined document (interfaces, signatures, module boundaries, interaction flow, design decisions)
 4. **CLAUDE.md path** — The project's CLAUDE.md file path for architecture rules
