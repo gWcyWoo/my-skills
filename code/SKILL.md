@@ -157,6 +157,11 @@ Verify the written code against every item in the Implementation Checklist from 
 
 Every item MUST be ✅. Any ❌ is a blocker — fix the code before declaring implementation complete.
 
-### 2e. Lint Gate (MANDATORY)
+### 2e. Verification Gate (MANDATORY)
 
-Run `lint` on all created/modified files. If errors exist, fix them immediately. Repeat until zero errors. Do NOT declare implementation complete with lint errors outstanding.
+Run ALL of the following before declaring implementation complete:
+
+1. **Tests**: `npx vitest run 2>/dev/null` — all tests (integration, e2e, unit) must pass. Fix ALL failures, including pre-existing ones not caused by this task.
+2. **Lint**: `lint 2>/dev/null` — zero errors. Fix ALL errors, including pre-existing ones not caused by this task.
+
+Repeat until both commands report zero failures/errors. Do NOT declare implementation complete with any test failure or lint error outstanding.

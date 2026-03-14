@@ -4,14 +4,24 @@ You are executing the analysis phase of the `understand` skill. Your job is to a
 
 **You are a read-only analyst. Do NOT create, modify, or delete any project files (no Edit, no Write). Your only deliverable is the combined document returned as text output.**
 
-## Code Navigation — LSP First (MANDATORY)
+## Code Navigation — CodeGraph First (MANDATORY)
 
-Follow the **Code Navigation — LSP First** rules defined in `~/.claude/CLAUDE.md`. This section summarizes the key constraints; CLAUDE.md is authoritative.
+Follow the **Code Navigation — CodeGraph First** rules defined in `~/.claude/CLAUDE.md`. This section summarizes the key constraints; CLAUDE.md is authoritative.
 
-- **Phase 1:** Max 3 Glob calls (directory-scoped only), max 3 code file Reads
-- **Phase 2:** Using Glob/Grep to discover or navigate code files is PROHIBITED. Use LSP exclusively (`documentSymbol`, `goToDefinition`, `findReferences`, `hover`). Every file you Read MUST have been discovered through a file-navigating LSP operation (`goToDefinition` or `findReferences`) from a file you already visited.
-- **Fallback:** If LSP returns an unresolvable error, Glob/Grep is allowed for that specific lookup only.
-- **Exceptions:** Glob/Grep for non-code files and Grep for content search (string literals, error messages) are allowed in any phase.
+**Why this layered approach:** Code analysis requires building understanding from structure to detail. Each layer provides a different level of precision — use the cheapest layer that answers your question. CodeGraph gives you the full module relationship graph in a few calls (what calls what, what depends on what). LSP gives you exact type signatures and reference sites without reading files. Read gives you full source code but costs the most context. If 3 CodeGraph calls + 4 LSP hovers can answer the same questions, reading 12 files wastes context and degrades attention on later analysis steps.
+
+- **Step 0 — Load tools and methodology:** Run `ToolSearch("codegraph")` and `ToolSearch("LSP")` to load deferred tool schemas. Then read `~/.claude/skills/explore.md` — it defines how CodeGraph and LSP work together for code navigation. Follow that methodology for all subsequent code navigation. If a ToolSearch returns no results, that tool is unavailable — skip it and proceed to the next available step.
+- **Step 1 — CodeGraph + LSP (structure, relationships, and types):** Build a complete picture of the relevant code structure. After each tool call, follow the **Extract → Identify Gaps** process from `explore.md` to determine what specific information to seek next.
+  - **1a.** `codegraph_context` — ALWAYS start here. Describe the full task to get entry points, related symbols, and code snippets in one call.
+  - **1b.** `LSP findReferences` — For key entry-point symbols from 1a, discover all callers, consumers, and importers. One `findReferences` call replaces multiple `codegraph_search` calls. Use this instead of `codegraph_callers` (more reliable, type-system backed).
+  - **1c.** `codegraph_node` — Get signature and location for symbols discovered in 1a/1b. For types, interfaces, enums, and constants, signature only (no includeCode). For functions with logic, use `includeCode: true`.
+  - **1d.** `LSP hover` — Get precise type signatures (generics, unions, inferred types) when `codegraph_node` signature is not detailed enough.
+  - **1e.** `codegraph_search` — Only for symbols NOT found by 1a/1b. Do NOT use search as the primary exploration tool.
+  Continue until you have mapped all modules, their relationships, and their boundaries relevant to the task.
+- **Step 2 — Read (only for cross-symbol context that CodeGraph + LSP cannot provide):** Read a file only when you need control flow spanning multiple functions in one file. Do NOT use Read for a single symbol's code — use `codegraph_node(includeCode: true)` instead.
+- **Step 3 — Glob (last resort):** Max 3 calls, directory-scoped only. Only for files not found by CodeGraph.
+- **Grep:** Allowed any time for string content search (URLs, error messages, literals).
+- **Non-code files** (`.md`, `.json`, `.yaml`, `.css`, `.svg`): Glob/Grep/Read always allowed.
 
 ## Inputs
 
