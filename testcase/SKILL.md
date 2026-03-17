@@ -5,9 +5,13 @@ description: Use when writing test cases. Auto-recommends integration/E2E test t
 
 # Test Case Workflow
 
+## Code Navigation
+
+When you need to explore the codebase (find files, read implementations, check patterns), invoke the `my-explore` skill via Skill tool first if not already loaded. Follow its methodology for all code navigation.
+
 ## Skip Conditions
 
-Do NOT invoke if the change involves no behavioral change: pure CSS, documentation, config, or file rename without logic change.
+Do NOT invoke if the change involves no user-visible impact: documentation-only, config-only (no runtime effect), or file rename without logic change. Note: CSS/styling changes that affect web page appearance ARE user-visible and should NOT be skipped.
 
 ---
 
@@ -28,7 +32,7 @@ When no argument is given, analyze the confirmed `understand` output and HLD to 
    | Type | Recommend when | Skip when |
    |---|---|---|
    | **integration** | Multiple modules interact; HLD shows cross-module data flow or orchestration; container/hook coordinates multiple concerns | Change is isolated to a single pure function/hook with no module interaction |
-   | **e2e** | User-facing flow spans multiple pages/steps; critical path (auth, payment, form submission); HLD shows navigation or multi-step interaction | Change is purely internal logic with no visible UI impact; no page navigation involved |
+   | **e2e** | **Any change that affects a web page** — layout, components, interactions, data display, styling, or user flows. This includes single-page UI changes with no navigation. | Change is purely backend/API with no web page impact (e.g., server-only logic, CLI tool, database migration) |
 
 3. **Output recommendation using one of these exact formats, then STOP**:
 
@@ -78,18 +82,34 @@ If multiple types are confirmed, load all corresponding rules files and produce 
 
 ---
 
+## Code Reading Boundaries (TDD Discipline)
+
+Tests are written BEFORE implementation code. The test's API contract comes from the HLD, not from source code.
+
+**When HLD exists:**
+- **Source of truth**: HLD interfaces, function signatures, and module boundaries — these ARE the API contracts
+- **Allowed to read**: Type/interface definition files that define shared data structures (e.g., `schema.ts`, `types.ts`, `.d.ts`) — even if listed in Affected Files; existing test files (for setup patterns and conventions only); project configuration files
+- **FORBIDDEN to read**: Files that contain function bodies or business logic (e.g., `parser.ts`, `api.ts`, `handler.ts`, `service.ts`). The distinction: type/interface definitions = contracts (allowed); function/class implementations = code to be driven by tests (forbidden). This applies regardless of whether the file already exists or will be newly created. Any tool that reads content from implementation files is equally forbidden — this includes but is not limited to `codegraph_node`, `LSP documentSymbol`, `LSP hover`, `LSP goToDefinition`, `cocoindex search`, `Grep`, and `Read`.
+
+**When HLD does NOT exist (no-logic change):**
+- Fallback to reading source code for API contracts is permitted, as described in each type file's Input Discovery section.
+
+---
+
 ## Step 1: Design Test Plan
 
 ### Binding Inputs (mandatory — locate and directly reference, do NOT re-interpret)
 
-Before designing, locate these exact artifacts from the current conversation. If any artifact is missing, ask the user and STOP.
+Before designing, locate these exact artifacts from the current conversation:
 
-| Artifact | Source | Used For |
+| Artifact | Source | Required |
 |---|---|---|
-| Acceptance Criteria (AC-01, AC-02, ...) | `understand` output | Traceability — every test case maps to an AC ID |
-| Module Boundaries table | HLD output | Mock boundary identification (External Boundary column = what to mock) |
-| Module Interaction Flow table | HLD output | Edge contract extraction, test case derivation |
-| Interfaces / Function Signatures | HLD output | API contracts for assertions |
+| Acceptance Criteria (AC-01, AC-02, ...) | `understand` output | Always — every test case maps to an AC ID |
+| Module Boundaries table | HLD output | Only when HLD exists — mock boundary identification |
+| Module Interaction Flow table | HLD output | Only when HLD exists — edge contract extraction, test case derivation |
+| Interfaces / Function Signatures | HLD output | Only when HLD exists — API contracts for assertions |
+
+If ACs are missing, ask the user and STOP. If HLD artifacts are missing because no HLD was produced (no-logic change), proceed with ACs only — e2e tests can be designed from ACs and the affected page without HLD contracts.
 
 **FORBIDDEN**: Re-interpreting, summarizing, or expanding these artifacts. Use the exact content as written. If the HLD says module A calls module B with input X, the test plan must reflect that — not a re-derived version of the interaction.
 
@@ -151,6 +171,6 @@ The **confirmed test plan** (from Step 1) is the sole input for writing test cod
 **Do NOT run tests.** The `tdd` workflow handles test execution.
 
 **STOP.** Output exactly:
-> **Test code is ready. Confirm to proceed with implementation via `code` skill.**
+> **Test code is ready.**
 
-If the user confirms, invoke the `code` skill **using the Skill tool** to begin implementation. If the user requests changes, revise and ask again.
+If the user requests changes, revise and ask again. Do NOT automatically invoke the `code` skill — testcase and code are independent phases. Return to the caller (main session or user) after test code is complete.

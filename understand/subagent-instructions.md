@@ -1,32 +1,21 @@
 # Understand Subagent Instructions
 
-You are executing the analysis phase of the `understand` skill. Your job is to analyze the user's requirement, produce a combined Requirements Analysis document (with or without HLD Design), and return it to the main session.
+You are executing the analysis and design phases of the `understand` skill. Your job is to analyze the user's requirement, produce a Requirements Analysis document, and — for logic changes — produce an HLD design document.
 
-**You are a read-only analyst. Do NOT create, modify, or delete any project files (no Edit, no Write). Your only deliverable is the combined document returned as text output.**
-
-## Code Navigation — CodeGraph First (MANDATORY)
-
-Follow the **Code Navigation — CodeGraph First** rules defined in `~/.claude/CLAUDE.md`. This section summarizes the key constraints; CLAUDE.md is authoritative.
-
-**Why this layered approach:** Code analysis requires building understanding from structure to detail. Each layer provides a different level of precision — use the cheapest layer that answers your question. CodeGraph gives you the full module relationship graph in a few calls (what calls what, what depends on what). LSP gives you exact type signatures and reference sites without reading files. Read gives you full source code but costs the most context. If 3 CodeGraph calls + 4 LSP hovers can answer the same questions, reading 12 files wastes context and degrades attention on later analysis steps.
-
-- **Step 0 — Load tools and methodology:** Run `ToolSearch("codegraph")` and `ToolSearch("LSP")` to load deferred tool schemas. Then read `~/.claude/skills/explore.md` — it defines how CodeGraph and LSP work together for code navigation. Follow that methodology for all subsequent code navigation. If a ToolSearch returns no results, that tool is unavailable — skip it and proceed to the next available step.
-- **Step 1 — CodeGraph + LSP (structure, relationships, and types):** Build a complete picture of the relevant code structure. After each tool call, follow the **Extract → Identify Gaps** process from `explore.md` to determine what specific information to seek next.
-  - **1a.** `codegraph_context` — ALWAYS start here. Describe the full task to get entry points, related symbols, and code snippets in one call.
-  - **1b.** `LSP findReferences` — For key entry-point symbols from 1a, discover all callers, consumers, and importers. One `findReferences` call replaces multiple `codegraph_search` calls. Use this instead of `codegraph_callers` (more reliable, type-system backed).
-  - **1c.** `codegraph_node` — Get signature and location for symbols discovered in 1a/1b. For types, interfaces, enums, and constants, signature only (no includeCode). For functions with logic, use `includeCode: true`.
-  - **1d.** `LSP hover` — Get precise type signatures (generics, unions, inferred types) when `codegraph_node` signature is not detailed enough.
-  - **1e.** `codegraph_search` — Only for symbols NOT found by 1a/1b. Do NOT use search as the primary exploration tool.
-  Continue until you have mapped all modules, their relationships, and their boundaries relevant to the task.
-- **Step 2 — Read (only for cross-symbol context that CodeGraph + LSP cannot provide):** Read a file only when you need control flow spanning multiple functions in one file. Do NOT use Read for a single symbol's code — use `codegraph_node(includeCode: true)` instead.
-- **Step 3 — Glob (last resort):** Max 3 calls, directory-scoped only. Only for files not found by CodeGraph.
-- **Grep:** Allowed any time for string content search (URLs, error messages, literals).
-- **Non-code files** (`.md`, `.json`, `.yaml`, `.css`, `.svg`): Glob/Grep/Read always allowed.
+**Output**: Write the analysis to `{procedure_dir}/understand.md`. For logic changes, also produce `{procedure_dir}/hld.md`.
 
 ## Inputs
 
 You receive:
-1. **User's original request** — the task description verbatim from the user
+1. **Procedure directory path** — the directory containing `requirement.md`
+
+Read `{procedure_dir}/requirement.md` to get the user's original request (and any referenced spec content).
+
+## Code Navigation
+
+The `my-explore` skill (loaded at session start) is your sole navigation methodology. Follow it exactly.
+
+Analyze based on the current codebase state. Do not check git status, git diff, git log, or any version control state — these are irrelevant to requirements analysis and design.
 
 ## Process
 
@@ -57,13 +46,37 @@ Determine task type: **New Feature** | **Bug Fix** | **Refactoring**
 2. **Target State**: What should it look like after?
 3. **Motivation**: Why refactor? (performance, maintainability, etc.)
 4. **Risk Assessment**: What might break?
-5. **Existing Behavior Inventory** (MANDATORY): Read the code being refactored and enumerate **every** user-observable behavior it currently implements. Each behavior must specify: trigger condition → expected result. Do NOT summarize as "all behaviors unchanged" — list them individually. Examples: "drag files onto drop area → files appear in list", "click delete button → file removed from list". Every behavior in this inventory becomes a behavioral AC.
+5. **Existing Behavior Inventory** (MANDATORY): Examine the code being refactored and enumerate **every** user-observable behavior it currently implements. Each behavior must specify: trigger condition → expected result. Do NOT summarize as "all behaviors unchanged" — list them individually. Examples: "drag files onto drop area → files appear in list", "click delete button → file removed from list". Every behavior in this inventory becomes a behavioral AC.
 
 **Async State Completeness** (all task types): For each client-side data fetch or async operation identified in the analysis, enumerate all user-visible UI states: initial/loading, success, error/empty. Each state that produces a distinct user-visible outcome must become a separate AC. Do NOT assume only the success path — loading indicators and error/empty states are user-observable behaviors.
 
-After completing the analysis above, write **Affected Files** (which files will be created or modified, and why) and **Acceptance Criteria** (AC-01, AC-02, ...) based on the analysis. ACs are written here, not deferred to a later step.
+After completing the analysis above, write **Ambiguities** (if any), then **Affected Files** (which files will be created or modified, and why), then **Acceptance Criteria** (AC-01, AC-02, ...) based on the analysis. ACs are written here, not deferred to a later step.
 
-**Affected Files completeness**: For each file being modified, use `LSP findReferences` on the module's exports to discover test files that import it. If a test file exists and the modification changes the tested behavior, include the test file in Affected Files.
+### Ambiguity Detection (MANDATORY)
+
+Before writing ACs, scan the requirement for any item where:
+- The meaning has multiple valid interpretations (e.g., `status: 1|0` — is 1=active/0=inactive, or 1=parsed/0=pending?)
+- A term is used without definition (e.g., "返回 summary" — is summary a string excerpt, a structured object, or a full-text copy?)
+- The requirement specifies a data shape but not its semantics (e.g., field names without value constraints)
+- Two parts of the requirement imply contradictory behavior (e.g., "status: 1|0" but also "parsing fails" implies a third state)
+
+If ambiguities are found:
+1. Write an `### Ambiguities` section listing each one with a unique ID (AMB-01, AMB-02, ...)
+2. For each ambiguity, state: what the requirement says, what the possible interpretations are, and what information is needed to resolve it
+3. In any AC that depends on an unresolved ambiguity, append `(pending AMB-XX)` — this marks the AC as provisional
+4. **Do NOT guess or pick an interpretation** — leave it explicitly unresolved
+
+If the ambiguity is critical enough that the analysis cannot continue meaningfully, use the `NEEDS_CLARIFICATION` mechanism to ask the user. Otherwise, continue with the ambiguity marked and let the user resolve it during review.
+
+Format:
+```markdown
+### Ambiguities
+
+- AMB-01: `status: number, 1|0` — 1 and 0 represent what? Possible interpretations: (a) 1=active, 0=inactive; (b) 1=parsed, 0=pending; (c) boolean-style on/off. The requirement does not define the semantics of each value.
+- AMB-02: "返回 summary" — what is summary? Possible: (a) first N characters of parsed content; (b) LLM-generated abstract; (c) structured object with key fields. Source and format undefined.
+```
+
+**Affected Files completeness**: For each file being modified, use `LSP findReferences` (if LSP is available) on the module's exports to discover test files that import it. If a test file exists and the modification changes the tested behavior, include the test file in Affected Files.
 
 ### AC Writing Rule
 
@@ -100,98 +113,10 @@ After completing the analysis (Affected Files + ACs written), classify the chang
 
 **Logic change** — Any change that does NOT meet ALL no-logic criteria above.
 
-Routing:
-- **No-logic change** → Skip Steps 2c, 3, and 3b. Proceed directly to the Output section. Use the **simplified output format**.
-- **Logic change** → Proceed to Step 2c.
+### Step 2c: AC Quality Self-Check (MANDATORY)
 
-### Step 2c: Load Project Design Constraints (Logic change only)
+Before writing the output file, verify AC quality. For each AC, output a structured check covering FOUR dimensions — purity, prohibited patterns, observability, and traceability:
 
-Before HLD design, read the project's CLAUDE.md **in the repository root** using the `Read` tool. This is the project-specific CLAUDE.md, not the global `~/.claude/CLAUDE.md`. If no project CLAUDE.md exists in the repository root, output "No project CLAUDE.md found — Step 2c N/A" and proceed to Step 3.
-
-Extract every rule that constrains **code structure, data flow, API patterns, response types, URL conventions, or file organization**. Ignore workflow/process rules (e.g., "Phase 1: Requirements Understanding"). List the extracted rules explicitly — they become **binding design constraints** for Step 3 (HLD design). The HLD MUST comply with every extracted rule.
-
-### Step 3: Design
-
-After completing the analysis and loading project design constraints, invoke the `hld` skill using the Skill tool. Pass no arguments — `hld` will consume the analysis output and project design constraints from the current conversation context. Wait for `hld` to complete and return its design output before proceeding to Step 3b.
-
-Do NOT inline HLD content yourself. The `hld` skill has its own mandatory process (loading architecture rules, enforcing constraints). Skipping the Skill tool invocation bypasses those checks.
-
-### Step 3b: Self-Check Gate (MANDATORY)
-
-After `hld` returns, execute these checks before returning results. Each check MUST produce structured evidence in the exact format shown. "I checked and it looks fine" is NOT acceptable — output the structured comparison or it did not happen.
-
-**Check 1: Project Design Constraint Compliance**
-Verify the HLD against the project design constraints extracted in Step 2c. If Step 2c was N/A (no project CLAUDE.md), output "Check 1 N/A" and proceed to Check 2.
-
-For each constraint extracted in Step 2c, output a structured comparison:
-```
-Constraint: "[exact quote from Step 2c extracted rules]"
-HLD element: "[exact quote from your HLD output that this constraint applies to]"
-Verdict: PASS / FAIL — [reason if FAIL]
-```
-If a constraint has no corresponding HLD element (the constraint's domain is not touched by this design), output: `Constraint: "..." → Not applicable to this HLD — SKIP`
-
-If any FAIL: fix the HLD element before proceeding.
-
-**Check 2: Module Boundary Completeness**
-
-**Part A — Reused Module Interface Completeness**
-For every component/module the HLD says to "reuse" or "integrate":
-1. Use `LSP hover` on the component's export to extract its complete public interface (all props/params with types).
-2. Output a field-by-field comparison:
-```
-Extracted interface (from LSP):
-  - isOpen: boolean
-  - onClose: () => void
-  - fetchCallback: (id: string) => Promise<Partial<ShareInfo>>
-
-HLD defines:
-  - isOpen: boolean ✓
-  - onClose: () => void ✓
-  - fetchCallback: MISSING ✗
-```
-3. Any field marked ✗ = FAIL. Update HLD interfaces before proceeding.
-4. If HLD does not reference any reused modules: output "Part A N/A".
-
-**Part B — New Module Boundary Completeness**
-For every new module in the HLD Module Boundaries table:
-1. **Dependency check**: Cross-reference Function Signatures and Flow table — every dependency mentioned there (functions called, constants used, types imported) must appear in Internal Dependencies. Output:
-```
-Module: [module name]
-  Signatures mention: [list of dependencies from Function Signatures]
-  Flow table mentions: [list of dependencies from Flow table]
-  Internal Dependencies declares: [what the table currently says]
-  Missing: [any dependency not declared] ✗ ← FAIL
-```
-2. **External Boundary check**: External Boundary must be a real process/network boundary (HTTP call, file system, database), not an in-process dependency (shared library, framework context, imported utility). Output:
-```
-Module: [module name]
-  External Boundary: "[what the table says]"
-  Is this a process/network boundary? YES/NO — [reason] ✓/✗
-```
-3. **Signature completeness**: Every function in Function Signatures must have parameter types and return type specified. Output:
-```
-[function name]: parameter type? [type] ✓/✗ | return type? [type] ✓/✗
-```
-4. Any FAIL: update Module Boundaries before proceeding.
-5. If HLD defines no new modules: output "Part B N/A".
-
-**Check 3: Affected Files Sync**
-1. List every file path that appears anywhere in the HLD output (Interfaces, Signatures, Module Boundaries, Flows).
-2. List every file in the Requirements Analysis Affected Files section.
-3. Output a two-column comparison:
-```
-HLD files                          | Affected Files list
------------------------------------|-------------------
-types.ts                           | ✓ listed
-api/server/share.ts                | ✓ listed
-constants.ts                       | ✗ NOT in Affected Files  ← FAIL
-```
-4. Any file in HLD but not in Affected Files = FAIL (add it).
-5. Any file in Affected Files but not referenced anywhere in HLD = FAIL (justify or remove it).
-
-**Check 4: AC Quality**
-1. For each AC, output a structured check covering THREE dimensions — purity, prohibited patterns, and observability:
 ```
 AC-01: "clicking the share icon opens a share panel with platform options"
   → file path? NO | function name? NO | tech choice? NO → Purity: PASS
@@ -204,51 +129,112 @@ AC-03: "loads post data from the backend API and displays a ranked card list"
   → can a non-technical stakeholder verify by looking at the running app?
     "displays a ranked card list" YES, but "loads from backend API" NO (internal implementation) → Observability: FAIL
   → Rewrite: "on page load, a ranked list of daily trending post cards is displayed"
-
-AC-05: "reuse src/components/custom/share/index.tsx"
-  → file path? YES → Purity: FAIL
-  → Rewrite: "Share panel appears as a bottom drawer with 5 platform options"
-  → Move "reuse src/components/custom/share/index.tsx" to HLD Design Decisions
 ```
-2. Every AC must appear in the output. Skipping an AC = skipping the check = violation.
-3. For Refactoring Structural ACs: skip the purity and observability checks (structural descriptions are verifiable by code inspection, not by running the app), but still check prohibited patterns.
 
-**Check 5: Flow Table Completeness**
+**Dimension 4 — Traceability (bidirectional):**
 
-Two parts, evaluated in a single pass over the Flow table:
-
-**Part A — Interface-Flow Consistency**
-1. List every field from each Interface defined in HLD §Interface/Contract Definitions.
-2. For each field, search the Flow table's Input and Expected Output columns for a reference to that field.
-3. Output a structured comparison:
+Forward: For each AC, cite the specific sentence or element in the requirement it traces to.
 ```
-Interface: UseFileSelectionReturn
-  - files: FileWithHash[]        → F1 Expected Output ("files updated") ✓
-  - isDragging: boolean          → F2 Expected Output ("isDragging = true") ✓
-  - totalSize: number            → no Flow references totalSize ✗ ← FAIL
-```
-4. Any Interface field not referenced in any Flow = FAIL. Fix by either adding a Flow row or removing the field from the Interface.
-5. If HLD defines no Interfaces: output "Part A N/A" and proceed to Part B.
+AC-01: "clicking the share icon opens a share panel with platform options"
+  → Source: requirement says "点击分享图标，弹出分享面板" → Traceability: PASS
 
-**Part B — Error Path Coverage**
-1. List every Flow with Path Type = `Success`.
-2. For each, check whether a corresponding `Error`, `Boundary`, or `N/A` Flow row exists in the Flow table for the same interaction.
-3. Output a structured comparison:
+AC-08: "when hot topics API fails, an empty list is displayed"
+  → Source: no sentence in requirement mentions API failure or empty list → Traceability: FAIL (overclaim — remove this AC)
 ```
-F1 (Success) → F6 (N/A: "sessionStorage.setItem cannot throw in this context") ✓
-F2 (Success) → F5 (Error: "sessionStorage read fails, fallback to SSR data") ✓
-F3 (Success) → no Error/Boundary/N/A row in Flow table ✗ ← FAIL
-```
-4. Missing row = FAIL. The HLD designer must have added the corresponding row — the checker does not determine whether failure is possible. Fix by adding the missing Flow row to the HLD.
 
-Only after all 5 checks pass with structured evidence, proceed to the Output section below.
+Reverse: After all ACs are checked, scan the requirement for any distinct behavior or constraint that has NO corresponding AC.
+```
+Reverse scan:
+  → "input/back, UI不变" → no AC covers preservation of input/back behavior → FAIL (add AC)
+  → "暂时不处理返回数据的显示" → no AC captures this exclusion → FAIL (add exclusion AC)
+```
+
+Rules:
+1. Every AC must appear in the check output. Skipping an AC = skipping the check = violation.
+2. For Refactoring Structural ACs: skip the purity and observability checks (structural descriptions are verifiable by code inspection, not by running the app), but still check prohibited patterns. Traceability check still applies.
+3. If any AC fails any dimension, fix it before writing the output file.
+4. **Traceability is the highest-priority check** — an AC that passes purity, pattern, and observability but has no requirement source is an overclaim and must be removed. A requirement statement with no AC is a gap and must be covered.
+
+Do NOT include self-check evidence in the output file — only the final analysis document.
+
+## Write Output
+
+Write `{procedure_dir}/understand.md` using the format that matches the complexity gate result:
+
+### Logic change format
+
+```markdown
+## Requirements Analysis
+
+**Task Type:** [New Feature | Bug Fix | Refactoring]
+**Summary:** [One sentence]
+
+### Analysis
+[Structured answers from Step 2]
+
+### Ambiguities
+[If any — AMB-01, AMB-02, ... If none, omit this section entirely]
+
+### Affected Files
+- file1.tsx - [why]
+- file2.ts - [why]
+
+### Acceptance Criteria
+- AC-01: [Criterion]
+- AC-02: [Criterion] (pending AMB-01)
+```
+
+### No-logic change format
+
+```markdown
+## Requirements Analysis
+
+**Task Type:** [New Feature | Bug Fix | Refactoring]
+**Summary:** [One sentence]
+**Complexity:** No-logic change (HLD skipped)
+
+### Analysis
+[Structured answers from Step 2]
+
+### Ambiguities
+[If any — AMB-01, AMB-02, ... If none, omit this section entirely]
+
+### Affected Files
+- file1.tsx - [why]
+
+### Acceptance Criteria
+- AC-01: [Criterion]
+- AC-02: [Criterion]
+```
+
+After writing `understand.md`, check the complexity gate result:
+
+- **No-logic** → Return to the main session immediately:
+  ```
+  STATUS: COMPLETE
+  COMPLEXITY: no-logic
+  ```
+
+- **Logic** → Proceed to the HLD phase below.
+
+## HLD Phase (logic changes only)
+
+Read `~/.claude/skills/hld/SKILL.md` and follow its process exactly to produce `{procedure_dir}/hld.md`. You already have the code context from the analysis phase — CodeGraph, CocoIndex, and LSP results are still available.
+
+After writing `hld.md`, return to the main session with:
+
+```
+STATUS: COMPLETE
+COMPLEXITY: logic
+```
 
 ## Ambiguity Handling
 
-At any point during execution (analysis, HLD design, or self-check), if you encounter ambiguity that cannot be resolved from the codebase alone (e.g., multiple valid interpretations of the requirement, unclear scope boundaries, conflicting patterns in existing code):
+At any point during execution, if you encounter ambiguity that cannot be resolved from the codebase alone:
 
-1. **Do NOT guess or assume** — stop execution at the point of ambiguity
-2. Return a structured response with format:
+1. **Non-critical ambiguity** (analysis can continue meaningfully without resolution): Record it in the `### Ambiguities` section as AMB-XX, mark dependent ACs with `(pending AMB-XX)`, and continue execution. The user resolves it during review.
+
+2. **Critical ambiguity** (analysis cannot continue — e.g., the entire feature scope depends on the interpretation): Stop execution and return:
 
 ```
 STATUS: NEEDS_CLARIFICATION
@@ -263,73 +249,4 @@ QUESTIONS:
 
 The main session will forward your questions to the user and resume you with their answers.
 
-## Output
-
-When complete, return the combined document using the format that matches the complexity gate result. You MUST include all HLD sections (Interfaces, Function Signatures, Module Boundaries, Module Interaction Flow, Design Decisions) with their full content from the `hld` skill output. Do NOT summarize, abbreviate, or condense the HLD — copy each section verbatim into the output template.
-
-### Logic change (full format — after Steps 3 + 3b)
-
-```
-STATUS: COMPLETE
-
----
-## Requirements Analysis
-
-**Task Type:** [New Feature | Bug Fix | Refactoring]
-**Summary:** [One sentence]
-
-### Analysis
-[Structured answers from Step 2]
-
-### Affected Files
-- file1.tsx - [why]
-- file2.ts - [why]
-
-### Acceptance Criteria
-- AC-01: [Criterion]
-- AC-02: [Criterion]
-
-## High-Level Design
-
-### Interfaces
-[Interface definitions from HLD]
-
-### Function Signatures
-[Signatures with descriptions from HLD]
-
-### Module Boundaries
-[Module boundary table from HLD]
-
-### Module Interaction Flow
-[Interaction flow table from HLD]
-
-### Design Decisions
-[Key decisions and rationale from HLD]
----
-```
-
-### No-logic change (simplified format — HLD skipped)
-
-```
-STATUS: COMPLETE
-
----
-## Requirements Analysis
-
-**Task Type:** [New Feature | Bug Fix | Refactoring]
-**Summary:** [One sentence]
-**Complexity:** No-logic change (HLD skipped)
-
-### Analysis
-[Structured answers from Step 2]
-
-### Affected Files
-- file1.tsx - [why]
-
-### Acceptance Criteria
-- AC-01: [Criterion]
-- AC-02: [Criterion]
----
-```
-
-Do NOT include self-check evidence in the output — only include the final combined document. The self-check evidence stays in the subagent context.
+**Do NOT guess or pick an interpretation for either type.** Non-critical ambiguities are marked, not resolved. Critical ambiguities halt execution.

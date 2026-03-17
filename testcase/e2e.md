@@ -4,14 +4,14 @@
 
 End-to-end user flows: full page interactions, navigation, and API round-trips through the real stack. Focus on **user-visible behavior** and **physical layout integrity**.
 
-**MANDATORY for Data Contract Regression direction**: Before writing any test, read EVERY component in the render tree. Build a complete field-to-locator mapping table (`TypeField → Locator`) by exhaustively tracing each type definition field to its rendered UI element. Use the locator priority defined in §6.1 to determine the best locator for each field. Every field that has a visible UI representation MUST have a corresponding assertion. Writing tests before this mapping is complete is forbidden.
+**MANDATORY for Data Contract Regression direction**: Before writing any test, build a complete field-to-locator mapping table (`TypeField → Locator`). When HLD exists, derive the mapping from HLD UI layout contracts and type definition files — do NOT read component implementation files (see SKILL.md "Code Reading Boundaries"). When no HLD exists, read the component render tree to build the mapping. Use the locator priority defined in §6.1 to determine the best locator for each field. Every field that has a visible UI representation MUST have a corresponding assertion. Writing tests before this mapping is complete is forbidden.
 
 ---
 
 ## 2. Input Discovery
 
-- **With HLD**: Use HLD-defined page routes, user flow descriptions, and UI layout contracts.
-- **Without HLD**: Read source files from `understand` → Affected Files. Identify page routes, navigation flows, form actions, layout components. These define the test targets.
+- **With HLD**: Use HLD-defined page routes, user flow descriptions, and UI layout contracts. The HLD is the sole contract. You may read type/interface definition files (e.g., `schema.ts`, `types.ts`) even if listed in Affected Files — they define contracts. You MUST NOT read files that contain function bodies or business logic. See SKILL.md "Code Reading Boundaries" for the full rule.
+- **Without HLD**: Use `codegraph_node(includeCode: true)` and `LSP documentSymbol` on files from `understand` → Affected Files. Identify page routes, navigation flows, form actions, layout components. These define the test targets.
 
 ---
 

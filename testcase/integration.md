@@ -15,8 +15,8 @@
 
 ## 2. Input Discovery
 
-- **With HLD**: Use HLD-defined component interfaces and module boundaries as API contracts.
-- **Without HLD**: Read source files from `understand` → Affected Files. Extract component props, container interfaces, service method signatures. These become the API contracts. Do NOT invent APIs.
+- **With HLD**: Use HLD-defined component interfaces and module boundaries as API contracts. The HLD is the sole contract. You may read type/interface definition files (e.g., `schema.ts`, `types.ts`) even if listed in Affected Files — they define contracts. You MUST NOT read files that contain function bodies or business logic (e.g., `parser.ts`, `api.ts`, `handler.ts`). See SKILL.md "Code Reading Boundaries" for the full rule.
+- **Without HLD**: Use `codegraph_node(includeCode: true)` and `LSP hover` on symbols from `understand` → Affected Files. Extract component props, container interfaces, service method signatures. These become the API contracts. Do NOT invent APIs.
 
 ### 2b. HLD Edge Contract Extraction (mandatory when HLD exists)
 

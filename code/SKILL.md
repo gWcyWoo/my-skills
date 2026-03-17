@@ -5,9 +5,29 @@ description: Use when implementing code after requirements are confirmed. Loads 
 
 # Code Workflow
 
+## Code Navigation
+
+When you need to explore the codebase (find files, read implementations, check patterns), invoke the `my-explore` skill via Skill tool first if not already loaded. Follow its methodology for all code navigation.
+
+## Step 0: Dispatch Subagent
+
+Launch an Agent subagent (general-purpose) to execute the implementation. This isolates implementation noise (rule loading, traceability tables, test/lint output) from the main session.
+
+**Subagent prompt must contain:**
+1. The procedure directory path
+2. Instruction: "First, invoke the `my-explore` skill using the Skill tool to load code navigation methodology."
+3. Instruction: "Read `~/.claude/skills/code/SKILL.md` and follow Steps 1–2 exactly. Read the analysis from `{procedure_dir}/understand.md` and design from `{procedure_dir}/hld.md`. Do NOT read `requirement.md` — the understand and HLD outputs are your sole inputs. Do NOT invoke any skills via the Skill tool other than `my-explore`. After all verification passes (vitest + lint), return with `STATUS: COMPLETE`."
+
+**Do NOT add** implementation hints or code suggestions. The subagent derives everything from the procedure files and HLD contracts.
+
+**Handle subagent result:**
+
+- **STATUS: COMPLETE** → Present the result to the user.
+- **STATUS: NEEDS_CLARIFICATION** → Forward questions to the user, resume subagent with answers.
+
 ## Step 1: Load Project Standards
 
-Determine project type by checking `package.json` dependencies and file extensions of the files to be created/modified. For each matching condition, check whether the file's content is already present in the current conversation context (loaded by a prior skill such as `hld`). Read ONLY the files whose content is NOT already in context.
+Determine project type by checking `package.json` dependencies and file extensions of the files to be created/modified. Read the matching rule files:
 
 | Condition | File to Read |
 |---|---|
@@ -23,16 +43,16 @@ Determine project type by checking `package.json` dependencies and file extensio
 
 ---
 
-## Step 1b: Read Reference Code
+## Step 1b: Reference Code Patterns
 
-From the HLD's Affected Files list (or `understand` output if no HLD exists), select 1–2 existing source files that are most structurally similar to the files that will be created or modified. Read them.
+From the HLD's Affected Files list (or `understand` output if no HLD exists), identify 1–2 existing source files that are most structurally similar to the files that will be created or modified. Use `codegraph_node(includeCode: true)` to retrieve key symbols (component, hook, handler) from these files — do NOT Read entire files.
 
 **Selection criteria** (pick the file that matches the most criteria):
-- Same file role: if creating a `container.tsx`, read an existing `container.tsx` from another feature
-- Same module type: if creating a custom hook, read an existing `hooks.ts` from another feature
-- Same layer: if modifying a route handler, read an existing `route.ts`
+- Same file role: if creating a `container.tsx`, find an existing `container.tsx` from another feature
+- Same module type: if creating a custom hook, find an existing `hooks.ts` from another feature
+- Same layer: if modifying a route handler, find an existing `route.ts`
 
-**Purpose**: These files are the **concrete pattern reference** for implementation. When a rule states an abstract principle, the reference code shows the exact pattern this project uses to fulfill that principle. Implementation in Step 2 SHOULD follow the structural patterns observed in the reference code (naming conventions, file organization, module composition style) — but only when they do not conflict with HLD contracts. See Step 2b priority order for conflict resolution.
+**Purpose**: These symbols are the **concrete pattern reference** for implementation. When a rule states an abstract principle, the reference code shows the exact pattern this project uses to fulfill that principle. Implementation in Step 2 SHOULD follow the structural patterns observed in the reference code (naming conventions, file organization, module composition style) — but only when they do not conflict with HLD contracts. See Step 2b priority order for conflict resolution.
 
 If no structurally similar file exists in the project (e.g., entirely new module type), skip this step.
 
@@ -40,7 +60,7 @@ If no structurally similar file exists in the project (e.g., entirely new module
 
 ## Step 1c: Compile Implementation Checklist
 
-Extract from ALL loaded rules (Step 1 + any rules already in context from prior skills) ONLY the items that are directly relevant to the current task's Affected Files and HLD design. Output a compact, numbered checklist with a maximum of 15 items.
+Extract from ALL loaded rules (Step 1) ONLY the items that are directly relevant to the current task's Affected Files and HLD design. Output a compact, numbered checklist with a maximum of 15 items.
 
 **Relevance filter**: Determine which constructs the code will contain by inspecting the HLD artifacts (not by guessing):
 - **Interfaces / Function Signatures** → identify language constructs (async functions, hooks, route handlers, etc.)
@@ -69,7 +89,7 @@ A rule item is relevant if the HLD artifacts show the code will contain the cons
 
 ### 2a. Locate Binding Inputs (mandatory — do NOT re-interpret)
 
-Locate these exact artifacts from the current conversation. If any artifact is missing and there is no HLD, fall back to the user's original request — but if an HLD was produced and confirmed, it is the authoritative source.
+Locate these exact artifacts from `understand.md` and `hld.md`. The HLD is the authoritative source. If no HLD exists (no-logic change), use `understand.md` alone — it contains ACs and Affected Files.
 
 | Artifact | Source | Used For |
 |---|---|---|
@@ -81,11 +101,9 @@ Locate these exact artifacts from the current conversation. If any artifact is m
 
 **FORBIDDEN**: Re-interpreting, summarizing, or expanding these artifacts. Implement what the HLD defines — not a re-derived version. If the HLD says module A is at path X with signature Y, implement exactly that.
 
-If NONE of the above exist in conversation, ask the user and STOP:
-
-> What should I implement? Please describe the requirements or point me to the relevant files.
-
 ### 2b. Write Code
+
+**Read restriction**: When modifying existing source files, Read only the specific lines you are about to Edit (use line range). Use `codegraph_node(includeCode: true)` to understand code before editing — do NOT Read entire files for comprehension. For new files, use Write directly.
 
 **Source of Truth**: The confirmed HLD is the sole architectural authority. Once HLD is confirmed, the original spec/requirements are history — they have been consumed and resolved by the HLD. Do NOT re-read or re-interpret the original spec to make implementation decisions. If the HLD and original spec could be read differently, follow the HLD.
 

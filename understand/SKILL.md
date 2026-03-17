@@ -1,11 +1,11 @@
 ---
 name: understand
-description: Use when any code modification task is received, before design or implementation. Structures requirement analysis and HLD design in one pass.
+description: Use when any code modification task is received, before design or implementation. Structures requirement analysis and HLD design via a subagent.
 ---
 
 # Requirements Understanding
 
-Structured requirement analysis + HLD design. Must complete before any implementation.
+Structured requirement analysis + HLD design via a single subagent. Output is written to a procedure directory for full traceability. Must complete before any implementation.
 
 ## When to Use
 
@@ -21,24 +21,38 @@ Any task involving code changes: new features, bug fixes, refactoring.
 
 ## Process
 
-### Step 1: Dispatch Analysis Subagent
+### Step 0: Initialize Procedure Directory
 
-Launch an Agent subagent (general-purpose) to execute the full analysis phase. This isolates exploration noise (file reads, LSP calls, self-check evidence) from the main session, preserving attention for subsequent phases.
+1. Determine the project root (git root, or current working directory if not a git repo)
+2. Generate a short name (≤10 characters) summarizing the user's requirement
+3. Create directory: `{project_root}/.claude/procedure/{YYYY-MM-DD}/{name}/`
+4. Write `requirement.md` to the procedure directory:
+   - The user's chat message (verbatim)
+   - If the message references an external spec/requirement file (e.g., a PRD, feature spec, or any document containing detailed requirements): read that file and append its full content after the user's message, preceded by a `## Source Spec` heading
+5. Store the procedure directory path — all subsequent steps reference it as `{procedure_dir}`
+
+### Step 1: Dispatch Subagent
+
+Launch an Agent subagent (general-purpose) to execute the analysis and design phases. This isolates exploration noise (CodeGraph, CocoIndex, LSP calls) from the main session.
 
 **Subagent prompt must contain only:**
-1. The user's original request (verbatim)
-2. Instruction to read `~/.claude/skills/understand/subagent-instructions.md` and follow it exactly
-3. Instruction: "Do NOT invoke the `understand` skill via the Skill tool — you are already executing it by following subagent-instructions.md directly. You MAY invoke other skills (e.g., `hld`) as instructed by subagent-instructions.md."
+1. The procedure directory path
+2. Instruction: "First, invoke the `my-explore` skill using the Skill tool to load code navigation methodology."
+3. Instruction to read `~/.claude/skills/understand/subagent-instructions.md` and follow it exactly
+4. Instruction: "Do NOT invoke the `understand` skill via the Skill tool — you are already executing it by following subagent-instructions.md directly."
 
-**Do NOT add** file paths, component names, implementation guidance, or any context beyond the user's original words. The subagent discovers project structure on its own. Adding implementation-ready information causes the subagent to skip analysis and jump to coding.
+**Do NOT add** file paths, component names, implementation guidance, or any context beyond the procedure directory path. The subagent reads `requirement.md` and discovers project structure on its own. Adding implementation-ready information causes the subagent to skip analysis and jump to solutions.
 
-### Step 2: Handle Subagent Result
+### Step 2: Handle Result
 
 Parse the subagent's returned output for `STATUS`:
 
 #### STATUS: COMPLETE
 
-The subagent returned the combined document. Go to Step 3.
+The subagent wrote output files to the procedure directory. Check the `COMPLEXITY` field:
+
+- **`COMPLEXITY: no-logic`** → `understand.md` written. Go to Step 3.
+- **`COMPLEXITY: logic`** → `understand.md` and `hld.md` written. Go to Step 3.
 
 #### STATUS: NEEDS_CLARIFICATION
 
@@ -47,50 +61,71 @@ The subagent encountered ambiguity and returned structured questions.
 1. Present the questions to the user (include the `COMPLETED_SO_FAR` context if it helps the user understand why the question matters)
 2. Wait for user answers
 3. **Resume** the same subagent (using the Agent tool's `resume` parameter) with the user's answers. The subagent retains its full context and continues analysis from where it stopped.
-4. Parse the resumed subagent's output again — repeat Step 2 until `STATUS: COMPLETE`.
+4. Parse the resumed subagent's output again — repeat Step 2 until STATUS: COMPLETE.
 
-### Step 3: Present Combined Output
+### Step 3: Present Results to User
 
-Strip the `STATUS: COMPLETE` prefix from the subagent's output. Present the remaining combined document to the user and ask:
+Output the procedure file paths as clickable links. **Do NOT read the file contents into the main session context** — the user opens and reviews them directly in their editor.
 
-> **Select next step:**
+For logic changes:
+
+> Analysis and design complete:
+> - `{procedure_dir}/understand.md`
+> - `{procedure_dir}/hld.md`
+>
+> Select next step:
 > 1. **code** — Confirmed. Proceed to implementation.
 > 2. **testcase** — Confirmed. Generate test cases first, then implement.
-> 3. **audit** — Run third-party audit (`understand-hld-check`) before proceeding.
-> 4. **save** — Save HLD record to `.auto-tdd/` for quality analysis.
+> 3. **audit** — Run Codex third-party audit before proceeding.
 
-- User replies `1` / `code` (or equivalent: "确认", "ok", "没问题", "直接编码", "proceed") → invoke the `code` skill **using the Skill tool**.
-- User replies `2` / `testcase` (or equivalent: "测试", "先写测试", "tdd") → proceed to Step 4.
-- User replies `3` / `audit` (or equivalent: "审计", "review", "check") → invoke the `understand-hld-check` skill **using the Skill tool**. If violations are found, fix them per the skill's instructions, then re-present the updated output to the user with the same four options.
-- User replies `4` / `save` (or equivalent: "保存", "记录", "save hld") → invoke the `save-hld-record` skill **using the Skill tool**. After saving, re-present the same four options so the user can continue.
+For no-logic changes:
+
+> Analysis complete:
+> - `{procedure_dir}/understand.md`
+>
+> Select next step:
+> 1. **code** — Confirmed. Proceed to implementation.
+> 2. **testcase** — Confirmed. Generate test cases first, then implement.
+
+Wait for user selection:
+
+- User replies `code` (or equivalent: "确认", "ok", "没问题", "直接编码", "proceed") → invoke the `code` skill **using the Skill tool**, passing the procedure directory path as argument.
+- User replies `testcase` (or equivalent: "测试", "先写测试", "tdd") → proceed to Step 4.
+- User replies `audit` (or equivalent: "审计", "review", "check") → invoke the `understand-hld-check` skill **using the Skill tool**. After audit completes, re-present with the same options.
 
 **Do NOT execute skill logic inline.** Each skill has its own mandatory process (loading standards, checklists, traceability). Skipping the Skill tool invocation bypasses those checks.
 
 Do NOT proceed without a user selection. If the user requests changes to the analysis or design instead of selecting an option:
-- **Textual changes** (rewording ACs, adjusting scope description, adding/removing affected files): apply directly to the document and re-present with the same four options.
+- **Textual changes** (rewording ACs, adjusting scope description, adding/removing affected files): resume the subagent with the user's feedback. After changes, re-present with the same options.
 - **Changes requiring re-analysis** (different approach, new scope, re-examine code): resume the subagent with the user's feedback and parse its output again per Step 2.
 
 ### Step 4: Testcase Subagent (when user selects testcase)
 
-Launch an Agent subagent (general-purpose) to write test cases. This isolates test design and code generation from the main session, keeping context clean for the subsequent `code` phase.
+Launch an Agent subagent (general-purpose) to write test cases. This isolates test design from the main session.
 
 **Subagent prompt must contain:**
-1. The confirmed combined document (Requirements Analysis + HLD) from Step 3
-2. Instruction: "Read `~/.claude/skills/testcase/SKILL.md` and follow it exactly. Do NOT invoke any skills via the Skill tool — you are already executing the testcase workflow by reading SKILL.md directly. At the STOP gate in Step 0 (test type recommendation) or Step 1 (test plan), return your output with `STATUS: NEEDS_CONFIRMATION` at the top. After Step 2 is complete (test code written and lint-clean), return with `STATUS: COMPLETE`. Do NOT invoke the `code` skill — return to the main session instead."
+1. The procedure directory path
+2. Instruction: "First, invoke the `my-explore` skill using the Skill tool to load code navigation methodology."
+3. Instruction: "Read `~/.claude/skills/testcase/SKILL.md` and follow it exactly. Read the analysis from `{procedure_dir}/understand.md`. If `{procedure_dir}/hld.md` exists, also read it for design contracts. Do NOT read `requirement.md` — the understand and HLD outputs are your sole inputs. Write the test plan to `{procedure_dir}/testcase/plan.md`. Do NOT invoke any skills via the Skill tool other than `my-explore` — you are already executing the testcase workflow by reading SKILL.md directly. At any STOP gate (test type recommendation, direction selection, AC gap check, or test plan confirmation), return with `STATUS: NEEDS_CONFIRMATION` and include the recommendation or question content so the main session can present it to the user. After test code is written and lint-clean, return with `STATUS: COMPLETE`. Do NOT invoke the `code` skill — return to the main session instead."
 
-**Do NOT add** implementation hints or test code suggestions. The subagent derives everything from the HLD.
+**Do NOT add** implementation hints or test code suggestions. The subagent derives everything from the procedure files.
 
 **Handle subagent result:**
 
 #### STATUS: NEEDS_CONFIRMATION
 
-The subagent reached a STOP gate in Step 0 (test type recommendation) or Step 1 (test plan).
+The subagent reached a STOP gate (test type recommendation, direction selection, AC gap check, or test plan confirmation).
 
 1. Present the subagent's content to the user
 2. Wait for user response
-3. Resume the subagent with the user's response
-4. Parse the resumed result — repeat until STATUS: COMPLETE
+3. **Resume** the same subagent **(using the Agent tool's `resume` parameter with the subagent's agent ID)** with the user's response. Do NOT use SendMessage — SendMessage is for running agents only and will silently fail on a completed agent. The Agent tool's `resume` parameter re-launches the agent with its full previous context preserved.
+4. Parse the resumed subagent's output again — repeat until STATUS: COMPLETE
 
 #### STATUS: COMPLETE
 
-The subagent has written all test files and completed lint verification. Invoke the `code` skill **using the Skill tool** to begin implementation.
+The subagent has written all test files and completed lint verification. Re-present the procedure file links to the user with the remaining options:
+
+> Test cases written. Select next step:
+> 1. **code** — Proceed to implementation.
+
+Wait for user confirmation before invoking the `code` skill.

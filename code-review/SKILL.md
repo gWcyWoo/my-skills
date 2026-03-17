@@ -95,11 +95,11 @@ Review Checklist:
 
 ### Path B: Claude Reviewer
 
-1. Read the source code of all files to review.
+1. Use `codegraph_node(includeCode: true)` or `LSP` to retrieve the implementation of symbols in files to review. Invoke `Skill(my-explore)` first if not already loaded.
 2. Dispatch a `superpowers:code-reviewer` or `everything-claude-code:code-reviewer` subagent (use Agent tool with the appropriate `subagent_type`). In the agent prompt, include:
    - The review baseline (requirements/HLD/goals)
    - The review checklist (from Step 3b)
-   - The full source code of each file
+   - The retrieved source code of each symbol/module
    - Instruction: "Review this code against the baseline and checklist. Report all violations. Do not fix anything."
 
 ---

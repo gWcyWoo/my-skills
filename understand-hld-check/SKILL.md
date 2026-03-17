@@ -1,83 +1,152 @@
 ---
 name: understand-hld-check
-description: Unified third-party audit of understand + HLD output before user confirmation. Dispatches Codex via subagent to keep main session context clean, then self-iterates fixes until zero issues.
+description: Independent third-party audit of understand.md and hld.md. Checks requirement understanding and design quality. Dispatches subagent to run Codex CLI, then self-iterates fixes until zero issues.
 ---
 
 # Understand + HLD Third-Party Audit
 
-Independent Codex audit of the combined understand + HLD output, invoked when the user requests it after reviewing the combined output. This is the highest-leverage quality gate — errors here cascade to testcase, code, and all downstream artifacts.
+Independent Codex audit of both understand.md and hld.md:
+- **understand.md** is audited against **requirement.md** — did the analysis correctly capture what the user wants?
+- **hld.md** is audited against **coding standards** — does the design follow project rules?
+- **Cross-file** — do ACs and HLD elements map 1:1?
 
-**Execution model**: The audit runs in a **subagent** to avoid polluting the main session's context with the audit prompt, serialized artifacts, and Codex response. Only the audit result (PASS or violation list) returns to the main session.
+This is the highest-leverage quality gate — errors here cascade to testcase, code, and all downstream artifacts.
+
+**Execution model**: A single subagent handles the entire audit lifecycle — running Codex CLI, parsing results, fixing violations, and verifying fixes. The main session only dispatches and receives the final result, keeping its context clean.
 
 ## When to Use
 
-Invoked from `understand` Step 3 when the user requests a third-party audit. This is **user-initiated**, not automatic — the `understand` skill presents the combined output first and asks the user whether to run this audit.
+Invoked from `understand` Step 3 when the user requests a third-party audit. This is **user-initiated**, not automatic — the `understand` skill presents the procedure file links first and asks the user whether to run this audit.
 
 ## Process
 
-### Step 1: Prepare Inputs (main session)
+### Step 1: Dispatch Subagent (main session)
 
-Collect from the current conversation:
-
-1. **User's Original Request** — The complete source material the understand subagent used to derive ACs. This includes:
-   - The user's chat message (verbatim)
-   - **If the user's message references an external spec/requirement file** (e.g., `上传简历.md`, `feature-spec.md`, a PRD, or any document the understand subagent read to extract requirements): read that file and include its **full content** in this input. The auditor checks ACs against this input — if the spec content is missing, the auditor cannot verify AC traceability and will produce false `AC_OVERCLAIM` / `AC_MISSING` violations.
-   - To identify referenced spec files: check the understand subagent's output for file reads that occurred before AC generation, or look for file paths/names mentioned in the user's original message.
-2. **Requirements Analysis** — The Requirements Analysis section of the combined document (task type, analysis, affected files, acceptance criteria)
-3. **HLD Design** — The HLD Design section of the combined document (interfaces, signatures, module boundaries, interaction flow, design decisions)
-4. **CLAUDE.md path** — The project's CLAUDE.md file path for architecture rules
-
-### Step 2: Dispatch Subagent (main session)
+The procedure directory path is available from the `understand` skill flow.
 
 Launch an Agent subagent with the following instructions:
 
-1. Read the audit prompt template from `~/.claude/skills/understand-hld-check/audit-prompt.md`
-2. Read the architectural rules from the CLAUDE.md path
-3. Construct the Codex prompt by substituting the four inputs into the template's placeholder sections
-4. Invoke the `codex` skill with the constructed prompt. When executing the Codex Bash command, set `timeout: 600000` (10 minutes) on the Bash tool call
-5. Return the Codex output verbatim — do NOT interpret, summarize, or filter. If the command times out (exit code 124), return "CODEX_TIMEOUT" as the result
+1. Read `~/.claude/skills/codex/SKILL.md` for the Codex CLI execution format (model, flags, timeout).
+2. Construct the Codex prompt string (substitute `{procedure_dir}` with the actual path):
 
-**Subagent prompt must include**: All four inputs from Step 1 serialized as text. Pass every input VERBATIM — do NOT summarize, compress, or strip type information. The codex skill requires the exact content to audit; missing details cause false positives.
+   ```
+   Read the following files, then perform the audit.
 
-### Step 3: Process Result (main session)
+   AUDIT TEMPLATE (read first — defines checks and output format):
+   ~/.claude/skills/understand-hld-check/audit-prompt.md
 
-Parse the subagent's returned Codex output for **Status** and **Violations**.
+   FILES TO AUDIT:
+   - {procedure_dir}/understand.md
+   - {procedure_dir}/hld.md
 
-- **"STATUS: 100% COMPLIANT"** → Go to Step 5
-- **Violations found** → Go to Step 4
+   BASELINE (the user's original requirement):
+   - {procedure_dir}/requirement.md
 
-### Step 4: Fix-and-Self-Review Loop (main session)
+   CODING STANDARDS (read package.json to detect project type, then read matching files):
+   - TypeScript (.ts/.tsx) → ~/.claude/shared-rules/common/typescript.md
+   - Frontend (.vue/.tsx/.jsx) → ~/.claude/shared-rules/frontend/architecture.md
+   - Vue (vue in deps) → ~/.claude/shared-rules/frontend/vue3.md
+   - React (react in deps) → ~/.claude/shared-rules/frontend/reactjs.md
+   - Next.js (next in deps) → ~/.claude/shared-rules/frontend/nextjs.md
+   - Next.js fullstack (next + db) → ~/.claude/shared-rules/frontend/nextjs-fullstack.md
+   - Backend (non-frontend .ts/.js) → ~/.claude/shared-rules/backend/ddd.md
+   - Express (express in deps) → ~/.claude/shared-rules/backend/express.md
+   - MongoDB (mongoose/mongodb in deps) → ~/.claude/shared-rules/backend/mongodb.md
+
+   After reading all files, fill the audit template placeholders:
+   <USER_REQUEST> ← requirement.md content
+   <UNDERSTAND> ← understand.md content
+   <HLD> ← hld.md content
+   <RULES> ← matched coding standards content
+
+   Then execute the audit checks and output results in the format specified in audit-prompt.md.
+   ```
+
+3. Execute using the format from `codex/SKILL.md`, passing this prompt string.
+4. Write the Codex output to `{procedure_dir}/audit/result.md`.
+5. Parse the Codex output for **Status**:
+   - **"STATUS: 100% COMPLIANT"** → Return to main session with `STATUS: PASS`
+   - **Violations found** → Read `~/.claude/skills/understand-hld-check/SKILL.md` Step 2 for the fix-and-verify process. Follow it exactly. Return `STATUS: FIXED` when all violations are resolved.
+
+### Step 2: Fix-and-Verify Loop (in subagent)
+
+This step iterates until all violations are resolved and no new issues are introduced.
+
+#### 2a: Apply All Fixes
 
 For each violation reported by Codex:
 
-1. **Determine fix location** — Is the issue in Requirements Analysis or HLD Design?
-   - AC completeness / scope issues → fix Requirements Analysis
-   - Module / interface / flow issues → fix HLD Design
-   - Traceability issues → may require fixing both
-2. **Apply the fix** — Modify the affected artifact according to the suggested fix
-3. **Scoped self-review** — ONLY verify that each reported violation has been correctly fixed. Do NOT expand audit scope.
-   - For each violation ID: Is the fix applied? Does it resolve the issue without introducing a new violation of the SAME category?
-   - **Scope boundary**: If a fix is correct, move on. Do not re-audit unrelated parts.
-4. **If a fix introduces a new issue** — Fix that specific regression and re-verify it only
-5. **If all fixes verified** → Go to Step 5
+1. **Determine fix location** — Which file has the issue?
+   - Requirements Analysis issues (AC_MISSING, AC_OVERCLAIM, AC_CONFLICT, AC_VAGUE, AC_UNTESTABLE, FILE_PHANTOM, FILE_MISSING, IMPLICIT_MISSING) → fix `{procedure_dir}/understand.md`
+   - HLD design issues (IMPL_LEAK, FLOW_SKIP, FLOW_MISSING_PATH, SIG_MISMATCH, SIG_INCOMPLETE, BOUNDARY_MISCLASS, BOUNDARY_MISSING, DATA_ORIGIN_MISSING, RULE_VIOLATION) → fix `{procedure_dir}/hld.md`
+   - Cross-file issues (HLD_GAP, HLD_ORPHAN, SCOPE_CREEP) → may require fixing both files
+2. **Apply the fix** — Edit the affected file(s)
 
-**Self-review rules:**
-- Review ONLY the changed portions — not the entire document
-- Check ONLY whether each Codex-reported violation is resolved
-- Do NOT flag new issues that Codex did not report
-- Output a simple checklist: `[violation ID] — Fixed: Y/N`
+#### 2b: Per-Violation Verification
 
-### Step 5: Return to Understand (main session)
+After all fixes are applied, verify **every single violation** with structured evidence:
 
-Once zero issues confirmed, return the audited output to the `understand` flow. The `understand` skill will re-present the updated combined output to the user in Step 3.
+```
+[ID-01] AC_MISSING — "status field semantics"
+  Before: AC-08 defined status as 0=pending, 1=parsed
+  Fix applied: AC-08 now lists status with (pending AMB-01) marker
+  Contradiction check: search all ACs for "status" → AC-14 also references status → AC-14 updated to use same marker
+  Verdict: FIXED ✓
+
+[ID-02] SIG_MISMATCH — "language optional vs required"
+  Before: UploadOptions.language optional, ParseEvent.language required
+  Fix applied: removed language from both interfaces
+  Contradiction check: search all Flows for "language" → F15 no longer references language
+  Verdict: FIXED ✓
+```
+
+Each verification MUST include:
+- **Before**: What the issue was (quote the problematic text)
+- **Fix applied**: What changed (quote the new text)
+- **Contradiction check**: Search the rest of the document for the same field/term/concept — does the fix contradict anything else?
+- **Verdict**: FIXED or STILL_BROKEN
+
+#### 2c: Convergence Check
+
+After all violations are verified:
+
+1. Count results: how many FIXED, how many STILL_BROKEN?
+2. If any STILL_BROKEN → return to 2a with only the STILL_BROKEN items
+3. If all FIXED → proceed to 2d
+
+#### 2d: Regression Scan
+
+Read the modified sections of both files. For each modification, check:
+- Does the fix introduce a new contradiction with any other AC, Interface, or Flow?
+- Does the fix reference a field or state that is not defined elsewhere in the document?
+- Does the fix break an existing Flow's Input/Output contract?
+
+Output a structured scan:
+```
+Fix for ID-01 (AC-08 status) → checked against: AC-14, IResume.status, F10, F17 → no contradiction ✓
+Fix for ID-02 (language removed) → checked against: UploadOptions, ParseEvent, F15, F22 → no contradiction ✓
+```
+
+If any regression found → treat it as a new violation and return to 2a.
+If no regressions → Return to main session with `STATUS: FIXED`
+
+### Step 3: Handle Subagent Result (main session)
+
+Parse the subagent's returned status:
+
+- **`STATUS: PASS`** — No violations found. Return to the `understand` flow.
+- **`STATUS: FIXED`** — All violations fixed and verified. Return to the `understand` flow.
+
+The `understand` skill will re-present the updated procedure file links to the user with the same selection options.
 
 ## Decision Summary
 
 ```
-Main session: Prepare inputs → Dispatch subagent
-Subagent: Read audit prompt → Read rules → Construct Codex prompt → Run Codex → Return result
-Main session: Parse result → PASS? → Return to understand Step 3
-                           → FAIL? → Fix artifacts → Self-review → Return to understand Step 3
+Main session: Dispatch subagent
+Subagent: Run Codex → Write audit/result.md → PASS? → return STATUS: PASS
+                                             → FAIL? → Fix all → Verify each → Regression scan → return STATUS: FIXED
+                                                                                               → regression? → loop back to Fix
+Main session: Receive status → Return to understand Step 3
 ```
 
-**Do NOT return artifacts with known unfixed violations to the understand flow.**
+**The subagent does NOT return to the main session with known unfixed violations.**
