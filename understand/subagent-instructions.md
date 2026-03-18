@@ -48,13 +48,27 @@ Determine task type: **New Feature** | **Bug Fix** | **Refactoring**
 4. **Risk Assessment**: What might break?
 5. **Existing Behavior Inventory** (MANDATORY): Examine the code being refactored and enumerate **every** user-observable behavior it currently implements. Each behavior must specify: trigger condition → expected result. Do NOT summarize as "all behaviors unchanged" — list them individually. Examples: "drag files onto drop area → files appear in list", "click delete button → file removed from list". Every behavior in this inventory becomes a behavioral AC.
 
-**Async State Completeness** (all task types): For each client-side data fetch or async operation identified in the analysis, enumerate all user-visible UI states: initial/loading, success, error/empty. Each state that produces a distinct user-visible outcome must become a separate AC. Do NOT assume only the success path — loading indicators and error/empty states are user-observable behaviors.
+After completing the analysis above, write **Ambiguities** (if any), then **Affected Files** (which files will be created or modified, and why), then **Acceptance Criteria** using the extractive process below.
 
-After completing the analysis above, write **Ambiguities** (if any), then **Affected Files** (which files will be created or modified, and why), then **Acceptance Criteria** (AC-01, AC-02, ...) based on the analysis. ACs are written here, not deferred to a later step.
+### AC Generation: Extract, Don't Create
 
-### Ambiguity Detection (MANDATORY)
+**Principle**: The requirement is a closed specification. ACs are extracted from it, not invented from domain knowledge. If the requirement doesn't mention it, it's not in scope.
 
-Before writing ACs, scan the requirement for any item where:
+**Process**:
+
+1. **Enumerate** — List every distinct sentence in the requirement that describes a behavior, constraint, UI spec, exclusion, or preservation. Number them (R1, R2, ...).
+
+2. **Convert** — For each R-number, write one AC that directly translates it into a testable statement. The AC must not add behaviors the sentence doesn't describe.
+
+3. **Verify** — Every AC has an R-number. Every R-number has an AC. If a sentence cannot become an AC, it is an ambiguity (AMB-XX).
+
+**Refactoring**: Behavioral ACs come from Existing Behavior Inventory (extract from code). Structural ACs come from the requirement's structural goals (extract from requirement). Same principle: extract, don't invent.
+
+**Loading/error/empty states**: Only create ACs if the requirement **explicitly mentions** them (e.g., "显示加载中" → AC). No mention → no AC.
+
+### Ambiguity Detection (during Enumerate step)
+
+During Step 1 of AC Generation (Enumerate), scan each requirement sentence for:
 - The meaning has multiple valid interpretations (e.g., `status: 1|0` — is 1=active/0=inactive, or 1=parsed/0=pending?)
 - A term is used without definition (e.g., "返回 summary" — is summary a string excerpt, a structured object, or a full-text copy?)
 - The requirement specifies a data shape but not its semantics (e.g., field names without value constraints)
@@ -80,7 +94,7 @@ Format:
 
 ### AC Writing Rule
 
-**AC sources**: ACs are derived from BOTH the initial requirement AND any user clarifications/constraints added during conversation. If the user specifies a behavioral constraint mid-conversation (e.g., "must not call API again", "use sessionStorage", "overwrite not append", "delete after read"), and that constraint describes a testable system behavior, it MUST become an AC — not just an HLD design decision.
+**AC sources (closed set)**: ACs are extracted from exactly two sources — the requirement text and user clarifications during conversation. No other source is valid. Domain knowledge, engineering best practices, and "what a good system should do" are NOT AC sources — they belong in HLD design decisions, not in ACs.
 
 Every AC MUST describe a **user-observable behavior or system-observable outcome**. ACs must NOT contain:
 - File paths (e.g., "reuse src/components/share/index.tsx") — that is an HLD design decision
@@ -113,49 +127,24 @@ After completing the analysis (Affected Files + ACs written), classify the chang
 
 **Logic change** — Any change that does NOT meet ALL no-logic criteria above.
 
-### Step 2c: AC Quality Self-Check (MANDATORY)
+### Step 2c: AC Quality Self-Check (author-side, before writing output)
 
-Before writing the output file, verify AC quality. For each AC, output a structured check covering FOUR dimensions — purity, prohibited patterns, observability, and traceability:
+Before writing the output file, verify each AC against the four dimensions. This is a QUICK author-side check — the thorough independent review happens later via a separate reviewer agent.
 
-```
-AC-01: "clicking the share icon opens a share panel with platform options"
-  → file path? NO | function name? NO | tech choice? NO → Purity: PASS
-  → relative description? NO | blanket statement? NO | negative-only? NO → Pattern: PASS
-  → can a non-technical stakeholder verify by looking at the running app? YES (panel visibly opens) → Observability: PASS
+For each AC, verify:
+1. **Purity** — no file paths, function names, or tech choices
+2. **Pattern** — no relative descriptions, blanket statements, or negative-only criteria
+3. **Observability** — a non-technical stakeholder can verify by looking at the running app (structural ACs: verifiable by code inspection)
+4. **Traceability** — has an R-number (from requirement) or BI-number (from Existing Behavior Inventory)
 
-AC-03: "loads post data from the backend API and displays a ranked card list"
-  → Purity: PASS
-  → Pattern: PASS
-  → can a non-technical stakeholder verify by looking at the running app?
-    "displays a ranked card list" YES, but "loads from backend API" NO (internal implementation) → Observability: FAIL
-  → Rewrite: "on page load, a ranked list of daily trending post cards is displayed"
-```
+If any AC fails → fix it before writing the output file.
 
-**Dimension 4 — Traceability (bidirectional):**
+After all ACs pass, run **gap detection** (mechanical):
+1. Collect all R/BI numbers cited by ACs
+2. Compare against the complete set of R-numbers (from Enumerate step) and BI-numbers (from Existing Behavior Inventory)
+3. Gap = any R/BI number not cited by any AC → add an AC for it
 
-Forward: For each AC, cite the specific sentence or element in the requirement it traces to.
-```
-AC-01: "clicking the share icon opens a share panel with platform options"
-  → Source: requirement says "点击分享图标，弹出分享面板" → Traceability: PASS
-
-AC-08: "when hot topics API fails, an empty list is displayed"
-  → Source: no sentence in requirement mentions API failure or empty list → Traceability: FAIL (overclaim — remove this AC)
-```
-
-Reverse: After all ACs are checked, scan the requirement for any distinct behavior or constraint that has NO corresponding AC.
-```
-Reverse scan:
-  → "input/back, UI不变" → no AC covers preservation of input/back behavior → FAIL (add AC)
-  → "暂时不处理返回数据的显示" → no AC captures this exclusion → FAIL (add exclusion AC)
-```
-
-Rules:
-1. Every AC must appear in the check output. Skipping an AC = skipping the check = violation.
-2. For Refactoring Structural ACs: skip the purity and observability checks (structural descriptions are verifiable by code inspection, not by running the app), but still check prohibited patterns. Traceability check still applies.
-3. If any AC fails any dimension, fix it before writing the output file.
-4. **Traceability is the highest-priority check** — an AC that passes purity, pattern, and observability but has no requirement source is an overclaim and must be removed. A requirement statement with no AC is a gap and must be covered.
-
-Do NOT include self-check evidence in the output file — only the final analysis document.
+**Do NOT write self-check tables to any file.** The independent reviewer agent will produce the formal self-check with content verification. The author only ensures ACs are clean before writing output.
 
 ## Write Output
 

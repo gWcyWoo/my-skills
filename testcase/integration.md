@@ -73,13 +73,13 @@ AI must target "Contract Fragility" specified by the user. Every integration tes
 
 ---
 
-## 4. The "No UI Mocking" Iron Rule (N ≤ 1)
+## 4. The "No UI Mocking" Iron Rule (External Only)
 
 > **Principle**: Integration tests prove components mesh. Mocking components defeats the purpose.
 
-- **Prohibited**: Do NOT mock any child components. Every child must be rendered as a real element.
-- **Allowed**: Mock **exactly ONE** external data source (e.g., custom hook return value, Context Provider value, API response).
-- **REFACTOR Trigger**: If you need to mock > 1 data source/service, **STOP**. Flag as REFACTOR_REQUIRED — the component is taking on too many responsibilities. Do not write the test.
+- **Prohibited**: Do NOT mock any child components or Internal Dependencies (as classified in HLD Module Boundaries). Every internal module must be rendered/called for real.
+- **Allowed**: Mock ONLY External Boundaries (network, DB, third-party APIs, parent-provided props/callbacks — as classified in HLD Module Boundaries). No limit on the number of External Boundary mocks.
+- **REFACTOR Trigger**: If you need to mock an Internal Dependency to make the test work, **STOP**. Flag as REFACTOR_REQUIRED — the module boundary is wrong. Do not write the test.
 
 ---
 

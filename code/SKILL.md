@@ -16,14 +16,14 @@ Launch an Agent subagent (general-purpose) to execute the implementation. This i
 **Subagent prompt must contain:**
 1. The procedure directory path
 2. Instruction: "First, invoke the `my-explore` skill using the Skill tool to load code navigation methodology."
-3. Instruction: "Read `~/.claude/skills/code/SKILL.md` and follow Steps 1–2 exactly. Read the analysis from `{procedure_dir}/understand.md` and design from `{procedure_dir}/hld.md`. Do NOT read `requirement.md` — the understand and HLD outputs are your sole inputs. Do NOT invoke any skills via the Skill tool other than `my-explore`. After all verification passes (vitest + lint), return with `STATUS: COMPLETE`."
+3. Instruction: "Read `~/.claude/skills/code/SKILL.md` and follow Steps 1–2 exactly. Read the analysis from `{procedure_dir}/understand.md` and design from `{procedure_dir}/hld.md`. Do NOT read `requirement.md` — the understand and HLD outputs are your sole inputs. Do NOT invoke any skills via the Skill tool other than `my-explore`. After all verification passes (vitest + playwright + lint), return with `STATUS: COMPLETE`."
 
 **Do NOT add** implementation hints or code suggestions. The subagent derives everything from the procedure files and HLD contracts.
 
 **Handle subagent result:**
 
 - **STATUS: COMPLETE** → Present the result to the user.
-- **STATUS: NEEDS_CLARIFICATION** → Forward questions to the user, resume subagent with answers.
+- **STATUS: NEEDS_CLARIFICATION** → Forward questions to the user, resume subagent with `SendMessage(to: "<saved agent ID>", message: "<user's answers>")`. Use the agent ID (not name) to resume.
 
 ## Step 1: Load Project Standards
 
@@ -177,9 +177,10 @@ Every item MUST be ✅. Any ❌ is a blocker — fix the code before declaring i
 
 ### 2e. Verification Gate (MANDATORY)
 
-Run ALL of the following before declaring implementation complete:
+Run ALL of the following in order before declaring implementation complete:
 
-1. **Tests**: `npx vitest run 2>/dev/null` — all tests (integration, e2e, unit) must pass. Fix ALL failures, including pre-existing ones not caused by this task.
-2. **Lint**: `lint 2>/dev/null` — zero errors. Fix ALL errors, including pre-existing ones not caused by this task.
+1. **Unit + Integration tests**: `npx vitest run 2>/dev/null` — all tests must pass. Fix ALL failures, including pre-existing ones.
+2. **E2E tests**: `npx playwright test 2>/dev/null` — all e2e tests must pass. Skip if no e2e test files exist in the project. Fix ALL failures, including pre-existing ones.
+3. **Lint**: `lint 2>/dev/null` — zero type errors. Fix ALL errors, including pre-existing ones.
 
-Repeat until both commands report zero failures/errors. Do NOT declare implementation complete with any test failure or lint error outstanding.
+Repeat until all three commands report zero failures/errors. Do NOT declare implementation complete with any test failure or lint error outstanding.

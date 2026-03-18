@@ -1,176 +1,70 @@
 ---
 name: testcase
-description: Use when writing test cases. Auto-recommends integration/E2E test types from context, designs test plan, writes test code. Unit tests only on explicit request.
+description: Use when writing test cases. Dispatches subagent to recommend test types, design test plan, and write test code. Handles STOP gate confirmations via resume.
 ---
 
-# Test Case Workflow
+# Testcase Orchestration
 
-## Code Navigation
+Dispatches a testcase subagent and handles user confirmations at STOP gates. This isolates test design from the main session.
 
-When you need to explore the codebase (find files, read implementations, check patterns), invoke the `my-explore` skill via Skill tool first if not already loaded. Follow its methodology for all code navigation.
+## Parameters
 
-## Skip Conditions
+The caller must provide:
+- `procedure_dir` — the procedure directory path (containing `understand.md` and optionally `hld.md`)
 
-Do NOT invoke if the change involves no user-visible impact: documentation-only, config-only (no runtime effect), or file rename without logic change. Note: CSS/styling changes that affect web page appearance ARE user-visible and should NOT be skipped.
+## Process
 
----
+### Step 1: Dispatch Subagent
 
-## Step 0: Determine Test Types
+Launch an Agent subagent (general-purpose) with `name: "testcase-agent"` and this prompt:
+1. The procedure directory path
+2. Instruction: "First, invoke the `my-explore` skill using the Skill tool to load code navigation methodology."
+3. Instruction: "Read `~/.claude/skills/testcase/subagent-instructions.md` and follow it exactly. Do NOT invoke any skills via the Skill tool other than `my-explore` — you are already executing the testcase workflow by reading subagent-instructions.md directly."
 
-### Explicit argument provided
+**Do NOT add** implementation hints, test code suggestions, or any context beyond the procedure directory path.
 
-If the user passed an explicit argument (`/testcase integration`, `/testcase e2e`, or both), use those types directly. Load the corresponding rules file(s) and proceed to Step 1.
+### Step 2: Handle Result
 
-### No argument provided — Auto-recommend from context
+**Save the testcase agent ID immediately** — the Agent tool returns an agent ID (e.g., `agentId: a1b2c3d4`). Save it as `testcase_agent_id` BEFORE checking the status. This is the ONLY agent you will resume; the self-check reviewer agent (Step 3) is disposable and never resumed.
 
-When no argument is given, analyze the confirmed `understand` output and HLD to recommend test types:
+#### STATUS: NEEDS_CONFIRMATION
 
-1. **Review context**: Read the Requirements Analysis (Acceptance Criteria, Affected Files) and HLD (Module Boundaries, Interaction Flow, Interfaces) from the current conversation.
+The subagent reached a STOP gate (test type recommendation, direction selection, AC gap check, or test plan confirmation).
 
-2. **Evaluate integration and e2e** against these criteria:
-
-   | Type | Recommend when | Skip when |
-   |---|---|---|
-   | **integration** | Multiple modules interact; HLD shows cross-module data flow or orchestration; container/hook coordinates multiple concerns | Change is isolated to a single pure function/hook with no module interaction |
-   | **e2e** | **Any change that affects a web page** — layout, components, interactions, data display, styling, or user flows. This includes single-page UI changes with no navigation. | Change is purely backend/API with no web page impact (e.g., server-only logic, CLI tool, database migration) |
-
-3. **Output recommendation using one of these exact formats, then STOP**:
-
-   **Both recommended:**
+1. Present the subagent's content to the user
+2. Wait for user response
+3. **Resume the agent using SendMessage with `testcase_agent_id`:**
    ```
-   Based on the requirements and HLD, I recommend:
-
-   ✅ **integration** — [one-sentence reason referencing specific HLD modules/flows]
-   ✅ **e2e** — [one-sentence reason referencing specific user flows]
-
-   **Please confirm the test types before I proceed to design test plans.**
+   SendMessage(to: "<testcase_agent_id>", message: "User confirmed: <user's response>")
    ```
+   Example: `SendMessage(to: "a1b2c3d4", message: "User confirmed: integration tests, all 4 directions")`
 
-   **One recommended, one skipped:**
-   ```
-   Based on the requirements and HLD, I recommend:
+   IMPORTANT: Use the **agent ID** (not the agent name). SendMessage with name only delivers to inbox; SendMessage with ID actually resumes the agent with full context preserved.
 
-   ✅ **integration** — [reason]
-   ⏭️ **e2e** — Skip: [reason why e2e is unnecessary for this change]
+   **FORBIDDEN alternative:**
+   - ~~Agent(prompt="continue writing tests...")~~ — new agent loses all previous context (wastes ~20k tokens). Always use SendMessage with agent ID to resume.
 
-   **Please confirm the test types before I proceed to design test plans.**
-   ```
+4. Parse the resumed subagent's output again — repeat until STATUS: COMPLETE.
 
-   **Both skipped** (rare — e.g., pure utility with no UI or module interaction):
-   ```
-   Based on the requirements and HLD, neither integration nor e2e tests are warranted:
+#### STATUS: COMPLETE
 
-   ⏭️ **integration** — Skip: [reason]
-   ⏭️ **e2e** — Skip: [reason]
+The subagent has written all test files and completed lint verification. Proceed to Step 3 (Review).
 
-   If you still want tests, please specify the type explicitly (e.g., `/testcase unit`).
-   ```
-   In this case, **workflow ends here** unless the user requests otherwise.
+### Step 3: Independent Review
 
-   **Do NOT proceed until the user confirms.**
+Invoke the `self-check` skill **using the Skill tool**, passing these parameters:
+- `procedure_dir`: the procedure directory path
+- `rules_path`: `~/.claude/skills/testcase/self-check.rules.md`
+- `files`: `{procedure_dir}/hld.md, {procedure_dir}/understand.md`, and all test files written by the subagent
+- `output_path`: `{procedure_dir}/audit/testcase-self-check.md`
 
-4. **Unit tests** — Do NOT recommend unit tests in Step 0. Unit tests are auto-generated as a **supplement** in Step 1: after integration/e2e test plans are designed, any AC whose behavior is single-module logic (not cross-module collaboration) and remains uncovered by integration/e2e will be collected for a unit test plan. See §6 AC Gap Check in each type file for details.
+**Handle result:**
 
-### After confirmation
+#### STATUS: PASS
+All tables clean. Return to the caller with STATUS: COMPLETE.
 
-For each confirmed test type, read the corresponding rules file:
-- `unit` → Read `~/.claude/skills/testcase/unit.md`
-- `integration` → Read `~/.claude/skills/testcase/integration.md`
-- `e2e` → Read `~/.claude/skills/testcase/e2e.md`
-
-If multiple types are confirmed, load all corresponding rules files and produce a test plan for each type in Step 1.
-
----
-
-## Code Reading Boundaries (TDD Discipline)
-
-Tests are written BEFORE implementation code. The test's API contract comes from the HLD, not from source code.
-
-**When HLD exists:**
-- **Source of truth**: HLD interfaces, function signatures, and module boundaries — these ARE the API contracts
-- **Allowed to read**: Type/interface definition files that define shared data structures (e.g., `schema.ts`, `types.ts`, `.d.ts`) — even if listed in Affected Files; existing test files (for setup patterns and conventions only); project configuration files
-- **FORBIDDEN to read**: Files that contain function bodies or business logic (e.g., `parser.ts`, `api.ts`, `handler.ts`, `service.ts`). The distinction: type/interface definitions = contracts (allowed); function/class implementations = code to be driven by tests (forbidden). This applies regardless of whether the file already exists or will be newly created. Any tool that reads content from implementation files is equally forbidden — this includes but is not limited to `codegraph_node`, `LSP documentSymbol`, `LSP hover`, `LSP goToDefinition`, `cocoindex search`, `Grep`, and `Read`.
-
-**When HLD does NOT exist (no-logic change):**
-- Fallback to reading source code for API contracts is permitted, as described in each type file's Input Discovery section.
-
----
-
-## Step 1: Design Test Plan
-
-### Binding Inputs (mandatory — locate and directly reference, do NOT re-interpret)
-
-Before designing, locate these exact artifacts from the current conversation:
-
-| Artifact | Source | Required |
-|---|---|---|
-| Acceptance Criteria (AC-01, AC-02, ...) | `understand` output | Always — every test case maps to an AC ID |
-| Module Boundaries table | HLD output | Only when HLD exists — mock boundary identification |
-| Module Interaction Flow table | HLD output | Only when HLD exists — edge contract extraction, test case derivation |
-| Interfaces / Function Signatures | HLD output | Only when HLD exists — API contracts for assertions |
-
-If ACs are missing, ask the user and STOP. If HLD artifacts are missing because no HLD was produced (no-logic change), proceed with ACs only — e2e tests can be designed from ACs and the affected page without HLD contracts.
-
-**FORBIDDEN**: Re-interpreting, summarizing, or expanding these artifacts. Use the exact content as written. If the HLD says module A calls module B with input X, the test plan must reflect that — not a re-derived version of the interaction.
-
-### Design Process
-
-1. Locate and directly reference the Binding Inputs listed above.
-2. Follow the **Input Discovery** section in each loaded type file to identify API contracts.
-3. Apply the **Coverage**, **Mock Rules**, **Traceability**, and all other rules from each loaded type file.
-4. **Reverse Coverage Check**: After forward-mapping Flows to test cases, verify completeness by checking HLD Interfaces in reverse:
-   - For each field in the HLD Interface definitions, confirm at least one test case asserts or exercises that field.
-   - Any uncovered field = gap. Trace back: does the field have an AC? Does it have a Flow? If both missing, report as an HLD-AC inconsistency in the test plan output. If a Flow exists but was filtered (e.g., `Side Effect`), annotate which test type covers it.
-5. **Mock Boundary Coverage Rule**: A test case can only claim to cover an AC/Flow if the mock boundary allows verification of the full behavior described by that AC/Flow. If the mock intercepts calls at layer X, the test can only verify the caller side of X — the callee side (everything behind the mock) is not verified by this test. Example: if mock is at `fetchRouteApi`, the test verifies client-side behavior (correct URL, correct rendering of response) but NOT the route handler → server function → backend chain behind it. Behavior not verified by this test MUST be marked as a coverage gap requiring a separate test with a different mock boundary.
-6. Output the test plan using the **Test Plan Output Format** defined in each loaded type file. If multiple types, output each plan under a separate heading (`## Integration Test Plan`, `## E2E Test Plan`).
-
-**STOP.** Output exactly:
-> **Please confirm this test plan before I proceed to write test code.**
-
-Do NOT make any tool calls after the test plan. If the user requests changes, revise and ask again.
-
----
-
-## Step 1b: Supplementary Unit Test Plan (auto-triggered)
-
-After integration/e2e test plans are confirmed, check if any ACs were marked as **"unit test scope"** during the AC Gap Check in Step 1. If yes:
-
-1. Read `~/.claude/skills/testcase/unit.md` to load unit test rules.
-2. For each unit-scope AC, design test cases following the unit test rules. These test **single-function, single-module logic** (validation, format checking, boundary guards, etc.).
-3. Output the unit test plan under a `## Supplementary Unit Test Plan` heading.
-4. No additional user confirmation needed for the unit plan — it was already implicitly approved when the user confirmed the integration/e2e plan that identified these ACs as unit scope.
-
-**Priority**: Unit tests are supplementary. They fill coverage gaps that integration/e2e cannot reach. They do NOT replace or duplicate integration/e2e test cases.
-
----
-
-## Step 2: Write Test Code
-
-### Source of Truth
-
-The **confirmed test plan** (from Step 1) is the sole input for writing test code. The test plan was derived from HLD and `understand` artifacts, which have already resolved any ambiguity in the original spec.
-
-**FORBIDDEN**: Re-reading or re-interpreting the original spec/requirements to inform test code. If the HLD and test plan say X, write X — even if the original spec could be read differently. The HLD is the authoritative contract; the spec is history.
-
-### Process
-
-1. Load test standards. Skip any file already in conversation context.
-
-   | Condition | File to Read |
-   |---|---|
-   | Any project | `~/.claude/shared-rules/test.md` |
-   | Vue (`vue` in dependencies) | `~/.claude/shared-rules/vuejs.test.md` |
-   | TypeScript (`.ts`/`.tsx` files) | `~/.claude/shared-rules/typescript.test.md` |
-
-2. Write tests following the **Writing Rules** in each loaded type file. Every trigger, assertion, and setup must trace back to the confirmed test plan — not to the original spec.
-   - **HLD gap detection**: If test code requires a type, interface, or return shape not defined in the HLD or source code, do NOT assume it. Flag it as an HLD gap, state the assumption explicitly in a comment, and report it in the correspondence table. The test must not silently make design decisions that belong to the HLD.
-3. **Path deviation rule**: If the actual file path differs from the test plan (e.g., existing directory structure conflicts with planned path), do NOT silently change it. Explicitly state the deviation and reason in the correspondence table output (e.g., `Plan: __tests__/unit/task-my/ → Actual: __tests__/unit/ui/task-my/ — follows existing directory convention`).
-4. Output a correspondence table mapping each plan row to its `it()` block.
-5. **Lint gate (MANDATORY)**: Run `lint` on the written test file(s). If errors exist, fix them immediately — do NOT defer to the `code` phase. Common issues: incorrect type assertions (`as X` needs `as unknown as X`), unused imports, mismatched mock return types. Repeat until zero errors.
-
-**Do NOT run tests.** The `tdd` workflow handles test execution.
-
-**STOP.** Output exactly:
-> **Test code is ready.**
-
-If the user requests changes, revise and ask again. Do NOT automatically invoke the `code` skill — testcase and code are independent phases. Return to the caller (main session or user) after test code is complete.
+#### STATUS: ISSUES_FOUND
+The reviewer found defects. Fix them:
+1. **Resume the testcase agent** (NOT the self-check reviewer) using `SendMessage(to: "<testcase_agent_id>", message: "Reviewer found these issues: <list issues>. Fix the test code.")`
+2. After fixes, **re-invoke the `self-check` skill** with the same parameters to verify the fixes
+3. Repeat until STATUS: PASS
