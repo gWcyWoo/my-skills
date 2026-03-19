@@ -55,11 +55,11 @@ After every Agent dispatch or SendMessage resume returns, extract the `<usage>` 
 | [brief description of what the agent did] | [total_tokens] | [tool_uses] | [duration formatted as Xm Ys] | [ISO 8601 timestamp] |
 ```
 
-Create the file with header on first write; append rows on subsequent writes. This applies to ALL agent calls in this skill: understand agent, self-check reviewer, and any SendMessage resumes.
+Create the file with header on first write; append rows on subsequent writes. This applies to ALL agent calls and SendMessage resumes in this skill.
 
 ### Step 2: Handle Result
 
-**Save the understand agent ID immediately** — the Agent tool returns an agent ID (e.g., `agentId: a1b2c3d4`). Save it as `understand_agent_id` BEFORE checking the status — you need it for NEEDS_CLARIFICATION, ISSUES_FOUND fixes, and user-requested changes. This is the ONLY agent you will resume; the self-check reviewer agent (Step 2b) is disposable and never resumed.
+**Save the understand agent ID immediately** — the Agent tool returns an agent ID (e.g., `agentId: a1b2c3d4`). Save it as `understand_agent_id` BEFORE checking the status — you need it for NEEDS_CLARIFICATION, ISSUES_FOUND fixes, and user-requested changes. This is the ONLY agent you will resume directly. The self-check skill manages its own reviewer agent internally.
 
 Parse the subagent's returned output for `STATUS`:
 
@@ -76,17 +76,17 @@ The subagent encountered ambiguity and returned structured questions.
 
 1. Present the questions to the user (include the `COMPLETED_SO_FAR` context if it helps the user understand why the question matters)
 2. Wait for user answers
-3. **Resume the understand agent using SendMessage with `understand_agent_id`:**
+3. **Append the user's answers to `{procedure_dir}/requirement.md`** under a `## Clarifications` heading (create the heading on first append; subsequent clarifications append under the same heading). If the answer references an external file (e.g., a new or updated spec), read that file and append its content after the answer. This keeps requirement.md as the single source of truth for the reviewer.
+4. **Resume the understand agent using SendMessage with `understand_agent_id`:**
    ```
    SendMessage(to: "<understand_agent_id>", message: "User answered: <user's answers>")
    ```
    IMPORTANT: Use the **agent ID** (not the agent name). SendMessage with name only delivers to inbox; SendMessage with ID actually resumes the agent with full context preserved. Do NOT launch a new Agent (loses context).
-4. Parse the resumed subagent's output again — repeat until STATUS: COMPLETE.
+5. Parse the resumed subagent's output again — repeat until STATUS: COMPLETE.
 
 ### Step 2b: Independent Review
 
 Invoke the `self-check` skill **using the Skill tool**, passing these parameters:
-- `procedure_dir`: the procedure directory path
 - `rules_path`: `~/.claude/skills/understand/self-check.rules.md`
 - `files`: `{procedure_dir}/requirement.md, {procedure_dir}/understand.md, {procedure_dir}/hld.md`
 - `output_path`: `{procedure_dir}/audit/self-check.md`
@@ -98,8 +98,8 @@ All tables clean. Go to Step 3.
 
 #### STATUS: ISSUES_FOUND
 The reviewer found defects. Fix them:
-1. **Resume the understand agent** (NOT the self-check reviewer) using `SendMessage(to: "<understand_agent_id>", message: "Reviewer found these issues: <list issues>. Fix understand.md and/or hld.md.")`
-2. After fixes, **re-invoke the `self-check` skill** with the same parameters to verify the fixes
+1. **Resume the understand agent** using `SendMessage(to: "<understand_agent_id>", message: "Reviewer found these issues: <list issues>. Fix understand.md and/or hld.md.")`
+2. After fixes, **re-invoke the `self-check` skill** with the same parameters.
 3. Repeat until STATUS: PASS
 
 ### Step 3: Present Results to User
@@ -133,6 +133,6 @@ Wait for user selection:
 **Do NOT execute skill logic inline.** Each skill has its own mandatory process (loading standards, checklists, traceability). Skipping the Skill tool invocation bypasses those checks.
 
 Do NOT proceed without a user selection. If the user requests changes to the analysis or design instead of selecting an option:
-- **Textual changes** (rewording ACs, adjusting scope description, adding/removing affected files): resume the subagent using `SendMessage(to: "<understand_agent_id>", message: "<user's feedback>")`. After changes, re-present with the same options.
-- **Changes requiring re-analysis** (different approach, new scope, re-examine code): resume the subagent using `SendMessage(to: "<understand_agent_id>", message: "<user's feedback>")` and parse its output again per Step 2.
+- **Textual changes** (rewording ACs, adjusting scope description, adding/removing affected files): **append the user's feedback to `{procedure_dir}/requirement.md`** under `## Clarifications` (if the feedback references an external file, read and append its content too), then resume the subagent using `SendMessage(to: "<understand_agent_id>", message: "<user's feedback>")`. After changes, re-present with the same options.
+- **Changes requiring re-analysis** (different approach, new scope, re-examine code): **append the user's feedback to `{procedure_dir}/requirement.md`** under `## Clarifications` (if the feedback references an external file, read and append its content too), then resume the subagent using `SendMessage(to: "<understand_agent_id>", message: "<user's feedback>")` and parse its output again per Step 2.
 

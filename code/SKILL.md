@@ -22,7 +22,7 @@ Launch an Agent subagent (general-purpose) to execute the implementation. This i
 
 **Metrics Recording**: After every Agent dispatch or SendMessage resume returns, extract the `<usage>` block (total_tokens, tool_uses, duration_ms) and append a row to `{procedure_dir}/metrics.md`. Create the file with header on first write; append rows on subsequent writes.
 
-**Save the code agent ID immediately** — the Agent tool returns an agent ID (e.g., `agentId: a1b2c3d4`). Save it as `code_agent_id` BEFORE checking the status. This is the ONLY agent you will resume; the self-check reviewer agent (Step 0b) is disposable and never resumed.
+**Save the code agent ID immediately** — the Agent tool returns an agent ID (e.g., `agentId: a1b2c3d4`). Save it as `code_agent_id` BEFORE checking the status. This is the ONLY agent you will resume directly. The self-check skill manages its own reviewer agent internally.
 
 **Handle subagent result:**
 
@@ -44,9 +44,9 @@ All tables clean. Present the result to the user.
 
 #### STATUS: ISSUES_FOUND
 The reviewer found defects. Fix them:
-1. **Resume the code agent** (NOT the self-check reviewer) using `SendMessage(to: "<code_agent_id>", message: "Reviewer found these issues: <list issues>. Fix the code.")`
+1. **Resume the code agent** using `SendMessage(to: "<code_agent_id>", message: "Reviewer found these issues: <list issues>. Fix the code.")`
 2. After fixes, extract the updated checklist/traceability from the agent's output and update `{procedure_dir}/audit/code-checklist.md`
-3. **Re-invoke the `self-check` skill** with the same parameters to verify the fixes
+3. **Re-invoke the `self-check` skill** with the same parameters.
 4. Repeat until STATUS: PASS
 
 ## Step 1: Load Project Standards

@@ -53,7 +53,7 @@ When no argument is given, analyze the `understand` output and HLD to recommend 
    ⏭️ **e2e** — Skip: [reason]
    ```
 
-4. **Unit tests** — Do NOT recommend unit tests in Step 0. Unit tests are auto-generated as a **supplement** in Step 1.
+4. **Unit tests** — Do NOT recommend unit tests in Step 0. Unit tests are automatically included as a **supplement** in Step 1b.
 
 ### After confirmation (received via resume)
 
@@ -68,12 +68,12 @@ If multiple types are confirmed, load all corresponding rules files and produce 
 
 ## Code Reading Boundaries (TDD Discipline)
 
-Tests are written BEFORE implementation code. The test's API contract comes from the HLD, not from source code.
+Tests are written BEFORE implementation code. The test's API contract comes from the HLD, not from source code. **These boundaries override any conflicting instructions in type files' Input Discovery sections.**
 
 **When HLD exists:**
 - **Source of truth**: HLD interfaces, function signatures, and module boundaries — these ARE the API contracts
 - **Allowed to read**: Type/interface definition files that define shared data structures (e.g., `schema.ts`, `types.ts`, `.d.ts`) — even if listed in Affected Files; existing test files (for setup patterns and conventions only); project configuration files
-- **FORBIDDEN to read**: Files that contain function bodies or business logic (e.g., `parser.ts`, `api.ts`, `handler.ts`, `service.ts`). The distinction: type/interface definitions = contracts (allowed); function/class implementations = code to be driven by tests (forbidden). This applies regardless of whether the file already exists or will be newly created. Any tool that reads content from implementation files is equally forbidden — this includes but is not limited to `codegraph_node`, `LSP documentSymbol`, `LSP hover`, `LSP goToDefinition`, `cocoindex search`, `Grep`, and `Read`.
+- **FORBIDDEN to read**: Files that contain function bodies or business logic (e.g., `parser.ts`, `api.ts`, `handler.ts`, `service.ts`, hooks, services, utils). The distinction: type/interface definitions = contracts (allowed); function/class implementations = code to be driven by tests (forbidden). This applies regardless of whether the file already exists or will be newly created. **Any tool that reads or searches implementation files is equally forbidden** — this includes `codegraph_node`, `codegraph_context`, `codegraph_search`, `codegraph_callers`, `codegraph_callees`, `codegraph_impact`, `LSP` (all operations), `cocoindex search`, `Grep`, `Glob`, and `Read`. If you need an API contract, it MUST come from the HLD — not from searching the codebase.
 
 **When HLD does NOT exist (no-logic change):**
 - Fallback to reading source code for API contracts is permitted, as described in each type file's Input Discovery section.

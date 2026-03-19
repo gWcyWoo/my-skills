@@ -25,11 +25,11 @@ Launch an Agent subagent (general-purpose) with `name: "testcase-agent"` and thi
 
 ### Metrics Recording (after every agent call or SendMessage resume)
 
-After every Agent dispatch or SendMessage resume returns, extract the `<usage>` block (total_tokens, tool_uses, duration_ms) and append a row to `{procedure_dir}/metrics.md`. Create the file with header on first write; append rows on subsequent writes. This applies to ALL agent calls in this skill: testcase agent, self-check reviewer, and any SendMessage resumes.
+After every Agent dispatch or SendMessage resume returns, extract the `<usage>` block (total_tokens, tool_uses, duration_ms) and append a row to `{procedure_dir}/metrics.md`. Create the file with header on first write; append rows on subsequent writes. This applies to ALL agent calls and SendMessage resumes in this skill.
 
 ### Step 2: Handle Result
 
-**Save the testcase agent ID immediately** — the Agent tool returns an agent ID (e.g., `agentId: a1b2c3d4`). Save it as `testcase_agent_id` BEFORE checking the status. This is the ONLY agent you will resume; the self-check reviewer agent (Step 3) is disposable and never resumed.
+**Save the testcase agent ID immediately** — the Agent tool returns an agent ID (e.g., `agentId: a1b2c3d4`). Save it as `testcase_agent_id` BEFORE checking the status. This is the ONLY agent you will resume directly. The self-check skill manages its own reviewer agent internally.
 
 #### STATUS: NEEDS_CONFIRMATION
 
@@ -56,11 +56,17 @@ The subagent has written all test files and completed lint verification. Proceed
 
 ### Step 3: Independent Review
 
-Invoke the `self-check` skill **using the Skill tool**, passing these parameters:
-- `procedure_dir`: the procedure directory path
-- `rules_path`: `~/.claude/skills/testcase/self-check.rules.md`
-- `files`: `{procedure_dir}/hld.md, {procedure_dir}/understand.md`, and all test files written by the subagent
-- `output_path`: `{procedure_dir}/audit/testcase-self-check.md`
+For **each test type** produced by the subagent, invoke the `self-check` skill with the corresponding rules file:
+
+| Test Type | Rules File | Output Path |
+|-----------|-----------|-------------|
+| integration | `~/.claude/skills/testcase/self-check.rules.md` | `{procedure_dir}/audit/testcase-self-check.md` |
+| e2e | `~/.claude/skills/testcase/self-check-e2e.rules.md` | `{procedure_dir}/audit/testcase-e2e-self-check.md` |
+
+Invoke the `self-check` skill **using the Skill tool** for each applicable type, passing:
+- `rules_path`: the rules file for this test type (from table above)
+- `files`: `{procedure_dir}/hld.md, {procedure_dir}/understand.md`, and the test files for this type
+- `output_path`: the output path for this test type (from table above)
 
 **Handle result:**
 
@@ -69,6 +75,6 @@ All tables clean. Return to the caller with STATUS: COMPLETE.
 
 #### STATUS: ISSUES_FOUND
 The reviewer found defects. Fix them:
-1. **Resume the testcase agent** (NOT the self-check reviewer) using `SendMessage(to: "<testcase_agent_id>", message: "Reviewer found these issues: <list issues>. Fix the test code.")`
-2. After fixes, **re-invoke the `self-check` skill** with the same parameters to verify the fixes
+1. **Resume the testcase agent** using `SendMessage(to: "<testcase_agent_id>", message: "Reviewer found these issues: <list issues>. Fix the test code.")`
+2. After fixes, **re-invoke the `self-check` skill** with the same parameters.
 3. Repeat until STATUS: PASS
