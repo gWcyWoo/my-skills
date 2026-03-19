@@ -28,7 +28,7 @@ Auto-tdd invokes the **same skills** as the manual flow, in the same order. The 
 Phase 1: understand skill (produces understand.md + hld.md + self-check)
 Phase 2: testcase skill (test plan + test code)
 Phase 3: code skill (implementation)
-Phase 4: verify (vitest + lint)
+Phase 4: verify (vitest + playwright + lint)
 ```
 
 All phase outputs are written to the same procedure directory: `{project_root}/.claude/procedure/{YYYY-MM-DD}/{name}/`

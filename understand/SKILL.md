@@ -43,6 +43,20 @@ Launch an Agent subagent (general-purpose) with `name: "understand-agent"` to ex
 
 **Do NOT add** file paths, component names, implementation guidance, or any context beyond the procedure directory path. The subagent reads `requirement.md` and discovers project structure on its own. Adding implementation-ready information causes the subagent to skip analysis and jump to solutions.
 
+### Metrics Recording (after every agent call or SendMessage resume)
+
+After every Agent dispatch or SendMessage resume returns, extract the `<usage>` block (total_tokens, tool_uses, duration_ms) and append a row to `{procedure_dir}/metrics.md`:
+
+```markdown
+# Agent Metrics
+
+| Phase | Tokens | Tool Uses | Duration | Timestamp |
+|-------|--------|-----------|----------|-----------|
+| [brief description of what the agent did] | [total_tokens] | [tool_uses] | [duration formatted as Xm Ys] | [ISO 8601 timestamp] |
+```
+
+Create the file with header on first write; append rows on subsequent writes. This applies to ALL agent calls in this skill: understand agent, self-check reviewer, and any SendMessage resumes.
+
 ### Step 2: Handle Result
 
 **Save the understand agent ID immediately** — the Agent tool returns an agent ID (e.g., `agentId: a1b2c3d4`). Save it as `understand_agent_id` BEFORE checking the status — you need it for NEEDS_CLARIFICATION, ISSUES_FOUND fixes, and user-requested changes. This is the ONLY agent you will resume; the self-check reviewer agent (Step 2b) is disposable and never resumed.

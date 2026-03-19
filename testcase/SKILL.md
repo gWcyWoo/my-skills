@@ -23,6 +23,10 @@ Launch an Agent subagent (general-purpose) with `name: "testcase-agent"` and thi
 
 **Do NOT add** implementation hints, test code suggestions, or any context beyond the procedure directory path.
 
+### Metrics Recording (after every agent call or SendMessage resume)
+
+After every Agent dispatch or SendMessage resume returns, extract the `<usage>` block (total_tokens, tool_uses, duration_ms) and append a row to `{procedure_dir}/metrics.md`. Create the file with header on first write; append rows on subsequent writes. This applies to ALL agent calls in this skill: testcase agent, self-check reviewer, and any SendMessage resumes.
+
 ### Step 2: Handle Result
 
 **Save the testcase agent ID immediately** — the Agent tool returns an agent ID (e.g., `agentId: a1b2c3d4`). Save it as `testcase_agent_id` BEFORE checking the status. This is the ONLY agent you will resume; the self-check reviewer agent (Step 3) is disposable and never resumed.

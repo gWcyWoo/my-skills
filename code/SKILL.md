@@ -16,14 +16,38 @@ Launch an Agent subagent (general-purpose) to execute the implementation. This i
 **Subagent prompt must contain:**
 1. The procedure directory path
 2. Instruction: "First, invoke the `my-explore` skill using the Skill tool to load code navigation methodology."
-3. Instruction: "Read `~/.claude/skills/code/SKILL.md` and follow Steps 1–2 exactly. Read the analysis from `{procedure_dir}/understand.md` and design from `{procedure_dir}/hld.md`. Do NOT read `requirement.md` — the understand and HLD outputs are your sole inputs. Do NOT invoke any skills via the Skill tool other than `my-explore`. After all verification passes (vitest + playwright + lint), return with `STATUS: COMPLETE`."
+3. Instruction: "Read `~/.claude/skills/code/SKILL.md` and follow Steps 1–2 exactly. Read the analysis from `{procedure_dir}/understand.md` and design from `{procedure_dir}/hld.md`. Do NOT read `requirement.md` — the understand and HLD outputs are your sole inputs. Do NOT invoke any skills via the Skill tool other than `my-explore`. After all verification passes (vitest + playwright + lint), return with `STATUS: COMPLETE`. Include the Implementation Checklist (Step 1c), traceability tables (Step 2c), and checklist verification (Step 2d) in your output — they will be reviewed independently."
 
 **Do NOT add** implementation hints or code suggestions. The subagent derives everything from the procedure files and HLD contracts.
 
+**Metrics Recording**: After every Agent dispatch or SendMessage resume returns, extract the `<usage>` block (total_tokens, tool_uses, duration_ms) and append a row to `{procedure_dir}/metrics.md`. Create the file with header on first write; append rows on subsequent writes.
+
+**Save the code agent ID immediately** — the Agent tool returns an agent ID (e.g., `agentId: a1b2c3d4`). Save it as `code_agent_id` BEFORE checking the status. This is the ONLY agent you will resume; the self-check reviewer agent (Step 0b) is disposable and never resumed.
+
 **Handle subagent result:**
 
-- **STATUS: COMPLETE** → Present the result to the user.
-- **STATUS: NEEDS_CLARIFICATION** → Forward questions to the user, resume subagent with `SendMessage(to: "<saved agent ID>", message: "<user's answers>")`. Use the agent ID (not name) to resume.
+- **STATUS: COMPLETE** → Extract the author's Implementation Checklist (Step 1c) and traceability tables (Step 2c/2d) from the code agent's output. Write them to `{procedure_dir}/audit/code-checklist.md`. Then proceed to Step 0b (Review).
+- **STATUS: NEEDS_CLARIFICATION** → Forward questions to the user, resume subagent with `SendMessage(to: "<code_agent_id>", message: "<user's answers>")`. Use the agent ID (not name) to resume.
+
+### Step 0b: Independent Review
+
+Invoke the `self-check` skill **using the Skill tool**, passing these parameters:
+- `procedure_dir`: the procedure directory path
+- `rules_path`: `~/.claude/skills/code/self-check.rules.md`
+- `files`: `{procedure_dir}/understand.md, {procedure_dir}/hld.md, {procedure_dir}/audit/code-checklist.md`
+- `output_path`: `{procedure_dir}/audit/code-self-check.md`
+
+**Handle result:**
+
+#### STATUS: PASS
+All tables clean. Present the result to the user.
+
+#### STATUS: ISSUES_FOUND
+The reviewer found defects. Fix them:
+1. **Resume the code agent** (NOT the self-check reviewer) using `SendMessage(to: "<code_agent_id>", message: "Reviewer found these issues: <list issues>. Fix the code.")`
+2. After fixes, extract the updated checklist/traceability from the agent's output and update `{procedure_dir}/audit/code-checklist.md`
+3. **Re-invoke the `self-check` skill** with the same parameters to verify the fixes
+4. Repeat until STATUS: PASS
 
 ## Step 1: Load Project Standards
 
