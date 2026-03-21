@@ -37,8 +37,8 @@ FILES TO REFACTOR:
 
 INSTRUCTIONS:
 1. Invoke the `my-explore` skill using the Skill tool to load code navigation methodology.
-2. Run the Verification Gate (code/SKILL.md Step 2e) BEFORE making any changes. Record the results as the baseline. This tells you which tests pass and which fail before your refactor.
-3. Read `~/.claude/skills/code/SKILL.md`. Skip Step 0 and Step 0b (do NOT dispatch another subagent or invoke self-check). Follow Steps 1, 1b, and 1c only:
+2. Run the Verification Gate (auto-code/SKILL.md Step 2e) BEFORE making any changes. Record the results as the baseline. This tells you which tests pass and which fail before your refactor.
+3. Read `~/.claude/skills/auto-code/SKILL.md`. Skip Step 0 and Step 0b (do NOT dispatch another subagent or invoke review). Follow Steps 1, 1b, and 1c only:
    - Step 1: Load Project Standards — determine file types from the files to refactor, load matching shared-rules.
    - Step 1b: Reference Code Patterns — use the files to refactor as the "Affected Files" list. Find 1-2 existing files in the project that are structurally similar and already comply with the rules.
    - Step 1c: Compile Implementation Checklist — extract relevant rules into a numbered checklist (max 15 items). This checklist defines what "compliant" looks like.

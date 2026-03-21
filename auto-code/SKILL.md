@@ -1,6 +1,6 @@
 ---
-name: code
-description: Use when implementing code after requirements are confirmed. Loads project-specific standards and implements with traceability when HLD exists.
+name: auto-code
+description: Use when implementing code after requirements are confirmed. Loads project-specific standards and implements with traceability against HLD contracts.
 ---
 
 # Code Workflow
@@ -16,24 +16,25 @@ Launch an Agent subagent (general-purpose) to execute the implementation. This i
 **Subagent prompt must contain:**
 1. The procedure directory path
 2. Instruction: "First, invoke the `my-explore` skill using the Skill tool to load code navigation methodology."
-3. Instruction: "Read `~/.claude/skills/code/SKILL.md` and follow Steps 1–2 exactly. Read the analysis from `{procedure_dir}/understand.md` and design from `{procedure_dir}/hld.md`. Do NOT read `requirement.md` — the understand and HLD outputs are your sole inputs. Do NOT invoke any skills via the Skill tool other than `my-explore`. After all verification passes (vitest + playwright + lint), return with `STATUS: COMPLETE`. Include the Implementation Checklist (Step 1c), traceability tables (Step 2c), and checklist verification (Step 2d) in your output — they will be reviewed independently."
+3. Instruction: "Read `~/.claude/skills/auto-code/SKILL.md` and follow Steps 1–2 exactly. Read the design from `{procedure_dir}/hld.md` — this is your **sole implementation authority**. Do NOT read `requirement.md` or `understand.md` — they have been consumed by the HLD. Do NOT read any test files (`*.test.*`, `*.spec.*`, `__tests__/**`) — test code is reviewed independently against the same HLD; reading tests contaminates your implementation with test-specific patterns (mock structures, assertion expectations) that diverge from the HLD contract, causing review failures. After all verification passes (vitest + e2e + lint — see Step 2e for details), return with `STATUS: COMPLETE`. Include the Implementation Checklist (Step 1c), traceability tables (Step 2c), and checklist verification (Step 2d) in your output — they will be reviewed independently. If you encounter a test failure that contradicts the HLD (your implementation follows the HLD but a test expects different behavior), return with `STATUS: HLD_MISMATCH` and describe the conflict — do NOT modify your implementation to match the test."
 
-**Do NOT add** implementation hints or code suggestions. The subagent derives everything from the procedure files and HLD contracts.
+**Do NOT add** implementation hints or code suggestions. The subagent derives everything from the HLD contracts.
 
 **Metrics Recording**: After every Agent dispatch or SendMessage resume returns, extract the `<usage>` block (total_tokens, tool_uses, duration_ms) and append a row to `{procedure_dir}/metrics.md`. Create the file with header on first write; append rows on subsequent writes.
 
-**Save the code agent ID immediately** — the Agent tool returns an agent ID (e.g., `agentId: a1b2c3d4`). Save it as `code_agent_id` BEFORE checking the status. This is the ONLY agent you will resume directly. The self-check skill manages its own reviewer agent internally.
+**Save the code agent ID immediately** — the Agent tool returns an agent ID (e.g., `agentId: a1b2c3d4`). Save it as `code_agent_id` BEFORE checking the status. This is the ONLY agent you will resume directly. The review skill manages its own reviewer agent internally.
 
 **Handle subagent result:**
 
 - **STATUS: COMPLETE** → Extract the author's Implementation Checklist (Step 1c) and traceability tables (Step 2c/2d) from the code agent's output. Write them to `{procedure_dir}/audit/code-checklist.md`. Then proceed to Step 0b (Review).
 - **STATUS: NEEDS_CLARIFICATION** → Forward questions to the user, resume subagent with `SendMessage(to: "<code_agent_id>", message: "<user's answers>")`. Use the agent ID (not name) to resume.
+- **STATUS: HLD_MISMATCH** → The code agent's implementation follows the HLD but a test expects different behavior. Read `{procedure_dir}/audit/hld-mismatch.md` and present its content to the user. The user decides whether to fix the HLD or fix the test. After resolution, resume the code agent with the decision.
 
 ### Step 0b: Independent Review
 
-Invoke the `self-check` skill **using the Skill tool**, passing these parameters:
+Invoke the `review` skill **using the Skill tool**, passing these parameters:
 - `procedure_dir`: the procedure directory path
-- `rules_path`: `~/.claude/skills/code/self-check.rules.md`
+- `rules_path`: `~/.claude/skills/auto-code/self-check.rules.md`
 - `files`: `{procedure_dir}/understand.md, {procedure_dir}/hld.md, {procedure_dir}/audit/code-checklist.md`
 - `output_path`: `{procedure_dir}/audit/code-self-check.md`
 
@@ -43,11 +44,11 @@ Invoke the `self-check` skill **using the Skill tool**, passing these parameters
 All tables clean. Present the result to the user.
 
 #### STATUS: ISSUES_FOUND
-The reviewer found defects. Fix them:
+The reviewer found defects with severity breakdown (e.g., "0 CRITICAL, 1 MAJOR, 2 MINOR, 1 TRIVIAL").
+
 1. **Resume the code agent** using `SendMessage(to: "<code_agent_id>", message: "Reviewer found these issues: <list issues>. Fix the code.")`
 2. After fixes, extract the updated checklist/traceability from the agent's output and update `{procedure_dir}/audit/code-checklist.md`
-3. **Re-invoke the `self-check` skill** with the same parameters.
-4. Repeat until STATUS: PASS
+3. Present the result to the user. Do NOT re-invoke the review — the self-check already caught the bulk of issues, and one review round is sufficient.
 
 ## Step 1: Load Project Standards
 
@@ -69,7 +70,7 @@ Determine project type by checking `package.json` dependencies and file extensio
 
 ## Step 1b: Reference Code Patterns
 
-From the HLD's Affected Files list (or `understand` output if no HLD exists), identify 1–2 existing source files that are most structurally similar to the files that will be created or modified. Use `codegraph_node(includeCode: true)` to retrieve key symbols (component, hook, handler) from these files — do NOT Read entire files.
+From the HLD's Affected Files list, identify 1–2 existing source files that are most structurally similar to the files that will be created or modified. Use `codegraph_node(includeCode: true)` to retrieve key symbols (component, hook, handler) from these files — do NOT Read entire files.
 
 **Selection criteria** (pick the file that matches the most criteria):
 - Same file role: if creating a `container.tsx`, find an existing `container.tsx` from another feature
@@ -113,15 +114,15 @@ A rule item is relevant if the HLD artifacts show the code will contain the cons
 
 ### 2a. Locate Binding Inputs (mandatory — do NOT re-interpret)
 
-Locate these exact artifacts from `understand.md` and `hld.md`. The HLD is the authoritative source. If no HLD exists (no-logic change), use `understand.md` alone — it contains ACs and Affected Files.
+Locate these exact artifacts from `hld.md`. The HLD is the **sole implementation authority**.
 
 | Artifact | Source | Used For |
 |---|---|---|
-| Acceptance Criteria (AC-01, AC-02, ...) | `understand` output | Scope — only implement what ACs require |
-| Affected Files | `understand` output | Which files to create/modify |
-| Interfaces / Function Signatures | HLD output | Implementation contracts — signatures must match exactly |
-| Module Boundaries table | HLD output | File/module structure and dependency direction |
-| Module Interaction Flow table | HLD output | Orchestration logic and connecting values between modules |
+| Acceptance Criteria (AC-01, AC-02, ...) | HLD | Scope — only implement what ACs require |
+| Affected Files | HLD | Which files to create/modify |
+| Interfaces / Function Signatures | HLD | Implementation contracts — signatures must match exactly |
+| Module Boundaries table | HLD | File/module structure and dependency direction |
+| Module Interaction Flow table | HLD | Orchestration logic and connecting values between modules |
 
 **FORBIDDEN**: Re-interpreting, summarizing, or expanding these artifacts. Implement what the HLD defines — not a re-derived version. If the HLD says module A is at path X with signature Y, implement exactly that.
 
@@ -133,7 +134,7 @@ Locate these exact artifacts from `understand.md` and `hld.md`. The HLD is the a
 
 **Flow Sequence Fidelity**: When the HLD defines a multi-step interaction flow (A → B → C → D), implement the steps in that exact causal order. Do NOT collapse steps, reorder them, or substitute one step's output as another step's trigger. Each step in the HLD flow must have a corresponding implementation that receives input from its immediate predecessor — not from an earlier step in the chain.
 
-**Per-file HLD contract extraction (MANDATORY when HLD exists)**: Before writing each file, extract every HLD constraint that applies to this file and list them explicitly:
+**Per-file HLD contract extraction (MANDATORY)**: Before writing each file, extract every HLD constraint that applies to this file and list them explicitly:
 
 | HLD Dimension | Extract |
 |---|---|
@@ -149,9 +150,9 @@ Implement according to the Binding Inputs located in 2a. The code MUST satisfy a
 2. The Implementation Checklist from Step 1c (every numbered item)
 3. The HLD contracts (interfaces, signatures, module boundaries) — exact match, not approximate — **highest priority**
 
-### 2c. Traceability (only when HLD exists)
+### 2c. Traceability
 
-If an HLD exists in context, output THREE traceability checks after writing:
+Output THREE traceability checks after writing:
 
 **Forward traceability** — every HLD element has an implementation:
 
@@ -199,12 +200,54 @@ Verify the written code against every item in the Implementation Checklist from 
 
 Every item MUST be ✅. Any ❌ is a blocker — fix the code before declaring implementation complete.
 
-### 2e. Verification Gate (MANDATORY)
+### 2e. Self-Check
+
+Invoke the `self-check` skill using the Skill tool, passing:
+- `rules_path`: `~/.claude/skills/auto-code/self-check.rules.md`
+- `files`: `{procedure_dir}/hld.md, {procedure_dir}/audit/code-checklist.md`
+- `output_path`: `{procedure_dir}/audit/code-self-check-record.md`
+
+### 2f. Verification Gate (MANDATORY)
 
 Run ALL of the following in order before declaring implementation complete:
 
 1. **Unit + Integration tests**: `npx vitest run 2>/dev/null` — all tests must pass. Fix ALL failures, including pre-existing ones.
-2. **E2E tests**: `npx playwright test 2>/dev/null` — all e2e tests must pass. Skip if no e2e test files exist in the project. Fix ALL failures, including pre-existing ones.
+2. **E2E tests** — detect platform and run the appropriate tool. Skip if no e2e test files exist in the project.
+   - **Web** (has `playwright` in devDependencies): `npx playwright test 2>/dev/null`
+   - **React Native** (has `react-native` in dependencies): `maestro test .maestro/ 2>/dev/null`
+   - Fix ALL failures, including pre-existing ones.
 3. **Lint**: `lint 2>/dev/null` — zero type errors. Fix ALL errors, including pre-existing ones.
 
 Repeat until all three commands report zero failures/errors. Do NOT declare implementation complete with any test failure or lint error outstanding.
+
+**When a test fails, diagnose before fixing:**
+
+1. **Locate the HLD contract** — find the specific interface, signature, or Flow Expected Output in `hld.md` that governs the failing behavior.
+2. **Compare implementation vs HLD** — does your code match the HLD contract? Check: function signature, parameter types, return type, async/state mutation order, module boundary.
+3. **Decide:**
+   - **Implementation deviates from HLD** → your bug. Fix your code to match the HLD. This is the common case.
+   - **Implementation matches HLD exactly, but the test expects different behavior** → this is an `HLD_MISMATCH`. Before reporting, you MUST provide evidence:
+     - Quote the HLD contract (exact text from hld.md)
+     - Quote your implementation (show it matches)
+     - Describe what the test expects (from the error output — do NOT read the test file)
+     - Explain the contradiction
+
+Only report `HLD_MISMATCH` after completing all 4 evidence steps. If you cannot quote an HLD contract that supports your implementation, it is your bug, not an HLD mismatch.
+
+When reporting `HLD_MISMATCH`, write the evidence to `{procedure_dir}/audit/hld-mismatch.md`:
+
+```markdown
+## HLD Mismatch Report
+
+### HLD Contract
+> [exact quote from hld.md — section, flow ID, or signature]
+
+### Implementation
+> [quote your code that matches the HLD contract]
+
+### Test Expectation
+> [what the test error output says it expects — from vitest output, NOT from reading the test file]
+
+### Contradiction
+[one sentence explaining why the HLD contract and test expectation conflict]
+```

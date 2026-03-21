@@ -1,85 +1,69 @@
 ---
 name: self-check
-description: Generic independent review skill. Dispatches a strict reviewer agent to verify artifacts against caller-provided rules. Reusable across understand, testcase, code phases.
+description: Author-side self-review against review rules. Runs inside the current agent — no separate agent dispatch. Catches defects before the independent review.
 ---
 
-# Independent Self-Check
+# Self-Check
 
-Dispatches an independent reviewer agent to verify artifacts against caller-provided rules. The reviewer reads files and fills checklist tables with quoted content evidence. It is NOT the author — its sole purpose is to find defects.
+Author-side quality gate. The current agent reads the review rules file and checks its own output against every table and criterion. Defects found are fixed immediately — no separate agent, no round-trip.
 
-The skill manages the reviewer agent lifecycle internally — callers never interact with the reviewer directly.
+This is NOT the independent review. The independent `review` skill dispatches a separate adversarial reviewer agent. Self-check runs first to reduce the number of issues the reviewer finds, making the review a single-pass verification rather than a multi-round fix cycle.
 
 ## Parameters
 
 The caller must provide:
-- `rules_path` — absolute path to the rules file (defines tables, criteria, and output format)
-- `files` — comma-separated list of files to review
-- `output_path` — where to write the review result
+- `rules_path` — absolute path to the rules file (same file used by the `review` skill)
+- `files` — comma-separated list of files to check (the agent's own output)
+- `output_path` — where to write the self-check record
 
 ## Process
 
-### Step 1: Determine Review Mode
+### Step 1: Read Rules
 
-Check conversation history: **has a reviewer agent already been dispatched for this exact `{output_path}`?**
+Read the rules file at `{rules_path}`. Extract every table definition, its row criteria, and pass/fail conditions.
 
-- **No** → First review. Go to Step 2a.
-- **Yes** → Re-verify. Retrieve the reviewer agent ID from conversation history. Go to Step 2b.
+### Step 2: Check Each Table
 
-### Step 2a: First Review (dispatch new reviewer)
+For each table defined in the rules, fill it with the same rigor as the independent reviewer:
 
-Launch an Agent subagent with `subagent_type: "superpowers:code-reviewer"`, `mode: "auto"`, and this prompt:
+1. **Count source elements** — how many rows should this table have? Count from the source files.
+2. **Fill the table** — for each row, check the criterion against the actual file content. Quote the evidence.
+3. **Mark status** — each row gets ✅ (pass) or ❌ (fail with issue description).
+4. **Verify row count** — confirm the table row count matches the source element count. If mismatch, add the missing rows.
 
-```
-You are a strict, adversarial reviewer. Your job is to find EVERY defect in a SINGLE pass by reading actual files and filling checklist tables with quoted content evidence.
+### Step 3: Fix Issues
 
-RULES (read first — defines tables, criteria, and output format):
-{rules_path}
+For each ❌ row:
 
-FILES TO REVIEW:
-{files}
+1. **Diagnose** — what specifically is wrong?
+2. **Fix** — modify the output file to resolve the issue.
+3. **Re-check the fixed row** — re-read the file and verify the fix resolves the issue. Update the row to ✅ if fixed.
 
-OUTPUT:
-Write the complete review to {output_path}
-IMPORTANT: Use the Write tool to create the output file. Do NOT use the Bash tool or shell commands to write files.
+### Step 4: Write Record
 
-EVIDENCE PRINCIPLE: Every table cell that references a document element must QUOTE the actual text from the file. ID-only references are forbidden — if you cannot quote the content, the element does not exist.
+Write all tables to `{output_path}` with this format:
 
-COMPLETENESS DISCIPLINE — this is a single-pass review. Later re-verifies only check fixes, not the full scope. Any defect you miss now will not be caught:
-1. After filling each table, verify its row count against the source. The rules file defines what constitutes one row per table. Count the source elements in the reviewed files, count the table rows, and confirm they match. If mismatch, add the missing rows before moving to the next table.
-2. Every table defined in the rules MUST appear in the output, even if all rows pass.
-3. After ALL tables are filled, output a completeness declaration:
-   COMPLETENESS: Checked T tables, N total rows. Row counts verified against source. No table skipped or partially filled.
-   If you cannot honestly write this declaration, go back and fill the missing rows first.
+```markdown
+## Self-Check Record
 
-After completing the review:
-- If all tables are clean: return STATUS: PASS
-- If any table has issues: return STATUS: ISSUES_FOUND with count and categories
-```
+### [Table Name]
+| ... (same columns as the rules file defines) ... | Status |
+|---|---|
+| ... | ✅ |
+| ... | ✅ (fixed: [what was wrong and how it was fixed]) |
+| ... | ❌ UNFIXABLE: [reason] |
 
-Go to Step 3.
-
-### Step 2b: Re-verify (resume existing reviewer — incremental)
-
-Resume the reviewer using its agent ID from conversation history. Re-verify checks only the fixes and their immediate impact — no full re-review.
-
-```
-SendMessage(to: "<reviewer_agent_id>", message: "The artifacts have been updated to address the issues you found. For each issue you previously reported:
-1. Re-read the relevant section of the file and verify whether the issue is fixed.
-2. Check whether the fix introduced NEW issues in the SAME table — only inspect rows/elements touched by the fix, not unrelated rows.
-3. Report each original issue as FIXED or STILL_BROKEN, and list any new issues.
-
-Then update {output_path}: remove fixed issue rows, add any new issue rows, update the summary counts.
-
-After completing:
-- If all original issues are FIXED and no new issues found: return STATUS: PASS
-- If any STILL_BROKEN or new issues exist: return STATUS: ISSUES_FOUND with count and categories")
+### Summary
+- Tables checked: N
+- Total rows: N
+- Issues found: N
+- Issues fixed: N
+- Unfixable: N
 ```
 
-Go to Step 3.
+Rows that were fixed must show both the original issue and the fix applied — this enables retrospective analysis of what the author caught vs. what the reviewer caught.
 
-### Step 3: Return Result
+### Step 5: Return
 
-Parse the reviewer's output for STATUS:
-
-- **STATUS: PASS** → Return PASS to the caller.
-- **STATUS: ISSUES_FOUND** → Return the issues to the caller. The caller fixes the artifacts and re-invokes this skill (which triggers Step 2b).
+- If all issues were fixed (0 unfixable) → return to the caller's next step.
+- If any issue is unfixable (e.g., requires HLD change, missing input data) → report the unfixable issues to the caller so it can escalate.

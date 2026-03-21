@@ -198,7 +198,12 @@ Write `{procedure_dir}/understand.md` using the format that matches the complexi
 
 After writing `understand.md`, check the complexity gate result:
 
-- **No-logic** → Return to the main session immediately:
+- **No-logic** → Invoke the `self-check` skill using the Skill tool, passing:
+  - `rules_path`: `~/.claude/skills/understand/self-check.rules.md`
+  - `files`: `{procedure_dir}/requirement.md, {procedure_dir}/understand.md`
+  - `output_path`: `{procedure_dir}/audit/self-check-record.md`
+
+  Then return:
   ```
   STATUS: COMPLETE
   COMPLEXITY: no-logic
@@ -210,7 +215,12 @@ After writing `understand.md`, check the complexity gate result:
 
 Read `~/.claude/skills/hld/SKILL.md` and follow its process exactly to produce `{procedure_dir}/hld.md`. You already have the code context from the analysis phase — CodeGraph, CocoIndex, and LSP results are still available.
 
-After writing `hld.md`, return to the main session with:
+After writing `hld.md`, invoke the `self-check` skill using the Skill tool, passing:
+- `rules_path`: `~/.claude/skills/understand/self-check.rules.md`
+- `files`: `{procedure_dir}/requirement.md, {procedure_dir}/understand.md, {procedure_dir}/hld.md`
+- `output_path`: `{procedure_dir}/audit/self-check-record.md`
+
+After self-check completes (issues fixed or escalated), return to the main session with:
 
 ```
 STATUS: COMPLETE

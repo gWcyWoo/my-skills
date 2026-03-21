@@ -59,7 +59,7 @@ Create the file with header on first write; append rows on subsequent writes. Th
 
 ### Step 2: Handle Result
 
-**Save the understand agent ID immediately** — the Agent tool returns an agent ID (e.g., `agentId: a1b2c3d4`). Save it as `understand_agent_id` BEFORE checking the status — you need it for NEEDS_CLARIFICATION, ISSUES_FOUND fixes, and user-requested changes. This is the ONLY agent you will resume directly. The self-check skill manages its own reviewer agent internally.
+**Save the understand agent ID immediately** — the Agent tool returns an agent ID (e.g., `agentId: a1b2c3d4`). Save it as `understand_agent_id` BEFORE checking the status — you need it for NEEDS_CLARIFICATION, ISSUES_FOUND fixes, and user-requested changes. This is the ONLY agent you will resume directly. The review skill manages its own reviewer agent internally.
 
 Parse the subagent's returned output for `STATUS`:
 
@@ -86,7 +86,7 @@ The subagent encountered ambiguity and returned structured questions.
 
 ### Step 2b: Independent Review
 
-Invoke the `self-check` skill **using the Skill tool**, passing these parameters:
+Invoke the `review` skill **using the Skill tool**, passing these parameters:
 - `rules_path`: `~/.claude/skills/understand/self-check.rules.md`
 - `files`: `{procedure_dir}/requirement.md, {procedure_dir}/understand.md, {procedure_dir}/hld.md`
 - `output_path`: `{procedure_dir}/audit/self-check.md`
@@ -97,10 +97,10 @@ Invoke the `self-check` skill **using the Skill tool**, passing these parameters
 All tables clean. Go to Step 3.
 
 #### STATUS: ISSUES_FOUND
-The reviewer found defects. Fix them:
+The reviewer found defects with severity breakdown (e.g., "0 CRITICAL, 1 MAJOR, 2 MINOR, 1 TRIVIAL").
+
 1. **Resume the understand agent** using `SendMessage(to: "<understand_agent_id>", message: "Reviewer found these issues: <list issues>. Fix understand.md and/or hld.md.")`
-2. After fixes, **re-invoke the `self-check` skill** with the same parameters.
-3. Repeat until STATUS: PASS
+2. After fixes, proceed to Step 3. Do NOT re-invoke the review — the self-check already caught the bulk of issues, and one review round is sufficient.
 
 ### Step 3: Present Results to User
 
@@ -113,8 +113,9 @@ For logic changes:
 > - `{procedure_dir}/hld.md`
 >
 > Select next step:
-> 1. **code** — Confirmed. Proceed to implementation.
-> 2. **testcase** — Confirmed. Generate test cases first, then implement.
+> 1. **code** — Implement only.
+> 2. **testcase** — Generate test cases only.
+> 3. **both** — Run testcase and code in parallel.
 
 For no-logic changes:
 
@@ -122,13 +123,15 @@ For no-logic changes:
 > - `{procedure_dir}/understand.md`
 >
 > Select next step:
-> 1. **code** — Confirmed. Proceed to implementation.
-> 2. **testcase** — Confirmed. Generate test cases first, then implement.
+> 1. **code** — Implement only.
+> 2. **testcase** — Generate test cases only.
+> 3. **both** — Run testcase and code in parallel.
 
 Wait for user selection:
 
-- User replies `code` (or equivalent: "确认", "ok", "没问题", "直接编码", "proceed") → invoke the `code` skill **using the Skill tool**, passing the procedure directory path as argument.
-- User replies `testcase` (or equivalent: "测试", "先写测试", "tdd") → invoke the `testcase` skill **using the Skill tool**, passing the procedure directory path as argument.
+- User replies `code` (or equivalent: "确认", "ok", "没问题", "直接编码", "proceed") → invoke the `auto-code` skill **using the Skill tool**, passing the procedure directory path as argument.
+- User replies `testcase` (or equivalent: "测试", "先写测试") → invoke the `auto-testcase` skill **using the Skill tool**, passing the procedure directory path as argument.
+- User replies `both` (or equivalent: "并行", "都跑", "tdd", "all") → invoke **both** the `auto-testcase` and `auto-code` skills in parallel, each using the Skill tool, each passing the procedure directory path as argument. Both skills derive from the same HLD and have no data dependency on each other.
 
 **Do NOT execute skill logic inline.** Each skill has its own mandatory process (loading standards, checklists, traceability). Skipping the Skill tool invocation bypasses those checks.
 

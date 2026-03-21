@@ -87,8 +87,7 @@ AI must target "Contract Fragility" specified by the user. Every integration tes
 
 > **Principle**: Assert what the user sees, not internal wiring.
 
-- **Prohibited**: Testing `props` or `internal state` directly.
-  - Incorrect: `expect(childProps.value).toBe(123)`
+- **Prohibited**: Testing `props` or `internal state` directly. Assertions must use testing-library query and matcher APIs (`getByText`, `getByRole`, `toHaveTextContent`, `toBeVisible`, etc.) to verify user-visible results. Direct access to the render tree's internal structure (`.children`, `.props`, `.type`, `.parent`) constitutes internal state inspection and is forbidden, even when the accessed value appears to represent visible content.
 - **Required**: Testing **DOM Side-Effects** — what changes in the rendered output.
   - Correct: `expect(screen.getByText('New Task')).toBeVisible()` after clicking a child's button.
 - **Prohibited as primary assertion**: `toHaveBeenCalled()` alone. Must pair with a DOM outcome assertion.

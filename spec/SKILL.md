@@ -139,8 +139,8 @@ Present the completed (or updated) spec to the user:
 > 1. **Request changes** — tell me what to adjust, and we'll update the spec
 > 2. **Discuss next requirement** — add another feature/bugfix to this spec
 > 3. **Proceed to implementation**:
->    - **understand** — manual flow (understand → testcase → code, with user confirmation at each step)
->    - **auto-tdd** — fully automated pipeline (understand → testcase → code → verify, zero intervention)
+>    - **understand** — manual flow (understand → auto-testcase / auto-code, with user confirmation at each step)
+>    - **auto-tdd** — fully automated pipeline (understand → auto-testcase + auto-code parallel → verify, zero intervention)
 
 Wait for user selection:
 

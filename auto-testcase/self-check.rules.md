@@ -107,7 +107,7 @@ For each test, verify: (1) the trigger matches the HLD Flow's immediate predeces
 
 1. **Trigger fidelity**: The trigger in the test must be the immediate cause of the asserted outcome as defined in the HLD Flow — not an earlier step in the chain. If the HLD defines A → B → C → D and the test asserts D, the trigger must be C.
 2. **Assertion coverage**: The assertion must verify the HLD Flow's Expected Output — not a subset of it. If the Expected Output has 3 data values, the test should assert all 3.
-3. **Observable outcome**: The assertion must target a user-visible result (DOM element, rendered text, CSS class) or a return value — NOT internal state, props, or `toHaveBeenCalled()` alone.
+3. **Observable outcome**: The assertion must use testing-library query and matcher APIs (`getByText`, `getByRole`, `toHaveTextContent`, `toBeVisible`, etc.) to verify user-visible results. Direct access to the render tree's internal structure (`.children`, `.props`, `.type`, `.parent`) constitutes internal state inspection and is forbidden, even when the accessed value appears to represent visible content.
 4. **No Mock-as-Input-Output**: The test must NOT mock a value and then assert that the result equals that same mock value. The assertion must verify a real transformation or behavioral outcome driven by the mock input.
 
 **Table 8 — Trigger Fidelity Detail (one row per `it()` that involves multi-step HLD Flows):**

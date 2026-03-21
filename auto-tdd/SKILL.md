@@ -1,6 +1,6 @@
 ---
 name: auto-tdd
-description: Fully automated TDD pipeline. Takes a user requirement and executes understand → self-check → testcase → code → verify with zero human intervention.
+description: Fully automated TDD pipeline. Takes a user requirement and executes understand → review → auto-testcase + auto-code (parallel) → verify with zero human intervention.
 ---
 
 # Auto-TDD Pipeline
@@ -9,7 +9,7 @@ Fully automated pipeline from requirement to verified code. Zero human intervent
 
 ## Execution Model
 
-Auto-tdd invokes the **same skills** as the manual flow, in the same order. The only difference: all user-confirmation gates are bypassed automatically.
+Auto-tdd invokes the **same skills** as the manual flow. The only differences: all user-confirmation gates are bypassed automatically, and auto-testcase + auto-code run in parallel.
 
 **GATE OVERRIDE**: Bypass ALL **user-confirmation gates** — instructions that say "present to user and ask", "please confirm before I proceed", "wait for user confirmation", "Select next step", or "STOP" at the end of a completed phase. Treat these as phase-complete markers and proceed to the next phase automatically.
 
@@ -18,17 +18,16 @@ Auto-tdd invokes the **same skills** as the manual flow, in the same order. The 
 2. **Direction selection**: Accept all AI-recommended directions. If AI cannot generate candidates, use 'Data Transform Mismatch' as default direction based on HLD module boundaries.
 3. **AC Gap Check**: Auto-add integration/e2e tests for cross-module/user-facing gaps. Unit-scope ACs go to supplementary unit plan automatically.
 4. **Test plan confirmation**: Proceed directly to writing test code.
-5. **Step 3 user selection** (code/testcase): Auto-select the next pipeline phase.
+5. **Step 3 user selection** (code/testcase/both): Auto-select `both` (parallel).
 
 **PRESERVE prerequisite checks**: Instructions that say "if [artifact/input] is missing, ask the user and STOP" are NOT confirmation gates — they are error conditions. If a prerequisite check triggers, stop the pipeline and display the error.
 
 ## Pipeline
 
 ```
-Phase 1: understand skill (produces understand.md + hld.md + self-check)
-Phase 2: testcase skill (test plan + test code)
-Phase 3: code skill (implementation)
-Phase 4: verify (vitest + playwright + lint)
+Phase 1: understand skill (produces understand.md + hld.md + review)
+Phase 2: auto-testcase skill + auto-code skill (in parallel — no data dependency between them)
+Phase 3: verify (vitest + e2e + lint)
 ```
 
 All phase outputs are written to the same procedure directory: `{project_root}/.claude/procedure/{YYYY-MM-DD}/{name}/`
@@ -44,50 +43,49 @@ Any phase can fail. When a phase encounters an unresolvable error:
 
 ### Phase 1: Requirements + Design + Self-Check
 
-**Invoke the `understand` skill using the Skill tool.** The understand skill handles everything: creates the procedure directory, writes requirement.md, dispatches the understand subagent, and runs self-check.
+**Invoke the `understand` skill using the Skill tool.** The understand skill handles everything: creates the procedure directory, writes requirement.md, dispatches the understand subagent, and runs review.
 
    The understand skill will:
    - Dispatch the understand subagent (produces understand.md + hld.md)
-   - Run self-check (independent reviewer verifies quality)
+   - Run review (independent reviewer verifies quality)
    - Present options to user ← **GATE OVERRIDE: skip presentation, proceed to Phase 2**
 
    If NEEDS_CLARIFICATION → Critical ambiguity. Fail the pipeline.
 
 ---
 
-### Phase 2: Test Cases
+### Phase 2: Test Cases + Implementation (parallel)
 
-Invoke the `testcase` skill **using the Skill tool**, passing the procedure directory path.
+Invoke **both** skills in parallel — they derive from the same HLD and have no data dependency on each other:
 
-The testcase skill will:
-- Dispatch the testcase subagent
-- Handle NEEDS_CONFIRMATION gates ← **GATE OVERRIDE: auto-confirm all gates using the auto-resolve rules above**
-- Return STATUS: COMPLETE when test code is written and lint-clean
+1. **auto-testcase skill** — using the Skill tool, passing the procedure directory path.
+   - Handle NEEDS_CONFIRMATION gates ← **GATE OVERRIDE: auto-confirm all gates using the auto-resolve rules above**
+   - Returns STATUS: COMPLETE when test code is written and lint-clean
 
-**Gate bypass**: Proceed directly to Phase 3.
+2. **auto-code skill** — using the Skill tool, passing the procedure directory path as argument.
+   - Runs to completion without user gates.
 
----
-
-### Phase 3: Implementation
-
-Invoke the `code` skill **using the Skill tool**, passing the procedure directory path as argument.
-
-**Gate bypass**: None needed — code skill runs to completion without user gates.
+Wait for **both** to complete before proceeding. If either fails, stop the pipeline and report the failure.
 
 ---
 
-### Phase 4: Verify
+### Phase 3: Verify
 
 Run all verification commands in order:
 
 ```bash
 npx vitest run 2>/dev/null
-npx playwright test 2>/dev/null
+# E2E: detect platform from package.json
+#   Web (playwright in devDependencies): npx playwright test 2>/dev/null
+#   React Native (react-native in dependencies): maestro test .maestro/ 2>/dev/null
 lint 2>/dev/null
 ```
 
 1. **vitest** — unit + integration tests all pass. Fix ALL failures, including pre-existing ones.
-2. **playwright** — e2e tests all pass. Skip if no e2e test files were generated. Fix ALL failures, including pre-existing ones.
+2. **E2E** — detect platform and run the appropriate tool. Skip if no e2e test files were generated.
+   - **Web** (has `playwright` in devDependencies): `npx playwright test 2>/dev/null`
+   - **React Native** (has `react-native` in dependencies): `maestro test .maestro/ 2>/dev/null`
+   - Fix ALL failures, including pre-existing ones.
 3. **lint** — zero type errors. Fix ALL errors, including pre-existing ones.
 
 **If ALL GREEN** → Pipeline complete. Output final summary to user.
@@ -119,9 +117,8 @@ During the pipeline, only display phase transition markers:
 
 ```
 ▶ Phase 1: Requirements + Design + Self-Check...
-▶ Phase 2: Test Cases...
-▶ Phase 3: Implementation...
-▶ Phase 4: Verification...
+▶ Phase 2: Test Cases + Implementation (parallel)...
+▶ Phase 3: Verification...
 ```
 
 On success, display:
@@ -185,7 +182,7 @@ During execution, display one line per requirement:
 ▶ [1/3] add-share-button — running...
 ✅ [1/3] add-share-button — passed (12 tests, 0 failures)
 ▶ [2/3] fix-login-redirect — running...
-❌ [2/3] fix-login-redirect — failed (Phase 4: traceability)
+❌ [2/3] fix-login-redirect — failed (Phase 3: vitest 2 failures)
 ▶ [3/3] update-user-profile — running...
 ✅ [3/3] update-user-profile — passed (8 tests, 0 failures)
 ```
@@ -198,7 +195,7 @@ After all requirements complete, display summary:
 | # | Requirement | Status | Tests | Procedure |
 |---|-------------|--------|-------|-----------|
 | 1 | add-share-button | PASS | 12 passed | .claude/procedure/2026-03-16/add-share/ |
-| 2 | fix-login-redirect | FAIL | Phase 4 | .claude/procedure/2026-03-16/fix-login/ |
+| 2 | fix-login-redirect | FAIL | Phase 3 | .claude/procedure/2026-03-16/fix-login/ |
 | 3 | update-user-profile | PASS | 8 passed | .claude/procedure/2026-03-16/update-user/ |
 ```
 

@@ -30,15 +30,8 @@ Before any design work, load the project's architecture and convention rules. Th
 
 | Condition | File to Read |
 |---|---|
-| TypeScript (`.ts`/`.tsx` files) | `~/.claude/shared-rules/common/typescript.md` |
 | Any frontend (`.vue`/`.tsx`/`.jsx` files) | `~/.claude/shared-rules/frontend/architecture.md` |
-| Vue (`vue` in dependencies) | `~/.claude/shared-rules/frontend/vue3.md` |
-| React (`react` in dependencies) | `~/.claude/shared-rules/frontend/reactjs.md` |
-| Next.js (`next` in dependencies) | `~/.claude/shared-rules/frontend/nextjs.md` |
-| Next.js fullstack (`next` + server actions) | `~/.claude/shared-rules/frontend/nextjs-fullstack.md` |
 | Any backend (non-frontend `.ts`/`.js` files) | `~/.claude/shared-rules/backend/ddd.md` |
-| Express (`express` in dependencies) | `~/.claude/shared-rules/backend/express.md` |
-| MongoDB (`mongoose`/`mongodb` in dependencies) | `~/.claude/shared-rules/backend/mongodb.md` |
 
 **0b. Load project design constraints:** Read the project's CLAUDE.md **in the repository root** using the `Read` tool. This is the project-specific CLAUDE.md, not the global `~/.claude/CLAUDE.md`. If no project CLAUDE.md exists in the repository root, output "Step 0b N/A" and proceed.
 
@@ -126,6 +119,7 @@ Rules:
 - **Flow ID format**: `F{n}` sequential.
 - **Flow granularity**: Each distinct user interaction within an AC gets its own Flow row(s). If an AC covers multiple interactions (e.g., drag, click, delete), each interaction needs at least one Flow. Do NOT collapse multiple interactions into a single Flow row.
 - **Error path coverage**: Every interaction that has a success Flow MUST also have an error/boundary Flow if failure is possible (e.g., hash computation fails, network error, validation fails). If no failure is possible for a specific interaction, add a row in the Flow table with Path Type = `N/A` and Expected Output explaining why (e.g., "pure state reset, no external call — no failure path").
+- **Async state mutation order**: When a Flow involves an async operation (API call, fetch, promise) AND a state change (e.g., opening a modal, updating a flag), the Expected Output MUST specify the causal order between the async operation and the state change. Example: "calls sharePost API; on success sets isShareOpen = true; on failure isShareOpen remains false" — NOT "opens share modal and calls API". Both testcase and code derive behavior from this ordering; ambiguity causes implementation/test mismatch.
 
 ### Step 3: Author-Side Quick Check (before writing output)
 
@@ -138,9 +132,9 @@ Before writing hld.md, run these quick checks. This is a FAST author-side sanity
 5. **AC coverage** — every AC should have at least one Flow (structural ACs exempt).
 6. **No implementation in contracts** — signatures and flow outputs should be declarative, not procedural.
 
-If any issue found → fix the HLD before writing. Do NOT produce formal self-check tables — the independent reviewer agent handles that.
+If any issue found → fix the HLD before writing. Do NOT produce formal review tables — the independent reviewer agent handles that.
 
-**Do NOT write self-check to any file.** The reviewer agent will produce the formal `audit/self-check.md` with content-verified tables.
+**Do NOT write review output to any file.** The reviewer agent will produce the formal `audit/self-check.md` with content-verified tables.
 
 ### Step 4: Write Output
 

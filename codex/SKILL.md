@@ -15,7 +15,7 @@ Run with `timeout: 600000` on the Bash tool call:
 codex exec \
   -m gpt-5.4 \
   -c model_reasoning_effort=\"high\" \
-  --sandbox read-only \
+  --full-auto \
   --skip-git-repo-check \
   --ephemeral \
   2>/dev/null \

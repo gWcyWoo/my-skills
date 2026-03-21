@@ -107,7 +107,18 @@ Each Flow's expected output must be a direct consequence of its trigger. If reac
 | F1 | "OrderForm → useOrderService" | "valid order data" | "order saved, confirmation shown" | no | ✅ |
 | F5 | "CheckoutPage → PaymentService" | "payment request" | "payment recorded in DB" | yes — skips payment gateway call | ❌ |
 
-**Table 9 — Boundary Correctness (one row per dependency in Module Boundaries table):**
+**Table 9 — Async State Mutation Order (one row per Flow with async operation + state change):**
+
+For each Flow whose Expected Output involves BOTH an async operation (API call, fetch, network request) AND a state mutation (flag toggle, modal open/close, list update), verify that the Expected Output specifies the causal order: which happens first, and what happens on success vs failure. Ambiguous ordering (e.g., "opens modal and calls API") causes testcase and code to derive conflicting behavior.
+
+| Flow | Async Operation (quote from hld.md) | State Change (quote from hld.md) | Order Specified? | Success/Failure Paths Clear? | Status |
+|------|-------------------------------------|----------------------------------|-----------------|------------------------------|--------|
+| F3 | "calls sharePost API" | "sets isShareOpen = true" | yes — "on success sets isShareOpen" | yes — "on failure isShareOpen remains false" | ✅ |
+| F7 | "submits form and updates list" | (no explicit order) | no — ambiguous | no | ❌ |
+
+Skip Flows that have no async operation or no state change (pure sync state updates, pure side effects).
+
+**Table 10 — Boundary Correctness (one row per dependency in Module Boundaries table):**
 
 Each dependency in the Module Boundaries table must be correctly classified. Internal = other modules in this system (rendered for real in tests). External = anything outside the module's control (network, DB, third-party APIs, parent-provided props/callbacks — mocked in tests).
 
@@ -126,7 +137,7 @@ Read `hld.md` and the project's architecture rules. These tables check whether t
 
 Every applicable rule must have at least one row — regardless of pass or fail. Quote the rule text and the HLD element being checked. A rule with no row means it was skipped, which is forbidden.
 
-**Table 10 — Architecture Compliance (one row per architecture rule):**
+**Table 11 — Architecture Compliance (one row per architecture rule):**
 
 Check module decomposition, dependency direction, layer boundaries, and structural patterns against loaded architecture rules.
 
@@ -135,7 +146,7 @@ Check module decomposition, dependency direction, layer boundaries, and structur
 | frontend/architecture.md | "UI components must not import data layer directly" | OrderForm | "dependencies: [useOrderService]" (service layer, not data) | ✅ |
 | frontend/architecture.md | "Max 3 internal dependencies per module" | CheckoutPage | "dependencies: [OrderForm, PaymentForm, ShippingForm, CouponWidget]" (4 deps) | ❌ |
 
-**Table 11 — Interface & Abstraction Compliance (one row per rule):**
+**Table 12 — Interface & Abstraction Compliance (one row per rule):**
 
 Check interface design, abstraction level, and contract patterns. This includes both built-in abstraction rules and project-specific interface rules.
 
@@ -154,7 +165,7 @@ Built-in rules (always check — one row per category, scan ALL signatures and F
 | built-in | No control flow language | (all signatures and outputs scanned) | (no control flow language found) | ✅ |
 | typescript.md | "All public functions must have explicit return types" | doSearch | "function doSearch(): SearchReturn" | ✅ |
 
-**Table 12 — Flow Compliance (one row per flow/interaction rule):**
+**Table 13 — Flow Compliance (one row per flow/interaction rule):**
 
 Check Flow design patterns, error handling conventions, and interaction patterns against loaded architecture rules.
 
@@ -176,6 +187,7 @@ Check Flow design patterns, error handling conventions, and interaction patterns
 | Signature Consistency | X | X | X | X |
 | Data Origin Traceability | X | X | X | X |
 | Flow Continuity | X | X | X | X |
+| Async State Mutation Order | X | X | X | X |
 | Boundary Correctness | X | X | X | X |
 | Architecture Compliance | X | X | X | X |
 | Interface & Abstraction Compliance | X | X | X | X |
