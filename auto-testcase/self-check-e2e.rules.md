@@ -4,8 +4,7 @@ Review the e2e test plan, test code, and HLD by filling these tables. Every cell
 
 ## Inputs
 
-- `understand.md` — Acceptance Criteria, Affected Files
-- `hld.md` — Module Interaction Flow, Module Boundaries, Function Signatures
+- `hld.md` — Module Interaction Flow, Module Boundaries, Function Signatures, Acceptance Criteria
 - Test plan (from `testcase/` directory or inline in test file comments)
 - Test code file(s) (`.test.ts` / `.spec.ts`)
 

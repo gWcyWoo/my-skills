@@ -4,8 +4,7 @@ Review the test plan, test code, and HLD by filling these tables. Every cell mus
 
 ## Inputs
 
-- `understand.md` — Acceptance Criteria, Affected Files
-- `hld.md` — Module Interaction Flow, Module Boundaries, Function Signatures
+- `hld.md` — Module Interaction Flow, Module Boundaries, Function Signatures, Acceptance Criteria
 - Test plan (from `testcase/` directory or inline in test file comments)
 - Test code file(s) (`.test.ts` / `.test.tsx`)
 
@@ -208,7 +207,7 @@ Every type used in mock return values and test fixtures must match the HLD-defin
 
 **Table 14 — Import Path Alignment (one row per application import in test file):**
 
-Every import from application source code must point to a file listed in understand.md → Affected Files or a shared/common module. Imports from unlisted files indicate scope creep in the test.
+Every import from application source code must point to a file listed in hld.md → Module Boundaries or a shared/common module. Imports from unlisted files indicate scope creep in the test.
 
 | Import (quote from test file) | In Affected Files or shared module? | Status |
 |-------------------------------|-------------------------------------|--------|

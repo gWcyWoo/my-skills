@@ -112,6 +112,28 @@ expect(mockApiFn.mock.calls[0][0]).toBe('/expected/path');
 expect(calledOptions.body.key).toBe('value');
 ```
 
+### 5d. Assertion Value Derivation (mandatory)
+
+For each assertion's expected value, execute this checklist:
+
+1. **Derive from requirement** — the expected value must come from the AC/understand description, not from reading what the implementation code currently produces.
+2. **Cross-check against mock inputs** — if the expected value equals any mock input unchanged, this is a §5 violation signal. Ask: "Does this module combine/transform the input with other data (e.g., other state, config, safe area insets)?" If yes, the expected value must reflect that transformation.
+3. **State the derivation** — add a comment above the assertion showing how the expected value was calculated from the requirement:
+
+```typescript
+// ❌ Mock-as-Output — expected value equals mock input unchanged
+vi.mock('react-native-safe-area-context', () => ({
+  useSafeAreaInsets: () => ({ bottom: 48 }),
+}));
+// keyboard mock height = 300
+expect(onKeyboardOverlayChange).toHaveBeenCalledWith(300); // just echoes the mock
+
+// ✅ Requirement-derived — expected value reflects the module's transformation
+// requirement: scroll amount = dialog push amount = keyboardHeight + bottomInset
+// 300 (mock keyboard) + 48 (mock safe area bottom) = 348
+expect(onKeyboardOverlayChange).toHaveBeenCalledWith(348);
+```
+
 ### 5c. Trigger Fidelity (mandatory when HLD exists)
 
 > **Principle**: A test's trigger must be the **immediate cause** of the asserted outcome as defined in the HLD flow — not an earlier step in the chain.

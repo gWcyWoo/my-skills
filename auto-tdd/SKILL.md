@@ -1,36 +1,43 @@
 ---
 name: auto-tdd
-description: Fully automated TDD pipeline. Takes a user requirement and executes understand → review → auto-testcase + auto-code (parallel) → verify with zero human intervention.
+description: Automated TDD pipeline. Takes a procedure directory (with understand.md + hld.md) and runs auto-testcase + auto-code in parallel, then verifies. Zero human intervention.
 ---
 
 # Auto-TDD Pipeline
 
-Fully automated pipeline from requirement to verified code. Zero human intervention — user only provides the requirement.
+Automated pipeline from design to verified code. Requires a procedure directory with `requirement.md`, `understand.md`, and `hld.md` already present. Zero human intervention.
+
+## Prerequisite
+
+The procedure directory must contain:
+- `requirement.md` — the original requirement
+- `understand.md` — requirements analysis
+- `hld.md` — high-level design contracts
+
+If any of these files are missing, stop and display the error. Do NOT invoke `understand` or create these files — they must be produced before invoking this skill.
 
 ## Execution Model
 
-Auto-tdd invokes the **same skills** as the manual flow. The only differences: all user-confirmation gates are bypassed automatically, and auto-testcase + auto-code run in parallel.
+Auto-tdd invokes `auto-testcase` and `auto-code` skills with all user-confirmation gates bypassed automatically. Both skills run in parallel.
 
-**GATE OVERRIDE**: Bypass ALL **user-confirmation gates** — instructions that say "present to user and ask", "please confirm before I proceed", "wait for user confirmation", "Select next step", or "STOP" at the end of a completed phase. Treat these as phase-complete markers and proceed to the next phase automatically.
+**GATE OVERRIDE**: Bypass ALL **user-confirmation gates** — instructions that say "present to user and ask", "please confirm before I proceed", "wait for user confirmation", or "STOP" at the end of a completed phase. Treat these as phase-complete markers and proceed to the next phase automatically.
 
 **Auto-resolve rules for specific gates:**
 1. **Test type recommendation**: Accept all recommended types and proceed.
 2. **Direction selection**: Accept all AI-recommended directions. If AI cannot generate candidates, use 'Data Transform Mismatch' as default direction based on HLD module boundaries.
 3. **AC Gap Check**: Auto-add integration/e2e tests for cross-module/user-facing gaps. Unit-scope ACs go to supplementary unit plan automatically.
 4. **Test plan confirmation**: Proceed directly to writing test code.
-5. **Step 3 user selection** (code/testcase/both): Auto-select `both` (parallel).
 
 **PRESERVE prerequisite checks**: Instructions that say "if [artifact/input] is missing, ask the user and STOP" are NOT confirmation gates — they are error conditions. If a prerequisite check triggers, stop the pipeline and display the error.
 
 ## Pipeline
 
 ```
-Phase 1: understand skill (produces understand.md + hld.md + review)
-Phase 2: auto-testcase skill + auto-code skill (in parallel — no data dependency between them)
-Phase 3: verify (vitest + e2e + lint)
+Phase 1: auto-testcase skill + auto-code skill (in parallel — no data dependency between them)
+Phase 2: verify (vitest + e2e + lint)
 ```
 
-All phase outputs are written to the same procedure directory: `{project_root}/.claude/procedure/{YYYY-MM-DD}/{name}/`
+All phase outputs are written to the same procedure directory.
 
 ## Failure Handling
 
@@ -41,20 +48,7 @@ Any phase can fail. When a phase encounters an unresolvable error:
 
 ---
 
-### Phase 1: Requirements + Design + Self-Check
-
-**Invoke the `understand` skill using the Skill tool.** The understand skill handles everything: creates the procedure directory, writes requirement.md, dispatches the understand subagent, and runs review.
-
-   The understand skill will:
-   - Dispatch the understand subagent (produces understand.md + hld.md)
-   - Run review (independent reviewer verifies quality)
-   - Present options to user ← **GATE OVERRIDE: skip presentation, proceed to Phase 2**
-
-   If NEEDS_CLARIFICATION → Critical ambiguity. Fail the pipeline.
-
----
-
-### Phase 2: Test Cases + Implementation (parallel)
+### Phase 1: Test Cases + Implementation (parallel)
 
 Invoke **both** skills in parallel — they derive from the same HLD and have no data dependency on each other:
 
@@ -62,14 +56,14 @@ Invoke **both** skills in parallel — they derive from the same HLD and have no
    - Handle NEEDS_CONFIRMATION gates ← **GATE OVERRIDE: auto-confirm all gates using the auto-resolve rules above**
    - Returns STATUS: COMPLETE when test code is written and lint-clean
 
-2. **auto-code skill** — using the Skill tool, passing the procedure directory path as argument.
+2. **auto-code skill** — using the Skill tool, passing the procedure directory path.
    - Runs to completion without user gates.
 
 Wait for **both** to complete before proceeding. If either fails, stop the pipeline and report the failure.
 
 ---
 
-### Phase 3: Verify
+### Phase 2: Verify
 
 Run all verification commands in order:
 
@@ -116,9 +110,8 @@ lint 2>/dev/null
 During the pipeline, only display phase transition markers:
 
 ```
-▶ Phase 1: Requirements + Design + Self-Check...
-▶ Phase 2: Test Cases + Implementation (parallel)...
-▶ Phase 3: Verification...
+▶ Phase 1: Test Cases + Implementation (parallel)...
+▶ Phase 2: Verification...
 ```
 
 On success, display:
@@ -157,18 +150,19 @@ Each `##` heading is the requirement name. The content under it is the requireme
 
 ### Execution
 
-The main session acts as a **lightweight dispatcher** — it does NOT execute any pipeline logic itself.
+The main session acts as a **dispatcher** — it runs `understand` for each requirement, then delegates the auto-tdd pipeline to a subagent.
 
-```
-for each requirement in file (sequential, top to bottom):
-  1. Dispatch an Agent subagent with:
-     - The requirement name and description
-     - Instruction: "Read ~/.claude/skills/auto-tdd/SKILL.md and execute the single-requirement pipeline (NOT batch mode) for this requirement"
-  2. Wait for subagent to complete
-  3. Collect result: pass (with summary) or fail (with error)
-  4. Display one-line status to user
-  5. Proceed to next requirement regardless of pass/fail
-```
+For each requirement:
+1. Invoke `understand` skill, passing the requirement name and description as the user message (so understand writes it to `requirement.md`).
+   - Apply **GATE OVERRIDE**: bypass user-selection gates (code/testcase/both presentation) and proceed to step 2.
+   - **Do NOT bypass critical ambiguity STOPs** — if understand encounters a critical ambiguity that requires human input, fail this requirement (critical ambiguity cannot be auto-resolved).
+2. Dispatch an Agent subagent with:
+   - The procedure directory path
+   - Instruction: "Read ~/.claude/skills/auto-tdd/SKILL.md and execute the pipeline for this procedure directory"
+3. Wait for subagent to complete
+4. Collect result: pass (with summary) or fail (with error)
+5. Display one-line status to user
+6. Proceed to next requirement regardless of pass/fail
 
 **Subagent isolation**: Each subagent gets a fresh context window. No context pollution between requirements.
 
@@ -182,7 +176,7 @@ During execution, display one line per requirement:
 ▶ [1/3] add-share-button — running...
 ✅ [1/3] add-share-button — passed (12 tests, 0 failures)
 ▶ [2/3] fix-login-redirect — running...
-❌ [2/3] fix-login-redirect — failed (Phase 3: vitest 2 failures)
+❌ [2/3] fix-login-redirect — failed (Phase 2: vitest 2 failures)
 ▶ [3/3] update-user-profile — running...
 ✅ [3/3] update-user-profile — passed (8 tests, 0 failures)
 ```
@@ -194,9 +188,9 @@ After all requirements complete, display summary:
 
 | # | Requirement | Status | Tests | Procedure |
 |---|-------------|--------|-------|-----------|
-| 1 | add-share-button | PASS | 12 passed | .claude/procedure/2026-03-16/add-share/ |
-| 2 | fix-login-redirect | FAIL | Phase 3 | .claude/procedure/2026-03-16/fix-login/ |
-| 3 | update-user-profile | PASS | 8 passed | .claude/procedure/2026-03-16/update-user/ |
+| 1 | add-share-button | PASS | 12 passed | .procedure/2026-03-16/claude_add-share/ |
+| 2 | fix-login-redirect | FAIL | Phase 2 | .procedure/2026-03-16/claude_fix-login/ |
+| 3 | update-user-profile | PASS | 8 passed | .procedure/2026-03-16/claude_update-user/ |
 ```
 
 ---
@@ -204,6 +198,5 @@ After all requirements complete, display summary:
 ## Rules
 
 1. **No human intervention** — all user-confirmation gates are bypassed; prerequisite checks are preserved
-2. **Same skills, same flow** — invokes the exact same skills as the manual flow via Skill tool; no direct subagent dispatch or separate logic
-3. **Self-check is automatic** — included in Phase 1 via understand skill's Step 2b
-4. **Failure stops the pipeline** — do not proceed past a failed phase
+2. **Skills via Skill tool** — invokes `auto-testcase` and `auto-code` via the Skill tool; no inline logic or direct subagent dispatch
+3. **Failure stops the pipeline** — do not proceed past a failed phase

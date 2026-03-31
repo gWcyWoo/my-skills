@@ -139,15 +139,15 @@ Present the completed (or updated) spec to the user:
 > 1. **Request changes** — tell me what to adjust, and we'll update the spec
 > 2. **Discuss next requirement** — add another feature/bugfix to this spec
 > 3. **Proceed to implementation**:
->    - **understand** — manual flow (understand → auto-testcase / auto-code, with user confirmation at each step)
->    - **auto-tdd** — fully automated pipeline (understand → auto-testcase + auto-code parallel → verify, zero intervention)
+>    - **understand** — run requirement analysis + HLD design, then choose next step
+>    - **auto-tdd** — fully automated pipeline (auto-testcase + auto-code parallel → verify, zero intervention; requires understand first)
 
 Wait for user selection:
 
 - User requests changes → go back to Step 1 with the feedback, update the spec
 - User wants to discuss next requirement → go back to Step 5 (Incremental Update) since the spec is already loaded
 - User selects `understand` → create procedure directory (Step 4), then invoke the `understand` skill
-- User selects `auto-tdd` → create procedure directory (Step 4), then invoke the `auto-tdd` skill
+- User selects `auto-tdd` → create procedure directory (Step 4), then invoke the `understand` skill; after it completes, invoke the `auto-tdd` skill with the procedure directory path
 
 ### Step 4: Create Procedure Directory
 

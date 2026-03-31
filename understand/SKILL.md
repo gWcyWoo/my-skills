@@ -1,11 +1,11 @@
 ---
 name: understand
-description: Use when any code modification task is received, before design or implementation. Structures requirement analysis and HLD design via a subagent.
+description: Requirement analysis and HLD design in the main session. Produces understand.md + hld.md in a procedure directory. Run before auto-tdd or manual implementation.
 ---
 
 # Requirements Understanding
 
-Structured requirement analysis + HLD design via a single subagent. Output is written to a procedure directory for full traceability. Must complete before any implementation.
+Requirement analysis + HLD design running in the main session. Output is written to a procedure directory for full traceability. Must complete before any implementation.
 
 ## When to Use
 
@@ -25,84 +25,25 @@ Any task involving code changes: new features, bug fixes, refactoring.
 
 1. Determine the project root (git root, or current working directory if not a git repo)
 2. Generate a short name (≤10 characters) summarizing the user's requirement
-3. Create directory: `{project_root}/.claude/procedure/{YYYY-MM-DD}/{name}/`
+3. Create directory: `{project_root}/.procedure/{YYYY-MM-DD}/claude_{name}/`
 4. Write `requirement.md` to the procedure directory:
    - The user's chat message (verbatim)
    - If the message references an external spec/requirement file (e.g., a PRD, feature spec, or any document containing detailed requirements): read that file and append its full content after the user's message, preceded by a `## Source Spec` heading
 5. Store the procedure directory path — all subsequent steps reference it as `{procedure_dir}`
 
-### Step 1: Dispatch Subagent
+### Step 1: Analyze
 
-Launch an Agent subagent (general-purpose) with `name: "understand-agent"` to execute the analysis and design phases. This isolates exploration noise (CodeGraph, CocoIndex, LSP calls) from the main session.
+Invoke the `my-explore` skill to load code navigation methodology. Then read `~/.claude/skills/understand/analysis-instructions.md` and follow it to analyze the requirement and produce output files.
 
-**Subagent prompt must contain only:**
-1. The procedure directory path
-2. Instruction: "First, invoke the `my-explore` skill using the Skill tool to load code navigation methodology."
-3. Instruction to read `~/.claude/skills/understand/subagent-instructions.md` and follow it exactly
-4. Instruction: "Do NOT invoke the `understand` skill via the Skill tool — you are already executing it by following subagent-instructions.md directly."
+During analysis, if anything is ambiguous:
+- If the analysis can continue meaningfully → record the ambiguity and continue
+- If the ambiguity is critical → **STOP and ask the user**. After the user answers, append the answers to `{procedure_dir}/requirement.md` under a `## Clarifications` heading, then continue the analysis.
 
-**Do NOT add** file paths, component names, implementation guidance, or any context beyond the procedure directory path. The subagent reads `requirement.md` and discovers project structure on its own. Adding implementation-ready information causes the subagent to skip analysis and jump to solutions.
+Write output to the procedure directory:
+- `understand.md` — requirements analysis (always)
+- `hld.md` — high-level design contracts (for logic changes only)
 
-### Metrics Recording (after every agent call or SendMessage resume)
-
-After every Agent dispatch or SendMessage resume returns, extract the `<usage>` block (total_tokens, tool_uses, duration_ms) and append a row to `{procedure_dir}/metrics.md`:
-
-```markdown
-# Agent Metrics
-
-| Phase | Tokens | Tool Uses | Duration | Timestamp |
-|-------|--------|-----------|----------|-----------|
-| [brief description of what the agent did] | [total_tokens] | [tool_uses] | [duration formatted as Xm Ys] | [ISO 8601 timestamp] |
-```
-
-Create the file with header on first write; append rows on subsequent writes. This applies to ALL agent calls and SendMessage resumes in this skill.
-
-### Step 2: Handle Result
-
-**Save the understand agent ID immediately** — the Agent tool returns an agent ID (e.g., `agentId: a1b2c3d4`). Save it as `understand_agent_id` BEFORE checking the status — you need it for NEEDS_CLARIFICATION, ISSUES_FOUND fixes, and user-requested changes. This is the ONLY agent you will resume directly. The review skill manages its own reviewer agent internally.
-
-Parse the subagent's returned output for `STATUS`:
-
-#### STATUS: COMPLETE
-
-The subagent wrote output files to the procedure directory. Check the `COMPLEXITY` field:
-
-- **`COMPLEXITY: no-logic`** → `understand.md` written. Go to Step 2b (Review).
-- **`COMPLEXITY: logic`** → `understand.md` and `hld.md` written. Go to Step 2b (Review).
-
-#### STATUS: NEEDS_CLARIFICATION
-
-The subagent encountered ambiguity and returned structured questions.
-
-1. Present the questions to the user (include the `COMPLETED_SO_FAR` context if it helps the user understand why the question matters)
-2. Wait for user answers
-3. **Append the user's answers to `{procedure_dir}/requirement.md`** under a `## Clarifications` heading (create the heading on first append; subsequent clarifications append under the same heading). If the answer references an external file (e.g., a new or updated spec), read that file and append its content after the answer. This keeps requirement.md as the single source of truth for the reviewer.
-4. **Resume the understand agent using SendMessage with `understand_agent_id`:**
-   ```
-   SendMessage(to: "<understand_agent_id>", message: "User answered: <user's answers>")
-   ```
-   IMPORTANT: Use the **agent ID** (not the agent name). SendMessage with name only delivers to inbox; SendMessage with ID actually resumes the agent with full context preserved. Do NOT launch a new Agent (loses context).
-5. Parse the resumed subagent's output again — repeat until STATUS: COMPLETE.
-
-### Step 2b: Independent Review
-
-Invoke the `review` skill **using the Skill tool**, passing these parameters:
-- `rules_path`: `~/.claude/skills/understand/self-check.rules.md`
-- `files`: `{procedure_dir}/requirement.md, {procedure_dir}/understand.md, {procedure_dir}/hld.md`
-- `output_path`: `{procedure_dir}/audit/self-check.md`
-
-**Handle result:**
-
-#### STATUS: PASS
-All tables clean. Go to Step 3.
-
-#### STATUS: ISSUES_FOUND
-The reviewer found defects with severity breakdown (e.g., "0 CRITICAL, 1 MAJOR, 2 MINOR, 1 TRIVIAL").
-
-1. **Resume the understand agent** using `SendMessage(to: "<understand_agent_id>", message: "Reviewer found these issues: <list issues>. Fix understand.md and/or hld.md.")`
-2. After fixes, proceed to Step 3. Do NOT re-invoke the review — the self-check already caught the bulk of issues, and one review round is sufficient.
-
-### Step 3: Present Results to User
+### Step 2: Present Results to User
 
 Output the procedure file paths as clickable links. **Do NOT read the file contents into the main session context** — the user opens and reviews them directly in their editor.
 
@@ -136,6 +77,5 @@ Wait for user selection:
 **Do NOT execute skill logic inline.** Each skill has its own mandatory process (loading standards, checklists, traceability). Skipping the Skill tool invocation bypasses those checks.
 
 Do NOT proceed without a user selection. If the user requests changes to the analysis or design instead of selecting an option:
-- **Textual changes** (rewording ACs, adjusting scope description, adding/removing affected files): **append the user's feedback to `{procedure_dir}/requirement.md`** under `## Clarifications` (if the feedback references an external file, read and append its content too), then resume the subagent using `SendMessage(to: "<understand_agent_id>", message: "<user's feedback>")`. After changes, re-present with the same options.
-- **Changes requiring re-analysis** (different approach, new scope, re-examine code): **append the user's feedback to `{procedure_dir}/requirement.md`** under `## Clarifications` (if the feedback references an external file, read and append its content too), then resume the subagent using `SendMessage(to: "<understand_agent_id>", message: "<user's feedback>")` and parse its output again per Step 2.
-
+- **Textual changes** (rewording ACs, adjusting scope description, adding/removing affected files): append the user's feedback to `{procedure_dir}/requirement.md` under `## Clarifications`, then re-run the relevant part of the analysis. After changes, re-present with the same options.
+- **Changes requiring re-analysis** (different approach, new scope, re-examine code): append the user's feedback to `{procedure_dir}/requirement.md` under `## Clarifications`, then re-run the analysis from Step 1 and present results again.

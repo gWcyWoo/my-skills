@@ -115,13 +115,12 @@ Use the highest-priority locator that uniquely identifies the element. Only fall
 | 2 | **Label** | `getByLabel('Email address')` | Form elements with associated `<label>` |
 | 3 | **Text** | `getByText('Save changes')` | Visible text is stable and unique on page |
 | 4 | **Placeholder** | `getByPlaceholder('Search...')` | Input with placeholder, no label available |
-| 5 | **Alt / Title** | `getByAltText('User avatar')` | Images or elements with alt/title attributes |
-| 6 (last resort) | **data-testid** | `getByTestId('task-list-item')` | No accessible attribute can uniquely identify the element |
+| 5 (last resort) | **Alt / Title** | `getByAltText('User avatar')` | Images or elements with alt/title attributes |
 
 **Rules:**
-- Do NOT use `data-testid` if any of priorities 1-5 can identify the element. Justify every `data-testid` usage in a comment explaining why higher-priority locators are not viable.
+- **FORBIDDEN**: `data-testid`, `testID`, or any locator that requires modifying source code to support tests. E2E tests must work with the application as-is.
 - Do NOT use CSS class selectors (`.btn-primary`) or structural selectors (`div > span:nth-child(2)`) — these are fragile and break on style/layout changes.
-- For i18n projects where visible text changes by locale, prefer Role + Name (priority 1) or data-testid (priority 6) over Text (priority 3).
+- For i18n projects where visible text changes by locale, prefer Role + Name (priority 1) over Text (priority 3).
 
 ### 6.2 Physical Assertion Rules
 
@@ -170,6 +169,6 @@ Every test case MUST map to:
 - One `it()` or `test()` block per plan row. Every row, zero omissions.
 - Any test not in the plan MUST be removed or justified as a new plan row.
 - Write test code only — zero implementation code.
-- Every element locator MUST follow §6.1 Locator Priority. Justify any `data-testid` usage.
+- Every element locator MUST follow §6.1 Locator Priority. `data-testid` is forbidden.
 - Every assertion MUST follow §6.2 Physical Assertion Rules.
 - **FORBIDDEN**: `page.waitForURL(pattern, { waitUntil: 'commit' })` when the test asserts page content after navigation. ALWAYS use the default `waitUntil: 'load'`.

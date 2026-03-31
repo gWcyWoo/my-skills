@@ -65,6 +65,7 @@ Each tool has a blind spot. Selecting the wrong tool produces noise or misses re
 | **Grep** | Cannot understand meaning. It matches character patterns, not concepts. Unusable when you do not know the keyword. |
 | **codegraph_search** | Cannot return code — only symbol names and locations. Cannot do semantic/concept search — it matches symbol names only. Use `cocoindex search` for concept-based discovery, `Grep` for literal text search. |
 | **codegraph_node** | Cannot discover multiple symbols at once. It returns one symbol per call. |
+| **codegraph_callers** | Cannot detect JSX usage. React components are rendered via `<Component />`, not called as `Component()`. `codegraph_callers` only tracks function calls, so it returns empty for components. Use `codegraph_search` (which shows import references) or `LSP findReferences` to find where a component is used. |
 | **LSP** (all operations) | Cannot operate without a file position (filePath + line + character). Always requires a previous result that provides the position. Cannot be used as the first tool when only a symbol name is known. |
 
 ## Parameter guidelines

@@ -7,9 +7,9 @@ You are executing the testcase workflow. Your job is to recommend test types, de
 ## Inputs
 
 You receive:
-1. **Procedure directory path** — the directory containing `understand.md` and `hld.md`
+1. **Procedure directory path** — the directory containing `hld.md`
 
-Read `{procedure_dir}/understand.md` for Acceptance Criteria and Affected Files.
+Read `{procedure_dir}/hld.md` — this is your **sole design authority**. Do NOT read `understand.md` or `requirement.md` — they have been consumed by the HLD.
 If `{procedure_dir}/hld.md` exists, read it for design contracts (interfaces, flows, module boundaries).
 Do NOT read `requirement.md` — the understand and HLD outputs are your sole inputs.
 
@@ -42,27 +42,30 @@ When no argument is given, analyze the `understand` output and HLD to recommend 
    | **integration** | Multiple modules interact; HLD shows cross-module data flow or orchestration; container/hook coordinates multiple concerns | Change is isolated to a single pure function/hook with no module interaction |
    | **e2e** | **Any change that affects a web page** — layout, components, interactions, data display, styling, or user flows. This includes single-page UI changes with no navigation. | Change is purely backend/API with no web page impact (e.g., server-only logic, CLI tool, database migration) |
 
-3. **Return recommendation with `STATUS: NEEDS_CONFIRMATION`**:
+3. For each recommended type, **immediately load** the corresponding rules file and identify test directions (from the type file's methodology):
+   - `integration` → Read `~/.claude/skills/auto-testcase/integration.md`, identify directions from HLD module boundaries
+   - `e2e` → Read `~/.claude/skills/auto-testcase/e2e.md`, identify directions from user flows
+
+4. **Return recommendation + directions together with `STATUS: NEEDS_CONFIRMATION`** (single STOP gate, not two):
 
    ```
    STATUS: NEEDS_CONFIRMATION
 
    Based on the requirements and HLD, I recommend:
 
-   ✅ **integration** — [one-sentence reason referencing specific HLD modules/flows]
+   ✅ **integration** — [one-sentence reason]
+   Directions:
+   1. [Direction name] — [what it tests]
+   2. [Direction name] — [what it tests]
+
    ⏭️ **e2e** — Skip: [reason]
    ```
 
-4. **Unit tests** — Do NOT recommend unit tests in Step 0. Unit tests are automatically included as a **supplement** in Step 1b.
+5. **Unit tests** — Do NOT recommend unit tests in Step 0. Unit tests are automatically included as a **supplement** in Step 1b.
 
 ### After confirmation (received via resume)
 
-For each confirmed test type, read the corresponding rules file:
-- `unit` → Read `~/.claude/skills/auto-testcase/unit.md`
-- `integration` → Read `~/.claude/skills/auto-testcase/integration.md`
-- `e2e` → Read `~/.claude/skills/auto-testcase/e2e.md`
-
-If multiple types are confirmed, load all corresponding rules files and produce a test plan for each type in Step 1.
+Proceed directly to Step 1 (Design Test Plan) with the confirmed types and directions. Rules files are already loaded.
 
 ---
 
@@ -88,10 +91,10 @@ Before designing, locate these exact artifacts:
 
 | Artifact | Source | Required |
 |---|---|---|
-| Acceptance Criteria (AC-01, AC-02, ...) | `understand` output | Always — every test case maps to an AC ID |
-| Module Boundaries table | HLD output | Only when HLD exists — mock boundary identification |
-| Module Interaction Flow table | HLD output | Only when HLD exists — edge contract extraction, test case derivation |
-| Interfaces / Function Signatures | HLD output | Only when HLD exists — API contracts for assertions |
+| Acceptance Criteria (AC-01, AC-02, ...) | HLD | Always — every test case maps to an AC ID |
+| Module Boundaries table | HLD | Mock boundary identification |
+| Module Interaction Flow table | HLD | Edge contract extraction, test case derivation |
+| Interfaces / Function Signatures | HLD | API contracts for assertions |
 
 If ACs are missing, return with `STATUS: NEEDS_CONFIRMATION` asking for ACs. If HLD artifacts are missing because no HLD was produced (no-logic change), proceed with ACs only.
 
@@ -137,9 +140,9 @@ The **confirmed test plan** (from Step 1) is the sole input for writing test cod
 
    | Condition | File to Read |
    |---|---|
-   | Any project | `~/.claude/shared-rules/test.md` |
-   | Vue (`vue` in dependencies) | `~/.claude/shared-rules/vuejs.test.md` |
-   | TypeScript (`.ts`/`.tsx` files) | `~/.claude/shared-rules/typescript.test.md` |
+   | Any project | `/Users/Woo/.code/shared-rules/test.md` |
+   | Vue (`vue` in dependencies) | `/Users/Woo/.code/shared-rules/vuejs.test.md` |
+   | TypeScript (`.ts`/`.tsx` files) | `/Users/Woo/.code/shared-rules/typescript.test.md` |
 
 2. Write tests following the **Writing Rules** in each loaded type file.
    - **HLD gap detection**: If test code requires a type not defined in the HLD, flag it as an HLD gap.
@@ -150,7 +153,7 @@ The **confirmed test plan** (from Step 1) is the sole input for writing test cod
 **Do NOT run tests.** The `tdd` workflow handles test execution.
 
 After test code is written and lint-clean, invoke the `self-check` skill using the Skill tool for each test type produced, passing:
-- **integration**: `rules_path`: `~/.claude/skills/auto-testcase/self-check.rules.md`, `files`: `{procedure_dir}/hld.md, {procedure_dir}/understand.md, [test files]`, `output_path`: `{procedure_dir}/audit/testcase-self-check-record.md`
-- **e2e**: `rules_path`: `~/.claude/skills/auto-testcase/self-check-e2e.rules.md`, `files`: `{procedure_dir}/hld.md, {procedure_dir}/understand.md, [test files]`, `output_path`: `{procedure_dir}/audit/testcase-e2e-self-check-record.md`
+- **integration**: `rules_path`: `~/.claude/skills/auto-testcase/self-check.rules.md`, `files`: `{procedure_dir}/hld.md, [test files]`, `output_path`: `{procedure_dir}/audit/testcase-self-check-record.md`
+- **e2e**: `rules_path`: `~/.claude/skills/auto-testcase/self-check-e2e.rules.md`, `files`: `{procedure_dir}/hld.md, [test files]`, `output_path`: `{procedure_dir}/audit/testcase-e2e-self-check-record.md`
 
 After self-check completes, return with `STATUS: COMPLETE`.

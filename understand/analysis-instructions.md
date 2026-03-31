@@ -1,4 +1,4 @@
-# Understand Subagent Instructions
+# Analysis Instructions
 
 You are executing the analysis and design phases of the `understand` skill. Your job is to analyze the user's requirement, produce a Requirements Analysis document, and — for logic changes — produce an HLD design document.
 
@@ -6,16 +6,27 @@ You are executing the analysis and design phases of the `understand` skill. Your
 
 ## Inputs
 
-You receive:
-1. **Procedure directory path** — the directory containing `requirement.md`
-
-Read `{procedure_dir}/requirement.md` to get the user's original request (and any referenced spec content).
+The procedure directory (created in Step 0) contains `requirement.md` with the user's original request (and any referenced spec content). Read it before starting analysis.
 
 ## Code Navigation
 
-The `my-explore` skill (loaded at session start) is your sole navigation methodology. Follow it exactly.
+The `my-explore` skill (loaded before this file) is your sole navigation methodology. Follow it exactly.
 
 Analyze based on the current codebase state. Do not check git status, git diff, git log, or any version control state — these are irrelevant to requirements analysis and design.
+
+**Do NOT read test files** (`*.test.*`, `*.spec.*`, `__tests__/**`, `*.e2e.*`, `.detoxrc.*`). Test files are not part of requirements understanding — they are produced independently by the testcase skill. Reading them wastes context and biases your analysis.
+
+## Purpose & Method
+
+**What this phase does**: Understand the user's requirement well enough to produce an HLD (High-Level Design). You are NOT implementing — you are building the understanding needed for design.
+
+**Why you read code**: To learn the current state of the code that the requirement touches — existing interfaces, data shapes, module boundaries. This informs the HLD's design decisions.
+
+**How to read code**:
+1. Start from the requirement — identify the entry point (which file, which component, which function).
+2. Follow only the call chain relevant to the requirement. Stop when you reach code that the requirement does not affect.
+3. Before reading any file, ask yourself: "Does the requirement need me to understand this file?" If no, skip it.
+4. **Budget**: For a bug fix, 5–10 file reads should be sufficient. For a new feature, 10–20. If you exceed this, you are likely exploring beyond scope.
 
 ## Process
 
@@ -80,7 +91,7 @@ If ambiguities are found:
 3. In any AC that depends on an unresolved ambiguity, append `(pending AMB-XX)` — this marks the AC as provisional
 4. **Do NOT guess or pick an interpretation** — leave it explicitly unresolved
 
-If the ambiguity is critical enough that the analysis cannot continue meaningfully, use the `NEEDS_CLARIFICATION` mechanism to ask the user. Otherwise, continue with the ambiguity marked and let the user resolve it during review.
+If the ambiguity is critical enough that the analysis cannot continue meaningfully, **STOP and ask the user**. Otherwise, continue with the ambiguity marked and let the user resolve it during review.
 
 Format:
 ```markdown
@@ -129,7 +140,7 @@ After completing the analysis (Affected Files + ACs written), classify the chang
 
 ### Step 2c: AC Quality Self-Check (author-side, before writing output)
 
-Before writing the output file, verify each AC against the four dimensions. This is a QUICK author-side check — the thorough independent review happens later via a separate reviewer agent.
+Before writing the output file, verify each AC against the four dimensions.
 
 For each AC, verify:
 1. **Purity** — no file paths, function names, or tech choices
@@ -144,7 +155,7 @@ After all ACs pass, run **gap detection** (mechanical):
 2. Compare against the complete set of R-numbers (from Enumerate step) and BI-numbers (from Existing Behavior Inventory)
 3. Gap = any R/BI number not cited by any AC → add an AC for it
 
-**Do NOT write self-check tables to any file.** The independent reviewer agent will produce the formal self-check with content verification. The author only ensures ACs are clean before writing output.
+Ensure ACs are clean before writing output.
 
 ## Write Output
 
@@ -198,34 +209,14 @@ Write `{procedure_dir}/understand.md` using the format that matches the complexi
 
 After writing `understand.md`, check the complexity gate result:
 
-- **No-logic** → Invoke the `self-check` skill using the Skill tool, passing:
-  - `rules_path`: `~/.claude/skills/understand/self-check.rules.md`
-  - `files`: `{procedure_dir}/requirement.md, {procedure_dir}/understand.md`
-  - `output_path`: `{procedure_dir}/audit/self-check-record.md`
-
-  Then return:
-  ```
-  STATUS: COMPLETE
-  COMPLEXITY: no-logic
-  ```
-
+- **No-logic** → Analysis complete. Proceed to Step 2 of the `understand` skill.
 - **Logic** → Proceed to the HLD phase below.
 
 ## HLD Phase (logic changes only)
 
 Read `~/.claude/skills/hld/SKILL.md` and follow its process exactly to produce `{procedure_dir}/hld.md`. You already have the code context from the analysis phase — CodeGraph, CocoIndex, and LSP results are still available.
 
-After writing `hld.md`, invoke the `self-check` skill using the Skill tool, passing:
-- `rules_path`: `~/.claude/skills/understand/self-check.rules.md`
-- `files`: `{procedure_dir}/requirement.md, {procedure_dir}/understand.md, {procedure_dir}/hld.md`
-- `output_path`: `{procedure_dir}/audit/self-check-record.md`
-
-After self-check completes (issues fixed or escalated), return to the main session with:
-
-```
-STATUS: COMPLETE
-COMPLEXITY: logic
-```
+After writing `hld.md`, analysis complete. Proceed to Step 2 of the `understand` skill.
 
 ## Ambiguity Handling
 
@@ -233,19 +224,6 @@ At any point during execution, if you encounter ambiguity that cannot be resolve
 
 1. **Non-critical ambiguity** (analysis can continue meaningfully without resolution): Record it in the `### Ambiguities` section as AMB-XX, mark dependent ACs with `(pending AMB-XX)`, and continue execution. The user resolves it during review.
 
-2. **Critical ambiguity** (analysis cannot continue — e.g., the entire feature scope depends on the interpretation): Stop execution and return:
+2. **Critical ambiguity** (analysis cannot continue — e.g., the entire feature scope depends on the interpretation): **STOP and ask the user** directly. Explain what you've analyzed so far and why the question matters. Wait for the user's answer, then continue the analysis.
 
-```
-STATUS: NEEDS_CLARIFICATION
-
-COMPLETED_SO_FAR:
-[Everything you've analyzed up to the ambiguity point]
-
-QUESTIONS:
-1. [Specific question with context for why it matters]
-2. [Another question if needed]
-```
-
-The main session will forward your questions to the user and resume you with their answers.
-
-**Do NOT guess or pick an interpretation for either type.** Non-critical ambiguities are marked, not resolved. Critical ambiguities halt execution.
+**Do NOT guess or pick an interpretation for either type.** Non-critical ambiguities are marked, not resolved. Critical ambiguities halt execution until the user answers.

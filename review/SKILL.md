@@ -5,7 +5,7 @@ description: Generic independent review skill. Dispatches a strict reviewer agen
 
 # Independent Review
 
-Dispatches an independent reviewer agent to verify artifacts against caller-provided rules. The reviewer reads files and fills checklist tables with quoted content evidence. It is NOT the author — its sole purpose is to find defects.
+Dispatches an independent reviewer agent to verify artifacts against caller-provided rules. The reviewer reads files, fills checklist tables with quoted content evidence, and fixes any defects it finds directly.
 
 The skill manages the reviewer agent lifecycle internally — callers never interact with the reviewer directly.
 
@@ -18,14 +18,7 @@ The caller must provide:
 
 ## Process
 
-### Step 1: Determine Review Mode
-
-Check conversation history: **has a reviewer agent already been dispatched for this exact `{output_path}`?**
-
-- **No** → First review. Go to Step 2a.
-- **Yes** → Re-verify. Retrieve the reviewer agent ID from conversation history. Go to Step 2b.
-
-### Step 2a: First Review (dispatch new reviewer)
+### Step 1: Dispatch Reviewer
 
 Launch an Agent subagent with `subagent_type: "superpowers:code-reviewer"`, `mode: "auto"`, and this prompt:
 
@@ -59,37 +52,16 @@ SEVERITY CLASSIFICATION — assign exactly one severity to each issue:
 
 After completing the review:
 - If all tables are clean: return STATUS: PASS
-- If any table has issues: return STATUS: ISSUES_FOUND with severity breakdown:
+- If any table has issues: FIX THEM DIRECTLY. You have already read the files and located the defects — fix each one in place, then update the review output to reflect the fixes. Return STATUS: PASS with a fix summary:
+  STATUS: PASS (X issues fixed: [brief list])
+  If any issue cannot be fixed (e.g., requires architectural change beyond your scope): return STATUS: ISSUES_FOUND with only the unfixable issues:
   STATUS: ISSUES_FOUND — X CRITICAL, Y MAJOR, Z MINOR, W TRIVIAL
-  (Always list all four counts, use 0 for levels with no issues)
+  (List only issues you could not fix. Always list all four counts, use 0 for levels with no issues)
 ```
 
-Go to Step 3.
-
-### Step 2b: Re-verify (resume existing reviewer — incremental)
-
-Resume the reviewer using its agent ID from conversation history. Re-verify checks only the fixes and their immediate impact — no full re-review.
-
-```
-SendMessage(to: "<reviewer_agent_id>", message: "The artifacts have been updated to address the issues you found. For each issue you previously reported:
-1. Re-read the relevant section of the file and verify whether the issue is fixed.
-2. Check whether the fix introduced NEW issues in the SAME table — only inspect rows/elements touched by the fix, not unrelated rows.
-3. Report each original issue as FIXED or STILL_BROKEN, and list any new issues.
-
-Then update {output_path}: remove fixed issue rows, add any new issue rows, update the summary counts.
-
-After completing:
-- If all original issues are FIXED and no new issues found: return STATUS: PASS
-- If any STILL_BROKEN or new issues exist: return STATUS: ISSUES_FOUND with severity breakdown:
-  STATUS: ISSUES_FOUND — X CRITICAL, Y MAJOR, Z MINOR, W TRIVIAL
-  (Always list all four counts, use 0 for levels with no issues)")
-```
-
-Go to Step 3.
-
-### Step 3: Return Result
+### Step 2: Return Result
 
 Parse the reviewer's output for STATUS:
 
-- **STATUS: PASS** → Return PASS to the caller.
-- **STATUS: ISSUES_FOUND** → Return the issues **with severity breakdown** to the caller. Include the full line: `X CRITICAL, Y MAJOR, Z MINOR, W TRIVIAL`. The caller fixes the issues and proceeds — review runs only once (self-check handles pre-review quality).
+- **STATUS: PASS** → Return PASS to the caller. The reviewer has either found no issues or already fixed all issues.
+- **STATUS: ISSUES_FOUND** → The reviewer found issues it could not fix (e.g., requires architectural change). Return the unfixable issues to the caller for escalation.

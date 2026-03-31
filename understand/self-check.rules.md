@@ -131,9 +131,16 @@ Each dependency in the Module Boundaries table must be correctly classified. Int
 
 Read `hld.md` and the project's architecture rules. These tables check whether the HLD design follows loaded rules.
 
-**Before filling these tables**, load the same architecture rules that HLD Step 0 loaded:
-1. Shared rules from `~/.claude/shared-rules/` based on project type
-2. Project-specific constraints from the repository's CLAUDE.md
+**Before filling these tables**, load ONLY architecture rules (not language/framework implementation rules):
+
+| Condition | File to Read |
+|---|---|
+| Any frontend (`.vue`/`.tsx`/`.jsx` files) | `/Users/Woo/.code/shared-rules/frontend/architecture.md` |
+| Any backend (non-frontend `.ts`/`.js` files) | `/Users/Woo/.code/shared-rules/backend/ddd.md` |
+
+Also read the project's CLAUDE.md in the repository root for project-specific constraints.
+
+Do NOT load language-specific rules (typescript.md, reactjs.md, vue3.md, etc.) — those are implementation rules checked during the code phase, not design rules.
 
 Every applicable rule must have at least one row — regardless of pass or fail. Quote the rule text and the HLD element being checked. A rule with no row means it was skipped, which is forbidden.
 
