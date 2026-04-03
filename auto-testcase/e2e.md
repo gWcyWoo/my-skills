@@ -11,7 +11,7 @@ End-to-end user flows: full page interactions, navigation, and API round-trips t
 ## 2. Input Discovery
 
 - **With HLD**: Use HLD-defined page routes, user flow descriptions, and UI layout contracts. The HLD is the sole contract. You may read type/interface definition files (e.g., `schema.ts`, `types.ts`) even if listed in Affected Files — they define contracts. You MUST NOT read files that contain function bodies or business logic. See SKILL.md "Code Reading Boundaries" for the full rule.
-- **Without HLD**: Use `codegraph_node(includeCode: true)` and `LSP documentSymbol` on files from `understand` → Affected Files. Identify page routes, navigation flows, form actions, layout components. These define the test targets.
+- **Without HLD**: Invoke `Skill(my-explore)` to load code navigation methodology, then use it on files from `understand` → Affected Files. Identify page routes, navigation flows, form actions, layout components. These define the test targets.
 
 ---
 

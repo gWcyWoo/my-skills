@@ -101,7 +101,7 @@ Format:
 - AMB-02: "返回 summary" — what is summary? Possible: (a) first N characters of parsed content; (b) LLM-generated abstract; (c) structured object with key fields. Source and format undefined.
 ```
 
-**Affected Files completeness**: For each file being modified, use `LSP findReferences` (if LSP is available) on the module's exports to discover test files that import it. If a test file exists and the modification changes the tested behavior, include the test file in Affected Files.
+**Affected Files completeness**: For each file being modified, use code navigation (via `Skill(my-explore)`) to discover test files that import it. If a test file exists and the modification changes the tested behavior, include the test file in Affected Files.
 
 ### AC Writing Rule
 
@@ -214,7 +214,7 @@ After writing `understand.md`, check the complexity gate result:
 
 ## HLD Phase (logic changes only)
 
-Read `~/.claude/skills/hld/SKILL.md` and follow its process exactly to produce `{procedure_dir}/hld.md`. You already have the code context from the analysis phase — CodeGraph, CocoIndex, and LSP results are still available.
+Read `~/.claude/skills/hld/SKILL.md` and follow its process exactly to produce `{procedure_dir}/hld.md`. You already have the code context from the analysis phase — code navigation results (via `Skill(my-explore)`) are still available.
 
 After writing `hld.md`, analysis complete. Proceed to Step 2 of the `understand` skill.
 

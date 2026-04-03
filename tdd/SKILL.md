@@ -1,11 +1,11 @@
 ---
 name: tdd
-description: Lightweight TDD for small requirements and bug fixes. Runs entirely in the main session — no subagents, no automated review. Optional lightweight HLD for larger changes. User stays in the loop throughout.
+description: Default development workflow. TDD for requirements and bug fixes. Runs entirely in the main session — no subagents, no automated review. User stays in the loop throughout.
 ---
 
 # TDD
 
-Lightweight flow for small requirements and bug fixes. No subagents, no automated review. Optional lightweight HLD for larger changes. Everything runs in the main session with the user in the loop.
+Default development workflow. No subagents, no automated review. Everything runs in the main session with the user in the loop. For changes that need a formal HLD (High-Level Design), use the `understand` skill instead.
 
 ## Step 1: Understand
 
@@ -22,70 +22,53 @@ After exploring, **STOP and present the understanding to the user**:
 - Repeat until the user explicitly confirms the understanding is complete
 - Do NOT proceed to Step 2 until the user confirms
 
-## Step 2: HLD (Optional)
+## Step 1.5: Trivial Change Check
 
-**STOP and ask the user**:
+After understanding is confirmed, evaluate whether the change is **trivial**. A change is trivial when **both** conditions are met:
 
-> Do you need a lightweight HLD before writing tests? (Small changes can skip this)
+1. **Contiguous diff ≤ 5 lines** and does not introduce a complete new method, component, or function
+2. **Low-risk category**: typo fix, constant/config value change, copy/comment edit, import reorder, type annotation addition, variable rename
 
-- If the user says no → skip to Step 3.
-- If the user says yes:
-  1. Based on the requirement understanding (Step 1), draft a lightweight HLD — signatures and types only, no implementation details:
-     - New/modified function signatures (name, params, return type)
-     - New/modified type definitions, interfaces, data structures
-     - Module/component boundaries if relevant
-  2. **STOP and present the HLD to the user** for review. Wait for confirmation.
-  3. After confirmation, write the skeleton code: interfaces, types, function stubs (body throws `new Error('not implemented')` or returns a default value). No implementation logic. Then proceed to Step 3.
+If trivial → **skip Step 2 (all tests)**, jump directly to Step 4 (Implement). Inform the user:
 
-## Step 3: Test Cases
+> Trivial low-risk change (≤ 5 lines, category: [specific category]). Skipping tests — proceeding to implementation.
+
+**Not trivial** (even if ≤ 5 lines):
+- Conditional logic or branching changes
+- Algorithm or formula modifications
+- Data transformation or state management changes
+- API request/response handling changes
+- Security-related code (auth, permissions, validation)
+
+These cases require the full workflow regardless of line count.
+
+## Step 2: Test Cases
 
 Load general test rules from `~/.claude/skills/auto-testcase/general.md` first. These apply to all test types.
 
-Ask each test type sequentially. For each type, **STOP and wait** for the user's reply before moving to the next type.
+### 2a. Unit Tests (system-recommended)
 
-### 3a. Unit Tests
+1. Load unit test rules from `~/.claude/skills/auto-testcase/unit.md`
+2. Based on the requirement understanding (Step 1) and the unit test rules, draft a unit test plan. Include: which functions/modules to test, what scenarios to cover (happy path, edge cases, error handling), and expected behavior for each case.
+3. **STOP and present the test plan to the user** for review. The user may approve, remove cases, add cases, or adjust scope.
+4. **STOP and wait** after each round — repeat until the user confirms the final plan.
+5. Write the unit test code after confirmation.
 
-**STOP and ask the user**:
+### 2b. Integration / E2E Tests (user-driven)
 
-> Do you need unit tests?
+After unit tests are done, **STOP and ask the user**:
 
-- If the user says no → skip to Step 3b.
-- If the user says yes:
-  1. Load unit test rules from `~/.claude/skills/auto-testcase/unit.md`
-  2. Based on the requirement understanding (Step 1), the HLD/skeleton (Step 2) if applicable, and the unit test rules, draft a unit test plan. Include: which functions/modules to test, what scenarios to cover (happy path, edge cases, error handling), and expected behavior for each case.
-  3. **STOP and present the test plan to the user** for review. The user may approve, remove cases, add cases, or adjust scope.
-  4. **STOP and wait** after each round — repeat until the user confirms the final plan.
-  5. Write the unit test code after confirmation.
+> Do you need integration or E2E tests?
 
-### 3b. Integration Tests
+- If the user says no → proceed to Step 3.
+- If the user says yes — the user specifies what to test. Do not recommend test cases. Write tests for exactly what the user describes.
+  1. Load the relevant rules: `~/.claude/skills/auto-testcase/integration.md` and/or `~/.claude/skills/auto-testcase/e2e.md`
+  2. Clarify scope if needed (mock boundaries, user journeys, setup requirements).
+  3. Write the test code, then **STOP and wait** for the user to confirm before proceeding.
 
-**STOP and ask the user**:
+## Step 3: Review Test Code
 
-> Do you need integration tests? If yes, tell me what to test (e.g., "cross-module sharing flow", "form submission + API call").
-
-- If the user says no → skip to Step 3c.
-- If the user says yes:
-  1. Load integration test rules from `~/.claude/skills/auto-testcase/integration.md`
-  2. Ask the user what integration test cases they want. Suggest candidates based on the requirement and HLD (if applicable), but let the user decide. Discuss each case — clarify mock boundaries, cross-module interactions.
-  3. **STOP and wait** after each round — repeat until the user confirms the final list.
-  4. Write the integration test code after confirmation.
-
-### 3c. E2E Tests
-
-**STOP and ask the user**:
-
-> Do you need E2E tests? If yes, tell me what to test (e.g., "login flow end-to-end", "checkout journey").
-
-- If the user says no → skip to Step 4.
-- If the user says yes:
-  1. Load E2E test rules from `~/.claude/skills/auto-testcase/e2e.md`
-  2. Ask the user what E2E test cases they want. Suggest candidates based on the requirement and HLD (if applicable), but let the user decide. Discuss each case — clarify user journeys, setup requirements.
-  3. **STOP and wait** after each round — repeat until the user confirms the final list.
-  4. Write the E2E test code after confirmation.
-
-## Step 4: Review Test Code
-
-If the user skipped all test types in Step 3, skip directly to Step 5.
+If the user skipped all test types in Step 2, skip directly to Step 4.
 
 After all test code is written, **STOP and ask the user**:
 
@@ -95,12 +78,12 @@ After all test code is written, **STOP and ask the user**:
 > - E2E: [files written / skipped]
 
 - If the user wants to review → wait for feedback, apply changes, then ask if further review is needed.
-- If the user says no review needed (or equivalent: "ok", "继续", "开始编码", "proceed") → proceed to Step 5.
-- Do NOT proceed to Step 5 until the user explicitly confirms.
+- If the user says no review needed (or equivalent: "ok", "继续", "开始编码", "proceed") → proceed to Step 4.
+- Do NOT proceed to Step 4 until the user explicitly confirms.
 
-## Step 5: Implement
+## Step 4: Implement
 
-Select which project standards to load. Based on the requirement understanding (Step 1), determine which rule files are relevant to this specific change. Available rule files:
+Automatically load the relevant project standards based on the files being changed. Do not ask the user for confirmation — just load and apply.
 
 | Condition | File to Read |
 |---|---|
@@ -114,33 +97,23 @@ Select which project standards to load. Based on the requirement understanding (
 | Express (`express` in dependencies) | `/Users/Woo/.code/shared-rules/backend/express.md` |
 | MongoDB (`mongoose`/`mongodb` in dependencies) | `/Users/Woo/.code/shared-rules/backend/mongodb.md` |
 
-**STOP and present** your selection using the exact file paths. For each file, state whether to load or skip and why. Example:
+Read the matching rule files, then implement. Keep changes minimal and focused.
 
-> - ✅ `/Users/Woo/.code/shared-rules/common/typescript.md` — .tsx files involved
-> - ✅ `/Users/Woo/.code/shared-rules/frontend/architecture.md` — component structure change
-> - ✅ `/Users/Woo/.code/shared-rules/frontend/reactjs.md` — React component
-> - ⬚ `/Users/Woo/.code/shared-rules/frontend/vue3.md` — not a Vue project
-> - ⬚ (other irrelevant files...)
-
-Wait for the user to confirm before loading.
-
-After confirmation, read the approved rule files, then implement. If skeleton code was written in Step 2, fill in the stubs. Otherwise write the code from scratch. Keep changes minimal and focused.
-
-## Step 6: Review Implementation Code
+## Step 5: Review Implementation
 
 After implementation is complete, **STOP and ask the user**:
 
 > Implementation complete. Would you like to review the code before running lint and tests?
 
 - If the user wants to review → wait for feedback, apply changes, then ask if further review is needed.
-- If the user says no review needed (or equivalent: "ok", "继续", "跑测试", "proceed") → proceed to Step 7.
-- Do NOT proceed to Step 7 until the user explicitly confirms.
+- If the user says no review needed (or equivalent: "ok", "继续", "跑测试", "proceed") → proceed to Step 6.
+- Do NOT proceed to Step 6 until the user explicitly confirms.
 
-## Step 7: Lint
+## Step 6: Lint
 
 Run `lint 2>/dev/null`. Fix all errors. If the same error persists after **3 consecutive fix attempts**, trigger the **Stuck Escalation** process (see below).
 
-## Step 8: Unit/Integration Tests
+## Step 7: Unit/Integration Tests
 
 Run `npx vitest run 2>/dev/null`.
 
@@ -152,18 +125,18 @@ If tests fail:
 
 If the same issue fails **3 consecutive times**, trigger the **Stuck Escalation** process (see below).
 
-## Step 9: E2E Tests (if applicable)
+## Step 8: E2E Tests (if applicable)
 
-If E2E test cases were designed in Step 3c, **STOP and ask the user**:
+If E2E test cases were written in Step 2b, **STOP and ask the user**:
 
 > Previous test steps complete. Run E2E tests now?
 
-- If the user says no → skip to Step 10.
+- If the user says no → skip to Step 9.
 - If the user says yes → run E2E tests. Detect platform — Web: `npx playwright test`, React Native: `maestro test .maestro/`
-  - If tests fail, apply the same rules as Step 8 (fix code bugs; ask user before modifying tests).
+  - If tests fail, apply the same rules as Step 7 (fix code bugs; ask user before modifying tests).
   - If the same issue fails **3 consecutive times**, trigger the **Stuck Escalation** process (see below).
 
-If no E2E test cases were designed, skip directly to Step 10.
+If no E2E test cases were written, skip directly to Step 9.
 
 ## Stuck Escalation
 
@@ -180,7 +153,7 @@ When the same error persists after 3 consecutive fix attempts in any step:
 
 If the new approach also fails after 3 attempts, **STOP and present the situation to the user** with all research findings and attempted approaches. Let the user decide the next step.
 
-## Step 10: Done
+## Step 9: Done
 
 Report what was changed:
 - Files modified/created

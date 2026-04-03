@@ -16,7 +16,7 @@ Unit tests can be invoked in two modes:
 ## 2. Input Discovery
 
 - **With HLD**: Use HLD-defined function signatures and interfaces as the source of truth. The HLD is the sole contract. You may read type/interface definition files (e.g., `schema.ts`, `types.ts`) even if listed in Affected Files — they define contracts. You MUST NOT read files that contain function bodies or business logic (e.g., `parser.ts`, `api.ts`, `handler.ts`). See SKILL.md "Code Reading Boundaries" for the full rule. Do not invent APIs.
-- **Without HLD**: Use `codegraph_node(includeCode: true)` and `LSP hover` on symbols from `understand` → Affected Files. Extract actual function signatures, return types, parameters. These become the API contracts.
+- **Without HLD**: Invoke `Skill(my-explore)` to load code navigation methodology, then use it on symbols from `understand` → Affected Files. Extract actual function signatures, return types, parameters. These become the API contracts.
 - **Direction**: In supplementary mode, no Direction is needed — the AC itself defines the scope. In explicit mode, Direction is optional; if the user provided one, focus on edge cases and failure modes it specifies.
 
 ---

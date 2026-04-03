@@ -1,11 +1,11 @@
 ---
 name: understand
-description: Requirement analysis and HLD design in the main session. Produces understand.md + hld.md in a procedure directory. Run before auto-tdd or manual implementation.
+description: Requirement analysis with optional HLD and file persistence. Auto-invokes brainstorming when requirements are complex or ambiguous. Runs in main session with user in the loop.
 ---
 
 # Requirements Understanding
 
-Requirement analysis + HLD design running in the main session. Output is written to a procedure directory for full traceability. Must complete before any implementation.
+Analyze requirements in the main session with user in the loop. Auto-invokes brainstorming when the requirement is complex or ambiguous. Files (requirement.md, understand.md, hld.md) are written only when the user requests persistence.
 
 ## When to Use
 
@@ -17,65 +17,73 @@ Any task involving code changes: new features, bug fixes, refactoring.
 - Reading/exploring codebase
 - Explaining existing code
 - Configuration-only changes (no code logic), unless user explicitly requests analysis
-- User explicitly instructs to skip analysis and code directly
+- User explicitly instructs to skip analysis
+
+## Code Navigation Rule
+
+**The `my-explore` skill is the ONLY permitted code navigation methodology.** This applies at ALL times — including when the brainstorming skill is active. Brainstorming explores *requirements and ideas*; `my-explore` explores *code*. Never use any other approach for code navigation, regardless of what other loaded skills suggest.
 
 ## Process
 
-### Step 0: Initialize Procedure Directory
+### Step 1: Explore & Analyze
 
-1. Determine the project root (git root, or current working directory if not a git repo)
-2. Generate a short name (≤10 characters) summarizing the user's requirement
-3. Create directory: `{project_root}/.procedure/{YYYY-MM-DD}/claude_{name}/`
-4. Write `requirement.md` to the procedure directory:
-   - The user's chat message (verbatim)
-   - If the message references an external spec/requirement file (e.g., a PRD, feature spec, or any document containing detailed requirements): read that file and append its full content after the user's message, preceded by a `## Source Spec` heading
-5. Store the procedure directory path — all subsequent steps reference it as `{procedure_dir}`
+1. Invoke the `my-explore` skill to load code navigation methodology.
 
-### Step 1: Analyze
+2. Follow `/Users/Woo/.claude/skills/understand/analysis-instructions.md` for the analysis process (classification, analysis, AC extraction, complexity gate). **The user's conversation message is the requirement input — ignore any `requirement.md` file references. Present the analysis in conversation — do NOT write files yet.**
 
-Invoke the `my-explore` skill to load code navigation methodology. Then read `~/.claude/skills/understand/analysis-instructions.md` and follow it to analyze the requirement and produce output files.
+   During analysis, if anything is ambiguous:
+   - Non-critical → record the ambiguity and continue
+   - Critical → **STOP and ask the user**
 
-During analysis, if anything is ambiguous:
-- If the analysis can continue meaningfully → record the ambiguity and continue
-- If the ambiguity is critical → **STOP and ask the user**. After the user answers, append the answers to `{procedure_dir}/requirement.md` under a `## Clarifications` heading, then continue the analysis.
+   **Brainstorming trigger**: During analysis, if you encounter any of the following, invoke the `superpowers:brainstorming` skill using the Skill tool — do NOT ask the user first:
+   - Multiple valid design approaches with no clear winner
+   - Requirement scope is vague or open-ended
+   - Significant trade-offs that need exploration (performance vs complexity, UX vs implementation cost)
+   - The requirement touches multiple systems with unclear boundaries
 
-Write output to the procedure directory:
-- `understand.md` — requirements analysis (always)
-- `hld.md` — high-level design contracts (for logic changes only)
+   **Code exploration during brainstorming MUST use `my-explore` only — no other navigation approach.** After brainstorming completes, continue the analysis with the refined understanding.
 
-### Step 2: Present Results to User
+3. For logic changes, follow `/Users/Woo/.claude/skills/hld/SKILL.md` Steps 0–3 for HLD design (load rules, AC-driven scope, design, author check). **Use the analysis from step 2 in place of `understand.md` file reads. Present the HLD in conversation — do NOT write files yet.**
 
-Output the procedure file paths as clickable links. **Do NOT read the file contents into the main session context** — the user opens and reviews them directly in their editor.
+4. **STOP and present** the complete understanding to the user:
+   - Summary, task type, affected files, acceptance criteria
+   - For logic changes: HLD (interfaces, module boundaries, interaction flows)
+   - Wait for user to confirm, correct, or request changes
+   - Do NOT proceed until the user confirms
 
-For logic changes:
+### Step 2: Persistence Decision
 
-> Analysis and design complete:
-> - `{procedure_dir}/understand.md`
-> - `{procedure_dir}/hld.md`
->
+After the user confirms the understanding, **STOP and ask**:
+
+> Do you want to persist the analysis to a procedure directory? (Required for auto-tdd. Small changes can skip this.)
+
+- If **no** → skip to Step 3. No files are written.
+- If **yes**:
+  1. Create directory: `{project_root}/.procedure/{YYYY-MM-DD}/claude_{name}/` (name ≤10 chars, project_root = git root or cwd)
+  2. Write `requirement.md` — the user's original request (verbatim). If it references an external spec, append under `## Source Spec`. Include any clarifications from conversation under `## Clarifications`.
+  3. Write `understand.md` — the requirements analysis.
+  4. Write `hld.md` — HLD design (logic changes only).
+  5. **Adversarial review** — run `/codex:adversarial-review --wait {procedure_dir}/requirement.md {procedure_dir}/understand.md {procedure_dir}/hld.md` to challenge the analysis and design.
+
+     Handle the review result:
+     - **No issues** → proceed to step 6.
+     - **Issues found** → fix the affected files, then re-run the adversarial review. Repeat up to **2 times**. If issues persist after 2 rounds, present remaining issues to the user for decision.
+
+  6. Output file paths as clickable links. **Do NOT read the file contents back into conversation** — the user reviews them directly in their editor.
+
+### Step 3: Next Steps
+
 > Select next step:
-> 1. **code** — Implement only.
-> 2. **testcase** — Generate test cases only.
-> 3. **both** — Run testcase and code in parallel.
+> 1. **code** — Implement directly (Claude).
+> 2. **tdd** — Lightweight TDD: user stays in the loop for test design and implementation.
+> 3. **auto-tdd** — Automated: Codex writes tests + Claude writes implementation in parallel. (Requires persisted files)
 
-For no-logic changes:
+- `code` (or equivalent: "确认", "ok", "直接编码", "proceed") → Claude implements directly, following the HLD and project standards. Uses conversation context if files were not persisted.
+- `tdd` (or equivalent: "测试", "先写测试") → invoke the `tdd` skill using the Skill tool. Lightweight flow with user in the loop.
+- `auto-tdd` (or equivalent: "并行", "auto", "all") → invoke the `auto-tdd` skill using the Skill tool, passing the procedure directory path. **Requires files to be persisted in Step 2.** If not persisted, ask the user to persist first.
 
-> Analysis complete:
-> - `{procedure_dir}/understand.md`
->
-> Select next step:
-> 1. **code** — Implement only.
-> 2. **testcase** — Generate test cases only.
-> 3. **both** — Run testcase and code in parallel.
+Wait for user selection. **Do NOT proceed without it.**
 
-Wait for user selection:
-
-- User replies `code` (or equivalent: "确认", "ok", "没问题", "直接编码", "proceed") → invoke the `auto-code` skill **using the Skill tool**, passing the procedure directory path as argument.
-- User replies `testcase` (or equivalent: "测试", "先写测试") → invoke the `auto-testcase` skill **using the Skill tool**, passing the procedure directory path as argument.
-- User replies `both` (or equivalent: "并行", "都跑", "tdd", "all") → invoke **both** the `auto-testcase` and `auto-code` skills in parallel, each using the Skill tool, each passing the procedure directory path as argument. Both skills derive from the same HLD and have no data dependency on each other.
-
-**Do NOT execute skill logic inline.** Each skill has its own mandatory process (loading standards, checklists, traceability). Skipping the Skill tool invocation bypasses those checks.
-
-Do NOT proceed without a user selection. If the user requests changes to the analysis or design instead of selecting an option:
-- **Textual changes** (rewording ACs, adjusting scope description, adding/removing affected files): append the user's feedback to `{procedure_dir}/requirement.md` under `## Clarifications`, then re-run the relevant part of the analysis. After changes, re-present with the same options.
-- **Changes requiring re-analysis** (different approach, new scope, re-examine code): append the user's feedback to `{procedure_dir}/requirement.md` under `## Clarifications`, then re-run the analysis from Step 1 and present results again.
+If the user requests changes instead of selecting:
+- Re-analyze the affected parts, re-present, and ask again.
+- If files were persisted, update them accordingly.

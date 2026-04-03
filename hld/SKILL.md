@@ -10,7 +10,7 @@ Produces a design contract that `testcase integration` and `code` consume direct
 ## Inputs
 
 1. **Procedure directory path** — the directory containing `understand.md`
-2. **Code context from analysis phase** — CodeGraph, LSP, and file contents are already available from the preceding analysis. Use them directly for design work (e.g., extracting reused module interfaces).
+2. **Code context from analysis phase** — code navigation results (via `Skill(my-explore)`) are already available from the preceding analysis. Use them directly for design work (e.g., extracting reused module interfaces).
 
 Read `{procedure_dir}/understand.md` to get the requirements analysis (Task Type, Analysis, Affected Files, Acceptance Criteria).
 
@@ -81,7 +81,7 @@ Define signatures with input, output, and responsibility using the project's lan
 - **Implementation** (MUST NOT define in HLD): function bodies, internal branching, how data is transformed, which utility is used internally.
 - **Test**: if removing it would make the caller unable to determine how to call or what to expect back, it is a contract. Define it.
 
-**REUSED MODULE RULE:** When the design references reusing an existing component/module, you MUST use LSP (`hover` or `documentSymbol`) to extract its complete public interface (all required props/params, their types). LSP tools are already loaded from the analysis phase. Do NOT rely on visual code scanning. Paste the extracted interface into the HLD and design against it. Incomplete interface extraction = broken contract.
+**REUSED MODULE RULE:** When the design references reusing an existing component/module, you MUST use code navigation (via `Skill(my-explore)`) to extract its complete public interface (all required props/params, their types). Do NOT rely on visual code scanning. Paste the extracted interface into the HLD and design against it. Incomplete interface extraction = broken contract.
 
 #### Module Boundaries
 
@@ -126,7 +126,7 @@ Rules:
 Before writing hld.md, run these quick checks. This is a FAST author-side sanity check — the thorough independent review happens later via a separate reviewer agent.
 
 1. **Constraint compliance** — scan HLD against loaded architecture rules. If any obvious violation, fix before writing.
-2. **Reused module interfaces** — if reusing a component, verify via LSP that HLD defines all required props.
+2. **Reused module interfaces** — if reusing a component, verify via code navigation (via `Skill(my-explore)`) that HLD defines all required props.
 3. **Affected files sync** — every file in HLD should be in understand.md Affected Files and vice versa.
 4. **Flow completeness** — every Success flow should have an Error/N/A counterpart.
 5. **AC coverage** — every AC should have at least one Flow (structural ACs exempt).

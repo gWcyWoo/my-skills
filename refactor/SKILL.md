@@ -42,7 +42,7 @@ INSTRUCTIONS:
    - Step 1: Load Project Standards — determine file types from the files to refactor, load matching shared-rules.
    - Step 1b: Reference Code Patterns — use the files to refactor as the "Affected Files" list. Find 1-2 existing files in the project that are structurally similar and already comply with the rules.
    - Step 1c: Compile Implementation Checklist — extract relevant rules into a numbered checklist (max 15 items). This checklist defines what "compliant" looks like.
-4. For each file to refactor, use code navigation tools (codegraph_node, cocoindex, LSP) to understand its structure and identify violations against the Implementation Checklist.
+4. For each file to refactor, invoke `Skill(my-explore)` to load code navigation methodology, then use it to understand the file's structure and identify violations against the Implementation Checklist.
 5. Refactor the code to resolve all violations. Two hard constraints:
    - Preserve existing behavior exactly — same inputs, same outputs, same side effects. If unsure whether a change alters behavior, do not make it.
    - Do NOT modify any test files. Tests define the expected behavior. If a test fails after refactoring, fix the production code, not the test.

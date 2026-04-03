@@ -1,11 +1,11 @@
 ---
 name: auto-tdd
-description: Automated TDD pipeline. Takes a procedure directory (with understand.md + hld.md) and runs auto-testcase + auto-code in parallel, then verifies. Zero human intervention.
+description: Automated TDD pipeline. Two Claude subagents write tests and implementation in parallel, each reviewed by Codex adversarial-review. Then verifies. Zero human intervention.
 ---
 
 # Auto-TDD Pipeline
 
-Automated pipeline from design to verified code. Requires a procedure directory with `requirement.md`, `understand.md`, and `hld.md` already present. Zero human intervention.
+Two Claude subagents work in parallel — one writes tests, one writes implementation — both from the same HLD. Each subagent gets adversarial-reviewed by Codex and fixes issues before returning. The main session then runs verification. Zero human intervention.
 
 ## Prerequisite
 
@@ -16,50 +16,55 @@ The procedure directory must contain:
 
 If any of these files are missing, stop and display the error. Do NOT invoke `understand` or create these files — they must be produced before invoking this skill.
 
-## Execution Model
-
-Auto-tdd invokes `auto-testcase` and `auto-code` skills with all user-confirmation gates bypassed automatically. Both skills run in parallel.
-
-**GATE OVERRIDE**: Bypass ALL **user-confirmation gates** — instructions that say "present to user and ask", "please confirm before I proceed", "wait for user confirmation", or "STOP" at the end of a completed phase. Treat these as phase-complete markers and proceed to the next phase automatically.
-
-**Auto-resolve rules for specific gates:**
-1. **Test type recommendation**: Accept all recommended types and proceed.
-2. **Direction selection**: Accept all AI-recommended directions. If AI cannot generate candidates, use 'Data Transform Mismatch' as default direction based on HLD module boundaries.
-3. **AC Gap Check**: Auto-add integration/e2e tests for cross-module/user-facing gaps. Unit-scope ACs go to supplementary unit plan automatically.
-4. **Test plan confirmation**: Proceed directly to writing test code.
-
-**PRESERVE prerequisite checks**: Instructions that say "if [artifact/input] is missing, ask the user and STOP" are NOT confirmation gates — they are error conditions. If a prerequisite check triggers, stop the pipeline and display the error.
-
 ## Pipeline
 
 ```
-Phase 1: auto-testcase skill + auto-code skill (in parallel — no data dependency between them)
+Phase 1 (parallel):
+├── Subagent A: Claude writes tests → Codex review → fix → lint clean
+└── Subagent B: Claude writes implementation → Codex review → fix → lint clean
 Phase 2: verify (vitest + e2e + lint)
 ```
 
-All phase outputs are written to the same procedure directory.
-
-## Failure Handling
-
-Any phase can fail. When a phase encounters an unresolvable error:
-
-1. Display the failure details to the user with the phase name and error description
-2. Stop the pipeline — do NOT proceed to subsequent phases
-
 ---
 
-### Phase 1: Test Cases + Implementation (parallel)
+### Phase 1: Test Cases + Implementation (parallel subagents)
 
-Invoke **both** skills in parallel — they derive from the same HLD and have no data dependency on each other:
+Launch **both** subagents in parallel. Each is self-contained — writes code, gets reviewed by Codex, fixes issues, and returns lint-clean.
 
-1. **auto-testcase skill** — using the Skill tool, passing the procedure directory path.
-   - Handle NEEDS_CONFIRMATION gates ← **GATE OVERRIDE: auto-confirm all gates using the auto-resolve rules above**
-   - Returns STATUS: COMPLETE when test code is written and lint-clean
+1. **Test cases subagent** — invoke the `auto-testcase` skill using the Skill tool, passing the procedure directory path. The subagent writes tests from HLD, runs Codex adversarial-review, fixes issues, and returns lint-clean test code.
 
-2. **auto-code skill** — using the Skill tool, passing the procedure directory path.
-   - Runs to completion without user gates.
+2. **Implementation subagent** — launch an Agent subagent (general-purpose) with `name: "impl-agent"` and the following prompt:
 
-Wait for **both** to complete before proceeding. If either fails, stop the pipeline and report the failure.
+   ```
+   You are implementing the requirement in {procedure_dir}/hld.md. Work independently from start to finish.
+
+   1. Invoke the `my-explore` skill using the Skill tool to load code navigation methodology.
+
+   2. Read {procedure_dir}/hld.md for design contracts.
+
+   3. Select and load project standards. Check package.json and file extensions to determine which apply:
+      - TypeScript (.ts/.tsx): /Users/Woo/.code/shared-rules/common/typescript.md
+      - Any frontend (.vue/.tsx/.jsx): /Users/Woo/.code/shared-rules/frontend/architecture.md
+      - Vue (vue in dependencies): /Users/Woo/.code/shared-rules/frontend/vue3.md
+      - React (react in dependencies): /Users/Woo/.code/shared-rules/frontend/reactjs.md
+      - Next.js (next in dependencies): /Users/Woo/.code/shared-rules/frontend/nextjs.md
+      - Next.js fullstack (next + database operations): /Users/Woo/.code/shared-rules/frontend/nextjs-fullstack.md
+      - Any backend (non-frontend .ts/.js): /Users/Woo/.code/shared-rules/backend/ddd.md
+      - Express (express in dependencies): /Users/Woo/.code/shared-rules/backend/express.md
+      - MongoDB (mongoose/mongodb in dependencies): /Users/Woo/.code/shared-rules/backend/mongodb.md
+
+   4. Write implementation code following the HLD interfaces and module boundaries.
+
+   5. Run `lint 2>/dev/null`. Fix until zero errors.
+
+   6. Run /codex:adversarial-review --wait on the files you wrote. Fix any issues found, re-lint. Repeat up to 2 times if issues persist.
+
+   7. Return a summary: files created/modified, review status.
+
+   SKIP ALL STOP GATES — run straight through without user confirmation.
+   ```
+
+Wait for **both** subagents to complete. If either fails, stop the pipeline and report the failure.
 
 ---
 
@@ -67,31 +72,28 @@ Wait for **both** to complete before proceeding. If either fails, stop the pipel
 
 Run all verification commands in order:
 
-```bash
-npx vitest run 2>/dev/null
-# E2E: detect platform from package.json
-#   Web (playwright in devDependencies): npx playwright test 2>/dev/null
-#   React Native (react-native in dependencies): maestro test .maestro/ 2>/dev/null
-lint 2>/dev/null
-```
-
-1. **vitest** — unit + integration tests all pass. Fix ALL failures, including pre-existing ones.
-2. **E2E** — detect platform and run the appropriate tool. Skip if no e2e test files were generated.
+1. **vitest** — `npx vitest run 2>/dev/null`. All tests pass.
+2. **E2E** — detect platform and run. Skip if no e2e test files were generated.
    - **Web** (has `playwright` in devDependencies): `npx playwright test 2>/dev/null`
    - **React Native** (has `react-native` in dependencies): `maestro test .maestro/ 2>/dev/null`
-   - Fix ALL failures, including pre-existing ones.
-3. **lint** — zero type errors. Fix ALL errors, including pre-existing ones.
+3. **lint** — `lint 2>/dev/null`. Zero errors.
 
-**If ALL GREEN** → Pipeline complete. Output final summary to user.
+Fix ALL failures, including pre-existing ones.
+
+**If ALL GREEN** → Pipeline complete. Output final summary.
 
 **If FAIL** → Enter self-fix loop:
 
 1. Analyze failure output (which tests fail, which lint errors)
-2. Fix the code — only the minimum change to resolve the failure
+2. Fix the code:
+   - **Test failures** → fix implementation code. Tests are the contract, implementation must conform.
+   - **Lint errors** → fix whichever file has the error (test or implementation).
 3. Re-run the failing verification command (not all three)
 4. Repeat up to **3 times**
 
-**If still failing after 3 retries** → Display failure report to user:
+**Default**: assume tests are correct and fix implementation. **Exception**: if a test clearly contradicts the HLD, fix the test instead.
+
+**If still failing after 3 retries** → Display failure report:
 
 ```
 ## Auto-TDD Failed
@@ -107,14 +109,14 @@ lint 2>/dev/null
 
 ## User-Visible Output
 
-During the pipeline, only display phase transition markers:
+During the pipeline, display phase transition markers:
 
 ```
-▶ Phase 1: Test Cases + Implementation (parallel)...
+▶ Phase 1: Test Cases + Implementation (parallel subagents with Codex review)...
 ▶ Phase 2: Verification...
 ```
 
-On success, display:
+On success:
 
 ```
 ## Auto-TDD Complete
@@ -125,8 +127,6 @@ On success, display:
 **Lint**: clean
 **Procedure**: {procedure_dir}/
 ```
-
-On failure, display the failure report.
 
 ---
 
@@ -153,24 +153,18 @@ Each `##` heading is the requirement name. The content under it is the requireme
 The main session acts as a **dispatcher** — it runs `understand` for each requirement, then delegates the auto-tdd pipeline to a subagent.
 
 For each requirement:
-1. Invoke `understand` skill, passing the requirement name and description as the user message (so understand writes it to `requirement.md`).
-   - Apply **GATE OVERRIDE**: bypass user-selection gates (code/testcase/both presentation) and proceed to step 2.
-   - **Do NOT bypass critical ambiguity STOPs** — if understand encounters a critical ambiguity that requires human input, fail this requirement (critical ambiguity cannot be auto-resolved).
-2. Dispatch an Agent subagent with:
-   - The procedure directory path
-   - Instruction: "Read ~/.claude/skills/auto-tdd/SKILL.md and execute the pipeline for this procedure directory"
-3. Wait for subagent to complete
-4. Collect result: pass (with summary) or fail (with error)
-5. Display one-line status to user
-6. Proceed to next requirement regardless of pass/fail
-
-**Subagent isolation**: Each subagent gets a fresh context window. No context pollution between requirements.
-
-**Failure handling**: A failed requirement does NOT block subsequent requirements. After all requirements are processed, display the summary table.
+1. Invoke `understand` skill, passing the requirement name and description.
+   - Bypass user-selection gates and proceed automatically.
+   - Do NOT bypass critical ambiguity STOPs — fail this requirement if critical ambiguity is encountered.
+2. Dispatch an Agent subagent with the procedure directory path and instruction to execute auto-tdd.
+3. Wait for subagent to complete.
+4. Collect result: pass or fail.
+5. Display one-line status.
+6. Proceed to next requirement regardless of pass/fail.
 
 ### Batch Output
 
-During execution, display one line per requirement:
+During execution:
 
 ```
 ▶ [1/3] add-share-button — running...
@@ -181,22 +175,24 @@ During execution, display one line per requirement:
 ✅ [3/3] update-user-profile — passed (8 tests, 0 failures)
 ```
 
-After all requirements complete, display summary:
+After all requirements complete:
 
 ```
 ## Auto-TDD Batch Complete
 
 | # | Requirement | Status | Tests | Procedure |
 |---|-------------|--------|-------|-----------|
-| 1 | add-share-button | PASS | 12 passed | .procedure/2026-03-16/claude_add-share/ |
-| 2 | fix-login-redirect | FAIL | Phase 2 | .procedure/2026-03-16/claude_fix-login/ |
-| 3 | update-user-profile | PASS | 8 passed | .procedure/2026-03-16/claude_update-user/ |
+| 1 | add-share-button | PASS | 12 passed | .procedure/.../ |
+| 2 | fix-login-redirect | FAIL | Phase 2 | .procedure/.../ |
+| 3 | update-user-profile | PASS | 8 passed | .procedure/.../ |
 ```
 
 ---
 
 ## Rules
 
-1. **No human intervention** — all user-confirmation gates are bypassed; prerequisite checks are preserved
-2. **Skills via Skill tool** — invokes `auto-testcase` and `auto-code` via the Skill tool; no inline logic or direct subagent dispatch
-3. **Failure stops the pipeline** — do not proceed past a failed phase
+1. **Parallel subagents** — tests and implementation are written by separate Claude subagents simultaneously
+2. **Codex reviews, Claude writes** — Codex adversarial-reviews each subagent's output; Claude fixes issues
+3. **No human intervention** — zero confirmation gates in the pipeline
+4. **Failure stops the pipeline** — do not proceed past a failed phase
+5. **Implementation conforms to tests** — in Phase 2, default to fixing implementation. Fix tests only when they clearly contradict the HLD
