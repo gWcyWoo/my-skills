@@ -13,7 +13,7 @@ You MUST execute these ToolSearch calls before any exploration. Do NOT skip:
 
 If a ToolSearch returns no results, that tool is unavailable — skip it.
 
-## Tool superiority — MUST use over Grep/Read when applicable
+## Tool preference — MUST use over Grep/Read when applicable
 
 Grep is ONLY for the initial text lookup to get file:line. Once you have a position, NEVER use Grep again. Use these instead:
 
