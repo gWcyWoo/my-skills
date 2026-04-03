@@ -1,6 +1,6 @@
 ---
 name: refactor
-description: Refactor existing code to comply with project coding standards. Reads code as the requirement, loads shared-rules as the target, and restructures without changing behavior. No understand, no HLD, no new tests.
+description: Use when refactoring existing code to comply with project coding standards while delegating isolated execution through my-subagent. Reads code as the requirement, loads shared-rules as the target, and restructures without changing behavior.
 ---
 
 # Refactor
@@ -15,7 +15,7 @@ Restructure existing code to comply with project coding standards. The current c
 
 ## When NOT to Use
 
-- New behavior or features are needed — use `understand` skill instead
+- New behavior or features are needed — use `understand` first
 - Code has bugs — fix bugs first, then refactor separately
 
 ## Inputs
@@ -25,9 +25,17 @@ The caller must provide:
 
 ## Process
 
-### Step 1: Dispatch Subagent
+### Step 1: Delegate Through My-Subagent
 
-Launch an Agent subagent (general-purpose) with `name: "refactor-agent"` and this prompt:
+Open `~/.agents/skills/my-subagent/SKILL.md` and follow it.
+
+Pass these parameters only:
+- `task_prompt`: the exact child prompt below
+- `agent_type`: `worker`
+- `model`: `gpt-5.4`
+- `reasoning_effort`: `medium`
+
+**Child `task_prompt`:**
 
 ```
 You are refactoring existing code to comply with project coding standards. The current code defines the behavior — preserve it exactly. No new functionality, no behavior changes.
@@ -36,13 +44,13 @@ FILES TO REFACTOR:
 {files}
 
 INSTRUCTIONS:
-1. Invoke the `my-explore` skill using the Skill tool to load code navigation methodology.
-2. Run the Verification Gate (auto-code/SKILL.md Step 2e) BEFORE making any changes. Record the results as the baseline. This tells you which tests pass and which fail before your refactor.
-3. Read `~/.claude/skills/auto-code/SKILL.md`. Skip Step 0 and Step 0b (do NOT dispatch another subagent or invoke review). Follow Steps 1, 1b, and 1c only:
+1. Open `~/.agents/skills/my-explore/SKILL.md` and follow it to load code navigation methodology.
+2. Run the Verification Gate (code/SKILL.md Step 2e) BEFORE making any changes. Record the results as the baseline. This tells you which tests pass and which fail before your refactor.
+3. Read `/Users/Woo/.agents/skills/auto-code/SKILL.md`. Skip Step 0 and Step 0b (do NOT dispatch another subagent or invoke review). Follow Steps 1, 1b, and 1c only:
    - Step 1: Load Project Standards — determine file types from the files to refactor, load matching shared-rules.
    - Step 1b: Reference Code Patterns — use the files to refactor as the "Affected Files" list. Find 1-2 existing files in the project that are structurally similar and already comply with the rules.
    - Step 1c: Compile Implementation Checklist — extract relevant rules into a numbered checklist (max 15 items). This checklist defines what "compliant" looks like.
-4. For each file to refactor, invoke `Skill(my-explore)` to load code navigation methodology, then use it to understand the file's structure and identify violations against the Implementation Checklist.
+4. For each file to refactor, use code navigation tools (codegraph_node, Probe MCP raw tools such as `search`/`query`/`extract`/`symbols`, and LSP) to understand its structure and identify violations against the Implementation Checklist.
 5. Refactor the code to resolve all violations. Two hard constraints:
    - Preserve existing behavior exactly — same inputs, same outputs, same side effects. If unsure whether a change alters behavior, do not make it.
    - Do NOT modify any test files. Tests define the expected behavior. If a test fails after refactoring, fix the production code, not the test.
@@ -53,9 +61,11 @@ INSTRUCTIONS:
 7. Output the Implementation Checklist with satisfaction status for each item, then return STATUS: COMPLETE.
 ```
 
-**Save the refactor agent ID immediately** — the Agent tool returns an agent ID. Save it before checking the status. This is the only agent you resume directly.
+**Save the delegated child agent ID immediately** — store it as `refactor_agent_id` before any status handling. This is the only child you resume directly.
 
 ### Step 2: Handle Result
 
+Let `my-subagent` own observability, liveness, resume mechanics, and child-lifecycle management. Follow `my-subagent` exactly. Only `STATUS:` drives the workflow here.
+
 - **STATUS: COMPLETE** → Present the checklist to the user. Done.
-- **STATUS: NEEDS_CLARIFICATION** → Forward questions to the user, resume subagent with `SendMessage(to: "<refactor_agent_id>", message: "<user's answers>")`.
+- **STATUS: NEEDS_CLARIFICATION** → Forward questions to the user, then follow `my-subagent`'s clarification/resume flow for `refactor_agent_id` using the user's answers.

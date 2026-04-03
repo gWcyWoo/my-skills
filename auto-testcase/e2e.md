@@ -11,7 +11,7 @@ End-to-end user flows: full page interactions, navigation, and API round-trips t
 ## 2. Input Discovery
 
 - **With HLD**: Use HLD-defined page routes, user flow descriptions, and UI layout contracts. The HLD is the sole contract. You may read type/interface definition files (e.g., `schema.ts`, `types.ts`) even if listed in Affected Files — they define contracts. You MUST NOT read files that contain function bodies or business logic. See SKILL.md "Code Reading Boundaries" for the full rule.
-- **Without HLD**: Invoke `Skill(my-explore)` to load code navigation methodology, then use it on files from `understand` → Affected Files. Identify page routes, navigation flows, form actions, layout components. These define the test targets.
+- **Without HLD**: Use `codegraph_node(includeCode: true)` and `LSP documentSymbol` on files from `understand` → Affected Files. Identify page routes, navigation flows, form actions, layout components. These define the test targets.
 
 ---
 
@@ -115,12 +115,13 @@ Use the highest-priority locator that uniquely identifies the element. Only fall
 | 2 | **Label** | `getByLabel('Email address')` | Form elements with associated `<label>` |
 | 3 | **Text** | `getByText('Save changes')` | Visible text is stable and unique on page |
 | 4 | **Placeholder** | `getByPlaceholder('Search...')` | Input with placeholder, no label available |
-| 5 (last resort) | **Alt / Title** | `getByAltText('User avatar')` | Images or elements with alt/title attributes |
+| 5 | **Alt / Title** | `getByAltText('User avatar')` | Images or elements with alt/title attributes |
+| 6 (last resort) | **data-testid** | `getByTestId('task-list-item')` | No accessible attribute can uniquely identify the element |
 
 **Rules:**
-- **FORBIDDEN**: `data-testid`, `testID`, or any locator that requires modifying source code to support tests. E2E tests must work with the application as-is.
+- Do NOT use `data-testid` if any of priorities 1-5 can identify the element. Justify every `data-testid` usage in a comment explaining why higher-priority locators are not viable.
 - Do NOT use CSS class selectors (`.btn-primary`) or structural selectors (`div > span:nth-child(2)`) — these are fragile and break on style/layout changes.
-- For i18n projects where visible text changes by locale, prefer Role + Name (priority 1) over Text (priority 3).
+- For i18n projects where visible text changes by locale, prefer Role + Name (priority 1) or data-testid (priority 6) over Text (priority 3).
 
 ### 6.2 Physical Assertion Rules
 
@@ -169,6 +170,6 @@ Every test case MUST map to:
 - One `it()` or `test()` block per plan row. Every row, zero omissions.
 - Any test not in the plan MUST be removed or justified as a new plan row.
 - Write test code only — zero implementation code.
-- Every element locator MUST follow §6.1 Locator Priority. `data-testid` is forbidden.
+- Every element locator MUST follow §6.1 Locator Priority. Justify any `data-testid` usage.
 - Every assertion MUST follow §6.2 Physical Assertion Rules.
 - **FORBIDDEN**: `page.waitForURL(pattern, { waitUntil: 'commit' })` when the test asserts page content after navigation. ALWAYS use the default `waitUntil: 'load'`.

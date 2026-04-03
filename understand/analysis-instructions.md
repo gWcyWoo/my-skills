@@ -1,20 +1,25 @@
 # Analysis Instructions
 
-You are executing the analysis and design phases of the `understand` skill. Your job is to analyze the user's requirement, produce a Requirements Analysis document, and — for logic changes — produce an HLD design document.
+You are executing the analysis and design phases of the `understand` skill. Your job is to analyze the user's requirement, produce a Requirements Analysis artifact, and — for logic changes — produce an HLD design artifact.
 
-**Output**: Write the analysis to `{procedure_dir}/understand.md`. For logic changes, also produce `{procedure_dir}/hld.md`.
+**Output**: In persisted-file mode, write the analysis to `{procedure_dir}/understand.md`. For logic changes, also produce `{procedure_dir}/hld.md`. In conversation-first mode, present the same content in conversation and do not write files yet.
 
 ## Inputs
 
-The procedure directory (created in Step 0) contains `requirement.md` with the user's original request (and any referenced spec content). Read it before starting analysis.
+This file is used in two modes:
+
+1. **Conversation-first understand mode** — when invoked from `/Users/Woo/.agents/skills/understand/SKILL.md` Step 1 before persistence, the user's conversation message is the requirement input. In this mode, ignore any `requirement.md` references and present the analysis in conversation instead of writing files.
+2. **Persisted-file mode** — when a workflow has already created `{procedure_dir}/requirement.md`, read it before starting analysis.
 
 ## Code Navigation
 
 The `my-explore` skill (loaded before this file) is your sole navigation methodology. Follow it exactly.
 
+This file defines analysis steps only. It does not define, refine, or override any code-exploration tool choice, tool sequence, fallback rule, or shell rule. All code-exploration tool usage remains delegated to `my-explore`.
+
 Analyze based on the current codebase state. Do not check git status, git diff, git log, or any version control state — these are irrelevant to requirements analysis and design.
 
-**Do NOT read test files** (`*.test.*`, `*.spec.*`, `__tests__/**`, `*.e2e.*`, `.detoxrc.*`). Test files are not part of requirements understanding — they are produced independently by the testcase skill. Reading them wastes context and biases your analysis.
+**Do NOT inspect test-file bodies** (`*.test.*`, `*.spec.*`, `__tests__/**`, `*.e2e.*`, and similar test-runner config or fixture files) during requirements analysis. Test files are out of scope for analysis, even if `my-explore` later identifies a related test file that should be listed in Affected Files.
 
 ## Purpose & Method
 
@@ -75,13 +80,13 @@ After completing the analysis above, write **Ambiguities** (if any), then **Affe
 
 **Refactoring**: Behavioral ACs come from Existing Behavior Inventory (extract from code). Structural ACs come from the requirement's structural goals (extract from requirement). Same principle: extract, don't invent.
 
-**Loading/error/empty states**: Only create ACs if the requirement **explicitly mentions** them (e.g., "显示加载中" → AC). No mention → no AC.
+**Loading/error/empty states**: Only create ACs if the requirement **explicitly mentions** them (e.g., "show a loading indicator" -> AC). No mention -> no AC.
 
 ### Ambiguity Detection (during Enumerate step)
 
 During Step 1 of AC Generation (Enumerate), scan each requirement sentence for:
 - The meaning has multiple valid interpretations (e.g., `status: 1|0` — is 1=active/0=inactive, or 1=parsed/0=pending?)
-- A term is used without definition (e.g., "返回 summary" — is summary a string excerpt, a structured object, or a full-text copy?)
+- A term is used without definition (e.g., "return summary" — is summary a string excerpt, a structured object, or a full-text copy?)
 - The requirement specifies a data shape but not its semantics (e.g., field names without value constraints)
 - Two parts of the requirement imply contradictory behavior (e.g., "status: 1|0" but also "parsing fails" implies a third state)
 
@@ -98,19 +103,19 @@ Format:
 ### Ambiguities
 
 - AMB-01: `status: number, 1|0` — 1 and 0 represent what? Possible interpretations: (a) 1=active, 0=inactive; (b) 1=parsed, 0=pending; (c) boolean-style on/off. The requirement does not define the semantics of each value.
-- AMB-02: "返回 summary" — what is summary? Possible: (a) first N characters of parsed content; (b) LLM-generated abstract; (c) structured object with key fields. Source and format undefined.
+- AMB-02: "return summary" — what is summary? Possible: (a) first N characters of parsed content; (b) LLM-generated abstract; (c) structured object with key fields. Source and format undefined.
 ```
 
-**Affected Files completeness**: For each file being modified, use code navigation (via `Skill(my-explore)`) to discover test files that import it. If a test file exists and the modification changes the tested behavior, include the test file in Affected Files.
+**Affected Files completeness**: For each file being modified, use `my-explore` to identify any relevant test files or dependent files that should appear in Affected Files. If a test file exists and the modification changes the tested behavior, include the test file in Affected Files. Do not add tool-specific instructions here; `my-explore` decides the method.
 
 ### AC Writing Rule
 
 **AC sources (closed set)**: ACs are extracted from exactly two sources — the requirement text and user clarifications during conversation. No other source is valid. Domain knowledge, engineering best practices, and "what a good system should do" are NOT AC sources — they belong in HLD design decisions, not in ACs.
 
 Every AC MUST describe a **user-observable behavior or system-observable outcome**. ACs must NOT contain:
-- File paths (e.g., "reuse src/components/share/index.tsx") — that is an HLD design decision
-- Internal implementation choices (e.g., "use fetchRouteApi") — that is implementation
-- Technology selections (e.g., "use Drawer component") — that is HLD
+- File paths (e.g., "reuse path/to/existing-module") — that is an HLD design decision
+- Internal implementation choices (e.g., "call a specific API helper") — that is implementation
+- Technology selections (e.g., "use a specific UI component") — that is HLD
 
 **Test (New Feature / Bug Fix)**: if a non-technical stakeholder cannot verify the AC by looking at the running application, it is not a valid AC. Rewrite it as observable behavior.
 
@@ -121,7 +126,7 @@ Every AC MUST describe a **user-observable behavior or system-observable outcome
 2. **Structural ACs**: One AC per structural goal of the refactoring (e.g., "all file-selection state and operations are encapsulated in a single dedicated module"). These are system-observable outcomes — verifiable by code inspection. They are valid because the purpose of refactoring IS structural change.
 
 **Prohibited AC patterns** (all task types):
-- Relative descriptions: "行为不变", "与之前一致", "不受影响" — these are not testable. Rewrite as positive statements of expected behavior.
+- Relative descriptions: "behavior remains unchanged", "same as before", "unaffected" — these are not testable. Rewrite them as positive statements of expected behavior.
 - Blanket statements: "all interactions work the same" — enumerate each interaction as a separate AC.
 - Negative-only criteria: "does not break X" — rewrite as "X produces [specific result] when [specific trigger]".
 
@@ -159,7 +164,7 @@ Ensure ACs are clean before writing output.
 
 ## Write Output
 
-Write `{procedure_dir}/understand.md` using the format that matches the complexity gate result:
+Produce the Requirements Analysis artifact using the format that matches the complexity gate result. In persisted-file mode, write it to `{procedure_dir}/understand.md`. In conversation-first mode, present the same structure in conversation.
 
 ### Logic change format
 
@@ -176,8 +181,8 @@ Write `{procedure_dir}/understand.md` using the format that matches the complexi
 [If any — AMB-01, AMB-02, ... If none, omit this section entirely]
 
 ### Affected Files
-- file1.tsx - [why]
-- file2.ts - [why]
+- path/to/file-a - [why]
+- path/to/file-b - [why]
 
 ### Acceptance Criteria
 - AC-01: [Criterion]
@@ -200,23 +205,23 @@ Write `{procedure_dir}/understand.md` using the format that matches the complexi
 [If any — AMB-01, AMB-02, ... If none, omit this section entirely]
 
 ### Affected Files
-- file1.tsx - [why]
+- path/to/file-a - [why]
 
 ### Acceptance Criteria
 - AC-01: [Criterion]
 - AC-02: [Criterion]
 ```
 
-After writing `understand.md`, check the complexity gate result:
+After producing the Requirements Analysis artifact, check the complexity gate result:
 
 - **No-logic** → Analysis complete. Proceed to Step 2 of the `understand` skill.
 - **Logic** → Proceed to the HLD phase below.
 
 ## HLD Phase (logic changes only)
 
-Read `~/.claude/skills/hld/SKILL.md` and follow its process exactly to produce `{procedure_dir}/hld.md`. You already have the code context from the analysis phase — code navigation results (via `Skill(my-explore)`) are still available.
+Read `/Users/Woo/.agents/skills/hld/SKILL.md` and follow Steps 0-3 exactly, because the parent `understand` skill only delegates that HLD subset at this stage. In persisted-file mode, write the resulting HLD artifact to `{procedure_dir}/hld.md`. In conversation-first mode, present the same HLD content in conversation and do not write files yet. Use the analysis context you already built.
 
-After writing `hld.md`, analysis complete. Proceed to Step 2 of the `understand` skill.
+After producing the HLD artifact, analysis complete. Proceed to Step 2 of the `understand` skill.
 
 ## Ambiguity Handling
 

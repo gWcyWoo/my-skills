@@ -10,7 +10,7 @@ Produces a design contract that `testcase integration` and `code` consume direct
 ## Inputs
 
 1. **Procedure directory path** — the directory containing `understand.md`
-2. **Code context from analysis phase** — code navigation results (via `Skill(my-explore)`) are already available from the preceding analysis. Use them directly for design work (e.g., extracting reused module interfaces).
+2. **Code context from analysis phase** — CodeGraph, LSP, and file contents are already available from the preceding analysis. Use them directly for design work (e.g., extracting reused module interfaces).
 
 Read `{procedure_dir}/understand.md` to get the requirements analysis (Task Type, Analysis, Affected Files, Acceptance Criteria).
 
@@ -24,22 +24,19 @@ If gaps are discovered during design, document them in Design Decisions with the
 
 ### Step 0: Load Architecture Rules (MANDATORY)
 
-Before any design work, load the project's architecture and convention rules. These rules are **binding constraints** on all design decisions in Step 2. A design that violates a loaded rule is invalid.
+Before any design work, load the project's binding architecture rules. The HLD skill now only consults the explicit architecture/DDD contracts and the project's CLAUDE guidance, even if additional shared rules exist.
 
-**0a. Load shared rules:** Determine project type by checking `package.json` dependencies and file extensions of the Affected Files from `understand.md`. Read the applicable files:
+1. Read `/Users/Woo/.code/shared-rules/frontend/architecture.md` **and** `/Users/Woo/.code/shared-rules/backend/ddd.md` regardless of the project type or affected files. These are the only shared-rule files HLD is permitted to load.
+2. Read the project's `CLAUDE.md` (or equivalent root guidance file) from the repository root. If the file is missing, note "CLAUDE: missing" and proceed; if present, treat its guidance as binding.
 
-| Condition | File to Read |
-|---|---|
-| Any frontend (`.vue`/`.tsx`/`.jsx` files) | `/Users/Woo/.code/shared-rules/frontend/architecture.md` |
-| Any backend (non-frontend `.ts`/`.js` files) | `/Users/Woo/.code/shared-rules/backend/ddd.md` |
+Each loaded rule becomes a hard constraint for Step 2. If a drafted design violates any constraint, fix the design and document the compliant alternative in the Design Decisions section.
 
-**0b. Load project design constraints:** Read the project's CLAUDE.md **in the repository root** using the `Read` tool. This is the project-specific CLAUDE.md, not the global `~/.claude/CLAUDE.md`. If no project CLAUDE.md exists in the repository root, output "Step 0b N/A" and proceed.
+### Step 0b: Load project design constraints
+Read the project's AGENTS.md (or equivalent root guidance) using local file-reading tools. Extract the rules that constrain code structure, data flow, API patterns, response shapes, or module organization. Ignore procedural workflow rules.
 
-Extract every rule that constrains **code structure, data flow, API patterns, response types, URL conventions, or file organization**. Ignore workflow/process rules (e.g., "Phase 1: Requirements Understanding"). List the extracted rules explicitly — they become **binding design constraints** for Step 2.
-
-**Constraint enforcement in Step 2:**
-- Every interface, signature, and module boundary in Step 2 MUST comply with the loaded rules.
-- If a design choice conflicts with a loaded rule, the rule wins. Document the conflict and the rule-compliant alternative in Design Decisions.
+Constraint enforcement in Step 2:
+- Every interface, signature, and module boundary MUST comply with the loaded rules.
+- If a design choice conflicts with a rule, the rule wins. Document the conflict and the rule-compliant alternative in Design Decisions.
 
 ### Step 1: AC-Driven Design Scope
 
@@ -81,7 +78,7 @@ Define signatures with input, output, and responsibility using the project's lan
 - **Implementation** (MUST NOT define in HLD): function bodies, internal branching, how data is transformed, which utility is used internally.
 - **Test**: if removing it would make the caller unable to determine how to call or what to expect back, it is a contract. Define it.
 
-**REUSED MODULE RULE:** When the design references reusing an existing component/module, you MUST use code navigation (via `Skill(my-explore)`) to extract its complete public interface (all required props/params, their types). Do NOT rely on visual code scanning. Paste the extracted interface into the HLD and design against it. Incomplete interface extraction = broken contract.
+**REUSED MODULE RULE:** When the design references reusing an existing component/module, you MUST use the available LSP tools (for example, hover or document-symbol equivalents) to extract its complete public interface (all required props/params, their types). LSP tools are already loaded from the analysis phase. Do NOT rely on visual code scanning. Paste the extracted interface into the HLD and design against it. Incomplete interface extraction = broken contract.
 
 #### Module Boundaries
 
@@ -119,22 +116,21 @@ Rules:
 - **Flow ID format**: `F{n}` sequential.
 - **Flow granularity**: Each distinct user interaction within an AC gets its own Flow row(s). If an AC covers multiple interactions (e.g., drag, click, delete), each interaction needs at least one Flow. Do NOT collapse multiple interactions into a single Flow row.
 - **Error path coverage**: Every interaction that has a success Flow MUST also have an error/boundary Flow if failure is possible (e.g., hash computation fails, network error, validation fails). If no failure is possible for a specific interaction, add a row in the Flow table with Path Type = `N/A` and Expected Output explaining why (e.g., "pure state reset, no external call — no failure path").
-- **Async state mutation order**: When a Flow involves an async operation (API call, fetch, promise) AND a state change (e.g., opening a modal, updating a flag), the Expected Output MUST specify the causal order between the async operation and the state change. Example: "calls sharePost API; on success sets isShareOpen = true; on failure isShareOpen remains false" — NOT "opens share modal and calls API". Both testcase and code derive behavior from this ordering; ambiguity causes implementation/test mismatch.
 
 ### Step 3: Author-Side Quick Check (before writing output)
 
-Before writing hld.md, run these quick checks. This is a FAST author-side sanity check — the thorough independent review happens later via a separate reviewer agent.
+Before writing hld.md, run these quick checks. This is the final automatic quality gate inside the HLD phase. Leave the file ready for immediate downstream use.
 
 1. **Constraint compliance** — scan HLD against loaded architecture rules. If any obvious violation, fix before writing.
-2. **Reused module interfaces** — if reusing a component, verify via code navigation (via `Skill(my-explore)`) that HLD defines all required props.
+2. **Reused module interfaces** — if reusing a component, verify via LSP that HLD defines all required props.
 3. **Affected files sync** — every file in HLD should be in understand.md Affected Files and vice versa.
 4. **Flow completeness** — every Success flow should have an Error/N/A counterpart.
 5. **AC coverage** — every AC should have at least one Flow (structural ACs exempt).
 6. **No implementation in contracts** — signatures and flow outputs should be declarative, not procedural.
 
-If any issue found → fix the HLD before writing. Do NOT produce formal review tables — the independent reviewer agent handles that.
+If any issue is found, fix the HLD before writing. Do NOT produce formal self-check tables.
 
-**Do NOT write review output to any file.** The reviewer agent will produce the formal `audit/review.md` with content-verified tables.
+**Do NOT write self-check output to any file.** This step is an author-side sanity pass only.
 
 ### Step 4: Write Output
 

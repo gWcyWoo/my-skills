@@ -16,7 +16,7 @@
 ## 2. Input Discovery
 
 - **With HLD**: Use HLD-defined component interfaces and module boundaries as API contracts. The HLD is the sole contract. You may read type/interface definition files (e.g., `schema.ts`, `types.ts`) even if listed in Affected Files — they define contracts. You MUST NOT read files that contain function bodies or business logic (e.g., `parser.ts`, `api.ts`, `handler.ts`). See SKILL.md "Code Reading Boundaries" for the full rule.
-- **Without HLD**: Invoke `Skill(my-explore)` to load code navigation methodology, then use it on symbols from `understand` → Affected Files. Extract component props, container interfaces, service method signatures. These become the API contracts. Do NOT invent APIs.
+- **Without HLD**: Use `codegraph_node(includeCode: true)` and `LSP hover` on symbols from `understand` → Affected Files. Extract component props, container interfaces, service method signatures. These become the API contracts. Do NOT invent APIs.
 
 ### 2b. HLD Edge Contract Extraction (mandatory when HLD exists)
 
@@ -110,28 +110,6 @@ expect(calledOptions.body.key).toBe('value');
 expect(mockApiFn).toHaveBeenCalledOnce();
 expect(mockApiFn.mock.calls[0][0]).toBe('/expected/path');
 expect(calledOptions.body.key).toBe('value');
-```
-
-### 5d. Assertion Value Derivation (mandatory)
-
-For each assertion's expected value, execute this checklist:
-
-1. **Derive from requirement** — the expected value must come from the AC/understand description, not from reading what the implementation code currently produces.
-2. **Cross-check against mock inputs** — if the expected value equals any mock input unchanged, this is a §5 violation signal. Ask: "Does this module combine/transform the input with other data (e.g., other state, config, safe area insets)?" If yes, the expected value must reflect that transformation.
-3. **State the derivation** — add a comment above the assertion showing how the expected value was calculated from the requirement:
-
-```typescript
-// ❌ Mock-as-Output — expected value equals mock input unchanged
-vi.mock('react-native-safe-area-context', () => ({
-  useSafeAreaInsets: () => ({ bottom: 48 }),
-}));
-// keyboard mock height = 300
-expect(onKeyboardOverlayChange).toHaveBeenCalledWith(300); // just echoes the mock
-
-// ✅ Requirement-derived — expected value reflects the module's transformation
-// requirement: scroll amount = dialog push amount = keyboardHeight + bottomInset
-// 300 (mock keyboard) + 48 (mock safe area bottom) = 348
-expect(onKeyboardOverlayChange).toHaveBeenCalledWith(348);
 ```
 
 ### 5c. Trigger Fidelity (mandatory when HLD exists)
