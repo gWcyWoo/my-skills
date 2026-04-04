@@ -1,9 +1,10 @@
 # Trace — how data/control flows across files
 
-1. Grep the entry point name, scoped to the likely directory → get file:line.
-2. LSP prepareCallHierarchy(filePath, line, character) → get call hierarchy item.
-3. LSP outgoingCalls → all called functions with their positions in 1 call. This eliminates N separate Grep searches.
-4. For each callee: Probe extract_code at the position from outgoingCalls → see the body.
-5. Repeat steps 2-4 for deeper hops if needed.
-6. NEVER Grep callee names individually — outgoingCalls already gave you all positions.
-7. Summarize the full flow once all hops are traced.
+## Steps
+
+1. **Find the entry point** — **Probe search_code** or Grep for literal text.
+2. **Extract with call hierarchy** — **Probe extract_code** with `lsp: true`.
+3. **Identify callees** — from step 2's call hierarchy, skip built-in/framework calls.
+4. **Trace callees** — batch all into one extract_code call, repeat from step 3 for deeper hops.
+5. If `#symbol` returns only a single line, retry with `file:line` format.
+6. **Summarize** the full flow.

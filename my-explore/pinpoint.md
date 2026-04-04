@@ -1,6 +1,8 @@
 # Pinpoint — component/function name or UI label known
 
-1. Grep the known text, scoped to the likely directory → get file:line.
-2. Probe extract_code or Read (offset+limit, 30-50 lines) to see the code.
-3. If the code delegates to another function/file → LSP goToDefinition at that call site.
-4. NEVER use Grep to find the definition file — LSP does it in 1 call.
+## Steps
+
+1. **Find the location** — Grep the known text scoped to the likely directory.
+2. **Extract the code** — **Probe extract_code** with `file#symbol` or `file:line`.
+3. **Follow delegations** — LSP goToDefinition at the call site.
+4. If Grep returns 0, widen the pattern (e.g. `handle.*Class`) or use search_code.

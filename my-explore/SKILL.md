@@ -1,6 +1,6 @@
 ---
 name: my-explore
-description: Code navigation methodology. Invoke before any code exploration to load tool schemas and navigation rules.
+description: MUST invoke for ALL code tasks — search, find, trace, explain, read, analyze. Loads MCP tool schemas and navigation rules.
 ---
 
 # Code Navigation
@@ -13,27 +13,9 @@ You MUST execute these ToolSearch calls before any exploration. Do NOT skip:
 
 If a ToolSearch returns no results, that tool is unavailable — skip it.
 
-## Tool preference — MUST use over Grep/Read when applicable
+## Classify FIRST — BEFORE any tool call
 
-Grep is ONLY for the initial text lookup to get file:line. Once you have a position, NEVER use Grep again. Use these instead:
-
-| After you have file:line, use | NOT | Why | Returns → use for |
-|------|-----|-----|------|
-| **LSP goToDefinition** | Grep to find definition file | 1 call → exact target | file:line of definition → extract_code there |
-| **LSP outgoingCalls** | Read body + Grep each callee | 1 call → complete call list | file:line of each callee → extract_code directly, NO Grep |
-| **LSP incomingCalls** | Grep function name across project | 1 call → all callers | file:line of each caller → extract_code directly |
-| **LSP findReferences** | Grep symbol name | 1 call → all references | file:line of each ref → extract_code to see usage context |
-| **ast-grep find_code** | Grep with regex | 1 call → AST-precise | file:line of each match → extract_code or Read |
-| **Probe extract_code** | Read with guessed offset/limit | 1 call → complete block | full function/class body → understand logic |
-| **Probe search_code** | Grep when name is unknown | Semantic search | file:line candidates → extract_code to verify |
-
-All LSP operations require `filePath` + `line` + `character` (1-based). Get these from Grep first.
-
-**NEVER use LSP documentSymbol** — it dumps all symbols in a file (often 100+), wastes tokens. If Grep returns 0 results, widen the Grep pattern (e.g. `handle.*Class`) or use Probe search_code.
-
-## Classify, then load execution steps
-
-Classify the question, then Read the corresponding file from this skill's directory:
+You MUST classify and Read the corresponding file BEFORE making any search/read/extract call:
 
 | Type | Signal | File to Read |
 |------|--------|-------------|
@@ -42,6 +24,21 @@ Classify the question, then Read the corresponding file from this skill's direct
 | **Discovery** | No specific symbol known, only abstract concepts | `discovery.md` |
 | **Structural** | Find all code matching an AST pattern | `structural.md` |
 
-**Default to Pinpoint.** Read the file, then follow its steps exactly.
+Read the file, then follow its steps and tool rules exactly. After each tool call: answer found? → stop.
 
-After each tool call: answer found? → stop.
+## Tool preference (fallback when classification files are not loaded)
+
+Grep is ONLY for initial text lookup. Once you have file:line, use these:
+
+| After you have file:line, use | **NEVER** | Returns → use for |
+|------|-----|------|
+| **Probe extract_code** (`file#symbol` or `file:line`) | Read entire file | complete function/class body → read the code to answer the question or decide what to trace next |
+| **Probe extract_code** with `lsp: true` | Read + separate LSP calls | code body + call hierarchy + references → call hierarchy contains callee file:line (extract_code them directly, NO Grep), references contain caller file:line (trace callbacks/props upstream) |
+| **Probe search_code** | Grep when name is unknown | file:line candidates ranked by relevance → extract_code the top match to confirm it's the right code |
+| **Probe search_code** with `exact: true` | Grep for exact symbol name | file:line of exact symbol → extract_code to read the implementation |
+| **ast-grep find_code** | Grep with regex | file:line of each structural match → extract_code to read, no false positives from comments/strings |
+| **ast-grep find_code_by_rule** | find_code for complex patterns | file:line of matches filtered by `inside`/`has`/`follows` → extract_code to read |
+| **ast-grep analyze-imports** | manual import tracing | import usage map → identify which modules depend on what, find unused imports (`mode: "usage"`) or explore all imports (`mode: "discovery"`) |
+| Batch multiple files in one `files` array | One extract_code per file | combine multiple file:line into one call to reduce total tool calls |
+
+**NEVER Grep for callee/callback names** — extract_code with `lsp: true` already returns their positions.
