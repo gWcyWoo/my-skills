@@ -21,17 +21,17 @@ If `rg` returns 0 results, widen the pattern:
 exec_command: rg -n -e 'handle.*Class' 'src/'
 ```
 
-If `rg` still returns 0, fall back to semantic search:
+If `rg` still returns 0, fall back to ast-grep structural search:
 
 ```
-mcp__probe__search_code({
-  "path": "/absolute/project/root",
-  "query": "ComponentName",
-  "exact": false
+mcp__ast_grep__find_code({
+  "project_folder": "/absolute/project/root",
+  "pattern": "ComponentName",
+  "language": "tsx"
 })
 ```
 
-If all return 0 → stop. Report "symbol not found" to the user.
+If still 0 → try with `"typescript"` language. If both return 0 → stop. Report "symbol not found" to the user.
 
 ### Step 2 — Extract the code
 

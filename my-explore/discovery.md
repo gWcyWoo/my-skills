@@ -9,22 +9,30 @@
 
 ### Step 1 — Search by domain concept
 
-Use semantic search scoped to the likely directory:
+Use `rg` with broad keywords scoped to the likely directory:
+
+```
+exec_command: rg -n -e 'demo.*class' 'src/'
+```
+
+If `rg` returns too many or too few results, use ast-grep for structural search:
+
+```
+mcp__ast_grep__find_code({
+  "project_folder": "/absolute/project/root",
+  "pattern": "isDemoMode",
+  "language": "tsx"
+})
+```
+
+If you need a fuzzy/semantic search (e.g., the concept could be named many ways), use `mcp__probe__search_code` as last resort:
 
 ```
 mcp__probe__search_code({
   "path": "/absolute/project/root",
-  "query": "user authentication login",
+  "query": "demo class trial experience",
   "exact": false
 })
-```
-
-Do NOT use `exact: true` for discovery — you do not have an exact symbol name yet.
-
-If `mcp__probe__search_code` is unavailable, fall back to `rg`:
-
-```
-exec_command: rg -n -e 'auth.*login' 'src/'
 ```
 
 ### Step 2 — Narrow down
@@ -38,14 +46,10 @@ Do NOT continue broad searching. Extract the code and work from there.
 
 ### Step 3 — Second attempt (only if step 1 returned 0 results)
 
-Try alternative terms. For example if "authentication" returned nothing, try:
+Try alternative terms or a different tool:
 
 ```
-mcp__probe__search_code({
-  "path": "/absolute/project/root",
-  "query": "session token credential",
-  "exact": false
-})
+exec_command: rg -n -i -e 'trial|sample|experience' 'src/'
 ```
 
 Or use structural search if you know the code shape:

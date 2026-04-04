@@ -2,10 +2,10 @@
 
 ## Rules
 
-- After each step, check: does the extracted code answer the question? If yes → skip to step 6.
+- After each step, check: does the extracted code answer the question? If yes → skip to step 7.
 - NEVER search for a function name, variable name, or code line that already appeared in a previous extract_code result. You already have that information — re-read the output instead of making a new tool call.
 - `rg` is allowed when you see a callee name in extracted code but do NOT know which file defines it. `rg` is NOT allowed to re-search code you already extracted.
-- Total tool calls for a typical trace: 3–6. If you are past 10, you are off track — stop and summarize what you have.
+- Total tool calls for a typical trace: 4–6. If you are past 10, you are off track — stop and summarize what you have.
 
 ## Steps
 
@@ -17,28 +17,27 @@ If you know the exact text (component name, function name):
 exec_command: rg -n --fixed-strings -- 'CreateClassDialog' 'src/'
 ```
 
-If `rg` returns 0 results, fall back:
+If `rg` returns 0 results, fall back to ast-grep structural search:
 
 ```
-mcp__probe__search_code({
-  "path": "/absolute/project/root",
-  "query": "CreateClassDialog",
-  "exact": false
+mcp__ast_grep__find_code({
+  "project_folder": "/absolute/project/root",
+  "pattern": "function CreateClassDialog($$$) { $$$ }",
+  "language": "tsx"
 })
 ```
 
-If `mcp__probe__search_code` also returns 0 results, try `exact: true` with quoted query:
+If the function might be an arrow or export, try variations:
 
 ```
-mcp__probe__search_code({
-  "path": "/absolute/project/root",
-  "query": "\"CreateClassDialog\"",
-  "exact": true,
-  "strictElasticSyntax": true
+mcp__ast_grep__find_code({
+  "project_folder": "/absolute/project/root",
+  "pattern": "CreateClassDialog",
+  "language": "tsx"
 })
 ```
 
-If all three return 0 → stop. Report "entry point not found" to the user.
+If both return 0 → stop. Report "entry point not found" to the user.
 
 ### Step 2 — Extract entry point with call hierarchy
 
@@ -58,41 +57,88 @@ This returns:
 - The full function/class body
 - (If LSP is available) call hierarchy: callee locations, caller locations
 
-**If `lsp: true` fails or returns no hierarchy data**, that is OK. Go to step 3A instead of step 3B.
+**If `lsp: true` fails or returns no hierarchy data**, that is OK. Go to step 3 instead of using LSP data.
 
-### Step 3A — LSP unavailable: identify callees manually from extracted code
+### Step 3 — STOP. Plan ALL files BEFORE making any more tool calls.
 
-Read the code body returned in step 2. Identify callee names by looking for these patterns:
+**DO NOT skip this step. DO NOT call any tool (rg, extract_code, search_code) until you have written out the full file plan below.**
 
-| Pattern in extracted code | How to find the file | Example |
-|---|---|---|
-| `fetch('/api/some/path')` | Next.js convention: the handler is at `app/api/some/path/route.ts` | `fetch('/api/classrooms')` → `app/api/classrooms/route.ts` |
-| `SomeClass.someMethod(...)` | You know the method name but NOT which file defines it. Use `rg` to find the definition. | `Classroom.createClassroom(...)` → `exec_command: rg -n --fixed-strings -- 'createClassroom' 'server/'` |
-| `someFunction(...)` where the function is imported | Same — use `rg` to find the definition file. | `getUser()` → `exec_command: rg -n --fixed-strings -- 'export.*getUser' 'src/'` |
-| `props.onSomething(...)` or callback passed from parent | Trace upstream — find the parent component that renders this component. Use `rg` to find `<ComponentName` or the prop assignment. | `onClassCreated(...)` → `exec_command: rg -n --fixed-strings -- 'onClassCreated=' 'src/'` |
+You have the entry point code from step 2. Read it now. Find EVERY external call (fetch, imported function, class method, callback prop). For each one, decide whether you already know the file path or need `rg`. Write out TWO buckets:
 
-For each callee, once `rg` gives you a `file:line`, you are done with that callee. Collect all `file:line` results and go DIRECTLY to step 4. Do NOT also call `mcp__probe__search_code` for the same symbol — `rg` already found it.
+**Split every callee into two buckets:**
 
-**When to use `rg` vs when NOT to:**
-- ✅ You see `Classroom.createClassroom(...)` in extracted code and need to find which file defines `createClassroom` → use `rg`
-- ❌ `rg` already returned `classroom.repo.ts:71` for `createClassroom` and you want to "double check" with `mcp__probe__search_code` → do NOT. Go to step 4.
-- ❌ You already extracted `create-class-dialog.tsx#CreateClassDialog` and now want to search for `handleCreateClass` inside it → do NOT. You already have the code body.
+**Bucket A — path known (no tool call needed):**
 
-### Step 3B — LSP available: identify callees from call hierarchy
+| Pattern in extracted code | How to derive the file path |
+|---|---|
+| `fetch('/api/some/path')` or `fetch('/api/some/path', ...)` | Next.js convention: `app/api/some/path/route.ts` |
+| `fetch('/api/some/path/' + variable)` | Same: `app/api/some/path/route.ts` (dynamic segments are `[param]/route.ts`) |
+| `import { foo } from './bar'` or `import { foo } from '../bar'` | Resolve the relative path from the current file's directory |
+| `import { foo } from '@/lib/bar'` | `@/` = project root, so `lib/bar.ts` |
 
-From step 2's LSP output, collect callee `file:line` entries. Skip built-in/framework calls (React hooks, Next.js internals, console.*, etc.). Go to step 4.
+**Bucket B — path unknown (needs ONE round of `rg`):**
 
-### Step 4 — Batch extract all callees
+| Pattern in extracted code | What to `rg` for |
+|---|---|
+| `SomeClass.someMethod(...)` where `SomeClass` is imported but the file is not obvious | `rg -n --fixed-strings -- 'someMethod' 'server/'` |
+| `someFunction(...)` where the import path is not in the extracted code | `rg -n --fixed-strings -- 'export.*someFunction' 'src/'` |
+| `props.onCallback(...)` — need to find the parent that passes this prop | `rg -n --fixed-strings -- '<ComponentName' 'app/'` |
 
-Combine all targets into ONE call:
+**You MUST write out a one-line plan summary before calling any tool. If you skip this and jump to rg or extract_code, you are violating this skill.**
+
+Format:
+
+```
+=== PLAN: [N] files known, [M] needs rg ===
+```
+
+Example:
+
+```
+=== PLAN: 3 files known (classrooms/route.ts, students/route.ts, create-class.tsx), 2 needs rg (createClassroom, bulkCreateStudents) ===
+```
+
+**Only after writing this line, proceed to step 4.**
+
+### Step 4 — Resolve Bucket B with rg (ONE round)
+
+Issue ALL `rg` calls for Bucket B at once. After all return, you now have `file:line` for every callee.
+
+Once `rg` gives you a `file:line`, you are done with that callee. Do NOT also call `mcp__ast_grep__find_code` or `mcp__probe__search_code` for the same symbol.
+
+If `rg` finds call sites but NOT the definition, use `mcp__ast_grep__find_code` to locate the definition:
+
+```
+mcp__ast_grep__find_code({
+  "project_folder": "/absolute/project/root",
+  "pattern": "createClassroom: async ($$$) => { $$$ }",
+  "language": "typescript"
+})
+```
+
+Or for a simpler match:
+
+```
+mcp__ast_grep__find_code({
+  "project_folder": "/absolute/project/root",
+  "pattern": "createClassroom: async ($$$) => $$$",
+  "language": "typescript"
+})
+```
+
+### Step 5 — Batch extract ALL files (ONE call)
+
+Combine Bucket A paths + Bucket B `rg` results into ONE extract_code call:
 
 ```
 mcp__probe__extract_code({
   "path": "/absolute/project/root",
   "files": [
-    "/absolute/path/to/api/route.ts:92",
-    "/absolute/path/to/repo/some.repo.ts#createSomething",
-    "/absolute/path/to/hooks.ts#useMyHook"
+    "/absolute/path/to/app/api/classrooms/join/route.ts#POST",
+    "/absolute/path/to/app/api/auth/basic/signup/student/route.ts#POST",
+    "/absolute/path/to/app/api/auth/student/login/route.ts#POST",
+    "/absolute/path/to/server/repos/classroom/classroom.repo.ts:142",
+    "/absolute/path/to/server/repos/student/student-enrollment.repo.ts:53"
   ],
   "format": "markdown",
   "timeout": 30
@@ -102,11 +148,13 @@ mcp__probe__extract_code({
 **Handling bad extract results:**
 - If `#symbol` returns only a single line or the wrong node → retry with `file:line` using a line number from your earlier `rg` output.
 - If `file:line` returns only a trivial line (e.g., `'use client'`, an import, a type declaration) → the line number was wrong. Use a line number closer to the actual function definition. Check your `rg` output for the correct line.
-- NEVER use `:1` as a line number unless you specifically need line 1. Use the line number that `rg` or `search_code` gave you.
+- NEVER use `:1` as a line number unless you specifically need line 1. Use the line number that `rg` or `find_code` gave you.
 
-If any callee has its own downstream calls that matter to the trace, repeat step 3A/3B → step 4 for one more hop. **Maximum 3 hops total.** If the trace goes deeper, summarize and stop.
+### Step 6 — One more hop (only if needed)
 
-### Step 5 — Trace upstream callers (only if the question requires it)
+If the extracted callees have their OWN downstream calls that matter to the trace, repeat steps 3–5 for those. **Maximum 2 rounds total** (entry → first layer → second layer). If the trace goes deeper, summarize and stop.
+
+### Step 7 — Trace upstream callers (only if the question requires it)
 
 If the question asks "who triggers this" or "where is this called from":
 
@@ -118,7 +166,7 @@ rg -n --fixed-strings -- 'functionName' 'src/'
 
 Then extract the relevant callers with `mcp__probe__extract_code`.
 
-### Step 6 — Summarize
+### Step 8 — Summarize
 
 Output the full trace as a chain:
 
