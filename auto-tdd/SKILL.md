@@ -42,24 +42,13 @@ Launch **both** subagents in parallel. Each is self-contained — writes code, g
 
    2. Read {procedure_dir}/hld.md for design contracts.
 
-   3. Select and load project standards. Check package.json and file extensions to determine which apply:
-      - TypeScript (.ts/.tsx): /Users/Woo/.code/shared-rules/common/typescript.md
-      - Any frontend (.vue/.tsx/.jsx): /Users/Woo/.code/shared-rules/frontend/architecture.md
-      - Vue (vue in dependencies): /Users/Woo/.code/shared-rules/frontend/vue3.md
-      - React (react in dependencies): /Users/Woo/.code/shared-rules/frontend/reactjs.md
-      - Next.js (next in dependencies): /Users/Woo/.code/shared-rules/frontend/nextjs.md
-      - Next.js fullstack (next + database operations): /Users/Woo/.code/shared-rules/frontend/nextjs-fullstack.md
-      - Any backend (non-frontend .ts/.js): /Users/Woo/.code/shared-rules/backend/ddd.md
-      - Express (express in dependencies): /Users/Woo/.code/shared-rules/backend/express.md
-      - MongoDB (mongoose/mongodb in dependencies): /Users/Woo/.code/shared-rules/backend/mongodb.md
+   3. Invoke the `code` skill using the Skill tool. Follow its instructions to load coding standards and implement.
 
-   4. Write implementation code following the HLD interfaces and module boundaries.
+   4. Run `lint 2>/dev/null`. Fix until zero errors.
 
-   5. Run `lint 2>/dev/null`. Fix until zero errors.
+   5. Run /codex:adversarial-review --wait on the files you wrote. Fix any issues found, re-lint. Repeat up to 2 times if issues persist.
 
-   6. Run /codex:adversarial-review --wait on the files you wrote. Fix any issues found, re-lint. Repeat up to 2 times if issues persist.
-
-   7. Return a summary: files created/modified, review status.
+   6. Return a summary: files created/modified, review status.
 
    SKIP ALL STOP GATES — run straight through without user confirmation.
    ```

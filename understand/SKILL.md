@@ -78,7 +78,7 @@ After the user confirms the understanding, **STOP and ask**:
 > 2. **tdd** — Lightweight TDD: user stays in the loop for test design and implementation.
 > 3. **auto-tdd** — Automated: Codex writes tests + Claude writes implementation in parallel. (Requires persisted files)
 
-- `code` (or equivalent: "确认", "ok", "直接编码", "proceed") → Claude implements directly, following the HLD and project standards. Uses conversation context if files were not persisted.
+- `code` (or equivalent: "确认", "ok", "直接编码", "proceed") → invoke the `code` skill using the Skill tool. Uses conversation context if files were not persisted.
 - `tdd` (or equivalent: "测试", "先写测试") → invoke the `tdd` skill using the Skill tool. Lightweight flow with user in the loop.
 - `auto-tdd` (or equivalent: "并行", "auto", "all") → invoke the `auto-tdd` skill using the Skill tool, passing the procedure directory path. **Requires files to be persisted in Step 2.** If not persisted, ask the user to persist first.
 

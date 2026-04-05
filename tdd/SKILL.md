@@ -7,6 +7,11 @@ description: Default development workflow. TDD for requirements and bug fixes. R
 
 For changes that need a formal HLD (High-Level Design), use the `understand` skill instead.
 
+## Hard Rules
+
+- **Steps are sequential.** Each step MUST be completed before starting the next. User saying "proceed" means proceed to the **next step**, not jump to implementation.
+- **Every step that says "Invoke skill" MUST actually invoke it.** Do not inline, summarize, or skip skill invocations.
+
 ## Step 1: Understand
 
 Invoke the `my-explore` skill to explore the codebase and understand the requirement or bug.
@@ -18,20 +23,18 @@ After exploring, **STOP and present the understanding to the user**:
 - Wait for the user to confirm, correct, or add details
 - Do NOT proceed until the user confirms
 
-## Step 1.5: Trivial Change Check
+## Step 2: Test Decision
 
-After understanding is confirmed, evaluate whether the change is **trivial** (both: diff ≤ 5 lines AND low-risk category like typo/config/comment/rename).
+After understanding is confirmed, **STOP and ask the user**:
 
-- **Trivial** → skip to Step 3, but skip rule loading (3a) — implement directly. Inform the user.
-- **Not trivial** (logic/algorithm/state/API/security changes, even if ≤ 5 lines) → proceed to Step 2.
+> Do you want to write test cases first?
 
-## Step 2: Test Cases & Review
-
-Read `write-tests.md` from this skill's directory and follow its instructions.
+- If **yes** → invoke the `write-tests` skill and follow its instructions. Then proceed to Step 3.
+- If **no** → proceed directly to Step 3.
 
 ## Step 3: Implement & Review
 
-Read `code.md` from this skill's directory. Load coding standards via subagent, implement, then review with user.
+Invoke the `code` skill and follow its instructions.
 
 ## Step 4: Lint, Test & Done
 
