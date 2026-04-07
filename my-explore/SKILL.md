@@ -5,40 +5,38 @@ description: MUST invoke for ALL code tasks — search, find, trace, explain, re
 
 # Code Navigation
 
-You MUST execute these ToolSearch calls before any exploration. Do NOT skip:
+Run these once to load tool schemas (skip any that return no results):
 
 1. ToolSearch("ast-grep")
 2. ToolSearch("probe")
 3. ToolSearch("LSP")
 
-If a ToolSearch returns no results, that tool is unavailable — skip it.
+## What each tool is for
 
-## Classify FIRST — BEFORE any tool call
+**`probe extract_code`** — three modes, pick by intent:
 
-You MUST classify and Read the corresponding file BEFORE making any search/read/extract call:
+1. **`file#symbol` or `file:line`**
+   - Returns: function/class body of that exact symbol or line range (~30 lines)
+   - Use when: you know the symbol name, OR you have file:line from another tool's output
+   - **NOT Read** — Read returns the whole file (200+ lines); this returns only what you need
 
-| Type | Signal | File to Read |
-|------|--------|-------------|
-| **Pinpoint** | Component/function name or UI label known | `pinpoint.md` |
-| **Trace** | How data/control flows across files | `trace.md` |
-| **Discovery** | No specific symbol known, only abstract concepts | `discovery.md` |
-| **Structural** | Find all code matching an AST pattern | `structural.md` |
+2. **`lsp: true` flag**
+   - Returns: code body + call hierarchy (callees with file:line) + references (callers with file:line), all in one response
+   - Use when: tracing data flow upstream/downstream, finding all callers/callees, building cross-file mental models
+   - **NOT separate LSP `prepareCallHierarchy` / `findReferences`** — `lsp: true` already includes both
+   - **NOT Grep for callee/callback names** — `lsp: true` already returns their positions
 
-Read the file, then follow its steps and tool rules exactly. After each tool call: answer found? → stop.
+3. **batched `files` array**
+   - Returns: multiple files in one response
+   - Use when: you have N related files to inspect together (e.g., container + child components + types)
+   - **NOT a per-file loop** — wastes tool calls and dilutes attention with separate responses
 
-## Tool preference (fallback when classification files are not loaded)
+---
 
-Grep is ONLY for initial text lookup. Once you have file:line, use these:
-
-| After you have file:line, use | **NEVER** | Returns → use for |
-|------|-----|------|
-| **Probe extract_code** (`file#symbol` or `file:line`) | Read entire file | complete function/class body → read the code to answer the question or decide what to trace next |
-| **Probe extract_code** with `lsp: true` | Read + separate LSP calls | code body + call hierarchy + references → call hierarchy contains callee file:line (extract_code them directly, NO Grep), references contain caller file:line (trace callbacks/props upstream) |
-| **Probe search_code** | Grep when name is unknown | file:line candidates ranked by relevance → extract_code the top match to confirm it's the right code |
-| **Probe search_code** with `exact: true` | Grep for exact symbol name | file:line of exact symbol → extract_code to read the implementation |
-| **ast-grep find_code** | Grep with regex | file:line of each structural match → extract_code to read, no false positives from comments/strings |
-| **ast-grep find_code_by_rule** | find_code for complex patterns | file:line of matches filtered by `inside`/`has`/`follows` → extract_code to read |
-| **ast-grep analyze-imports** | manual import tracing | import usage map → identify which modules depend on what, find unused imports (`mode: "usage"`) or explore all imports (`mode: "discovery"`) |
-| Batch multiple files in one `files` array | One extract_code per file | combine multiple file:line into one call to reduce total tool calls |
-
-**NEVER Grep for callee/callback names** — extract_code with `lsp: true` already returns their positions.
+- **`probe search_code`** — semantic search by keyword. **First choice when you don't know the exact path** — use this before Glob, to avoid guessing loops. Use `exact: true` for precise symbol lookup.
+- **`ast-grep find_code`** — find code by AST pattern (function calls, declarations, JSX, object literals, generics). **Always use over Grep for code structure** — no false positives from comments/strings.
+- **`ast-grep find_code_by_rule`** — same with `inside` / `has` / `follows` filters for complex relational patterns.
+- **`ast-grep analyze-imports`** — import dependency map. `mode: "usage"` for refactoring, `mode: "discovery"` for exploration.
+- **LSP** — `documentSymbol` (symbols in a file), `workspaceSymbol` (find symbol project-wide), `findReferences` / `goToDefinition` for navigation.
+- **Grep** — text search. Use for: non-source files (md/json/yaml/configs/logs), comments, string literals, error messages. **NOT for code structure** — use ast-grep instead.
+- **Glob** — find files by name/path pattern. Replaces `ls` / `find`.

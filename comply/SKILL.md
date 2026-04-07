@@ -27,3 +27,4 @@ For each selected file, return only the rules relevant to this task. Skip everyt
 - Summary: [FILL IN]
 - Files: [FILL IN]
 - Change type: [FILL IN]
+- Design context: [FILL IN — paste the confirmed design from understand-lightweight: what patterns are used, data structures, key decisions. This tells you WHICH rules within each file are relevant.]

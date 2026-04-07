@@ -14,14 +14,7 @@ For changes that need a formal HLD (High-Level Design), use the `understand` ski
 
 ## Step 1: Understand
 
-Invoke the `my-explore` skill to explore the codebase and understand the requirement or bug.
-
-- If anything is unclear, **STOP and ask the user** — do not guess or assume
-
-After exploring, **STOP and present the understanding to the user**:
-- Summarize the requirement or bug, affected files, and what needs to change
-- Wait for the user to confirm, correct, or add details
-- Do NOT proceed until the user confirms
+Invoke the `understand-lightweight` skill and follow its instructions.
 
 ## Step 2: Test Decision
 
