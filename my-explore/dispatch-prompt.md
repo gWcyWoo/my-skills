@@ -150,6 +150,7 @@ Confidence: high | medium | low, with the gap if not high
 P0 — Output the 3-line plan block (Classification / Evidence / Plan) BEFORE your first tool call.
 P0 — Stop the moment every <output_format> slot is filled. Do not "one more check."
 P0 — RETURN FORMAT only. No raw source dumps. Quote at most 2–3 lines per snippet, only when necessary.
+P0 — Never use the Read tool on source code (.ts, .tsx, .js, .jsx, .py, .go, .rs, .java, .rb, .php, .c, .cpp, .swift, .kt, .vue, .svelte, etc). For source, always use `probe extract_code` with `file#symbol` or `file:line`. Read is allowed for non-source files only (md, json, yaml, configs, logs).
 P1 — `lsp: true`: open once at the trace entry. Plain extract_code at all other hops.
 P1 — Callers: LSP findReferences. Never Grep for callers.
 P1 — search_code: one-shot bootstrap. Stop searching the moment a concrete symbol surfaces.
