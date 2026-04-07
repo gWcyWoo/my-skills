@@ -1,42 +1,33 @@
 ---
 name: tdd
-description: Use when implementing a requirement or bug fix in a JavaScript or TypeScript repository and you want a user-in-the-loop TDD workflow in the main session.
+description: Default development workflow. TDD for requirements and bug fixes. Runs in the main session with the user in the loop.
 ---
 
 # TDD
 
-This workflow is for JavaScript or TypeScript repositories that use `package.json`-based lint and test commands. For changes that need a formal HLD (High-Level Design), use the `understand` skill instead.
+For changes that need a formal HLD (High-Level Design), use the `understand` skill instead.
+
+## Hard Rules
+
+- **Steps are sequential.** Each step MUST be completed before starting the next. User saying "proceed" means proceed to the **next step**, not jump to implementation.
+- **Every step that says "read and follow a skill file" MUST actually do it.** Do not inline, summarize, or skip skill file reads.
 
 ## Step 1: Understand
 
-Invoke the `my-explore` skill to explore the codebase and understand the requirement or bug.
+Read and follow `understand-lightweight/SKILL.md`.
 
-- If anything is unclear, **STOP and ask the user** - do not guess or assume
+## Step 2: Test Decision
 
-After exploring, **STOP and present the understanding to the user**:
-- Summarize the requirement or bug, affected files, and what needs to change
-- Wait for the user to confirm, correct, or add details
-- Do NOT proceed until the user confirms
+After understanding is confirmed, **STOP and ask the user**:
 
-## Step 1.5: Trivial Change Check
+> Do you want to write test cases first?
 
-After the user confirms the understanding, decide whether the change is **trivial**. A change is trivial only when both conditions are true:
-
-- The implementation diff is 5 lines or fewer.
-- The change is low risk, such as a typo, config edit, comment edit, or local rename with no behavior change.
-
-- **Trivial**: skip Step 2 and Step 3a. Go directly to Step 3b and tell the user.
-- **Not trivial**: proceed to Step 2.
-
-Treat logic, algorithm, state, API, and security changes as non-trivial even if they fit within 5 lines.
-
-## Step 2: Test Cases & Review
-
-Read `write-tests.md` from this skill's directory and follow its instructions.
+- If **yes** → read and follow `write-tests/SKILL.md`. Then proceed to Step 3.
+- If **no** → proceed directly to Step 3.
 
 ## Step 3: Implement & Review
 
-Read `code.md` from this skill's directory. Use the `my-subagent` skill to load coding standards, implement, then review with the user.
+Read and follow `code/SKILL.md`.
 
 ## Step 4: Lint, Test & Done
 

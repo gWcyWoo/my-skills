@@ -61,7 +61,9 @@ Answer the question if the code is sufficient. Otherwise continue to step 3.
 
 ### Step 3 — Follow delegations (only if needed)
 
-If the extracted code delegates to another function/component and you need its implementation:
+If the extracted code references other files and you need their implementation:
+
+**First check: can you derive the file path from what you already have?** If the extracted code contains a path reference (any syntax — import, require, fetch URL, include, route convention, etc.), resolve it to a file path directly and pass it to `extract_code`. Do NOT `rg` for something whose path is already visible in the output.
 
 **Option A — LSP available:**
 
