@@ -6,6 +6,7 @@
 <intent>The source body (~30 lines) of a specific symbol, identified by name or line anchor.</intent>
 <tool>`mcp__probe__extract_code files=["<file>#<symbol>"]`. If the symbol name is unknown, call `mcp__language_server__get_symbols file_path="<file>"` first to list the file's symbols, then use `file#<symbol>`.</tool>
 <invalid>Line ranges (`file:320-480`); bare file paths with no anchor.</invalid>
+<note>`file:line` is a node anchor, not a guarantee of the enclosing function, method, or callback. If the real target is the containing block, identify the enclosing symbol first, then extract `file#<symbol>`.</note>
 </scenario>
 
 <scenario>
@@ -14,8 +15,19 @@
 </scenario>
 
 <scenario>
+<intent>The body of a known symbol when both the file path and the symbol name are already known.</intent>
+<tool>`mcp__probe__extract_code files=["<file>#<symbol>"]`. This is the default path. Do not re-search the declaration with `mcp__probe__search_code`, `mcp__ast_grep__find_code`, or project-symbol lookup.</tool>
+</scenario>
+
+<scenario>
+<intent>The enclosing function, method, or callback for a matched line or AST hit.</intent>
+<tool>If an enclosing symbol exists, identify that symbol first, then use `mcp__probe__extract_code files=["<file>#<symbol>"]`. Use `file:line` only when the local AST node itself is the target, not when the enclosing block is the target.</tool>
+</scenario>
+
+<scenario>
 <intent>A full outline of every symbol declared in a file.</intent>
 <tool>`mcp__language_server__get_symbols file_path="<file>"`. Required before `file#symbol` extraction when the file is known but the symbol name is not.</tool>
+<note>If the language server reports that it is unavailable or not running, do not keep calling adjacent language-server endpoints on the same query. Switch to non-LSP routes: `mcp__probe__extract_code`, `mcp__probe__search_code`, or `mcp__ast_grep__*`.</note>
 </scenario>
 
 <scenario>
@@ -53,6 +65,7 @@ If any condition fails, use targeted tools instead: plain `extract_code` + separ
 <scenario>
 <intent>Every code location matching a given AST pattern.</intent>
 <tool>`mcp__ast_grep__find_code pattern="<language pattern>"`. `$NAME` matches one node; `$$$` matches zero or more. Prefer over `rg -n` for code structure: no false positives from comments or string literals.</tool>
+<note>The pattern must parse as a valid single AST node. If ast-grep rejects the pattern, shrink it to a smaller parsable node or debug the shape with `mcp__ast_grep__dump_syntax_tree`. If `file#symbol` is already known, do not use ast-grep to re-find that declaration.</note>
 </scenario>
 
 <scenario>
@@ -85,6 +98,8 @@ Language server (position known) > ast-grep (code shape known) > `rg -n` (litera
 - A tool errored or returned less than expected → fix the arguments and retry the same tool. Never switch to direct file reads on source as a workaround.
 - A suggested file path does not exist → do not enumerate path guesses. Use `mcp__probe__search_code` with a concept keyword to locate the real file.
 - A location has already been identified → do not re-search to verify. Trust the authoritative tool.
+- A language-server call reports that no server is running or available → mark LSP unavailable for the rest of this query. Do not retry other language-server calls unless the server is explicitly started; switch to `mcp__probe__extract_code`, `mcp__probe__search_code`, or `mcp__ast_grep__*`.
+- The current question is already answered at the current layer → stop. Do not drill into downstream callees or side effects unless the query explicitly asks for them.
 - You are reaching for regex alternation (`|`) on source files → you are using the wrong tool. Re-classify the query and pick language server, ast-grep, or `mcp__probe__search_code`.
 </recovery>
 
