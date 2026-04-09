@@ -1,6 +1,6 @@
 ---
-name: understand-method
-description: Deep understanding of a single method/function — purpose & signature, implementation walkthrough, and call sites with input provenance. Runs in the main session; does not dispatch a subagent.
+name: understand-method-0
+description: Deep understanding of a single method/function — purpose & signature, implementation walkthrough, and call sites with input provenance. Runs in the MAIN session; does not dispatch a subagent. The `-0` suffix denotes main-session execution (parallels `my-explore-0` / `understand-0` / `code-0`).
 ---
 
 # Understand Method

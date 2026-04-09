@@ -74,11 +74,15 @@ After the user confirms the understanding, **STOP and ask**:
 ### Step 3: Next Steps
 
 > Select next step:
-> 1. **code** — Implement directly (Claude).
-> 2. **tdd** — Lightweight TDD: user stays in the loop for test design and implementation.
-> 3. **auto-tdd** — Automated: Codex writes tests + Claude writes implementation in parallel. (Requires persisted files)
+> 1. **code** — Implement in an isolated `implementer` subagent (clean main session; review diffs via your IDE). **Default.**
+> 2. **code-0** — Implement inline in main session (every edit visible in conversation). Use for small changes, debugging, or when you want full real-time visibility.
+> 3. **tdd** — Lightweight TDD: Understand → (optional) Write Tests → Implement → Verify, with user in the loop.
+> 4. **auto-tdd** — Automated: Codex writes tests + Claude writes implementation in parallel. (Requires persisted files)
 
-- `code` (or equivalent: "确认", "ok", "直接编码", "proceed") → invoke the `code` skill using the Skill tool. Uses conversation context if files were not persisted.
+- `code` (or equivalent: "确认", "ok", "直接编码", "proceed") → **load rules first, then invoke `code`**:
+  1. Invoke the `comply` skill, passing the task context based on the confirmed understanding → receive a compact rules extract. **If `comply` fails to return a valid rules extract** — subagent error (e.g. API 529 Overloaded), empty result, missing rule files, or non-actionable output — STOP immediately and surface the root cause to the user (e.g., *"`comply` returned 529 Overloaded — try again in a few minutes"*). Do NOT proceed to step 2 without rules: `code` would just block again and obscure the real failure. This mirrors `tdd` Step 3a's comply-failure handling.
+  2. Invoke the `code` skill with `{REQUIREMENT_SUMMARY, FILES_IN_SCOPE, RULES}`. **Do NOT include `TEST_FILES`** — this invocation path (via `understand`) skips test writing entirely; the user did not select `tdd` or `auto-tdd`, so no red tests exist. `code` will dispatch the `implementer` subagent and run the implementation WITHOUT a test target. Uses conversation context if files were not persisted in Step 2.
+- `code-0` (explicit, no equivalent) → invoke the `code-0` skill directly. `code-0` handles rule loading itself via `comply` and writes code inline in the main session.
 - `tdd` (or equivalent: "测试", "先写测试") → invoke the `tdd` skill using the Skill tool. Lightweight flow with user in the loop.
 - `auto-tdd` (or equivalent: "并行", "auto", "all") → invoke the `auto-tdd` skill using the Skill tool, passing the procedure directory path. **Requires files to be persisted in Step 2.** If not persisted, ask the user to persist first.
 
