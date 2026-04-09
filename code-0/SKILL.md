@@ -9,9 +9,10 @@ description: Use as the implementation step of any workflow — loads project co
 <instructions>
 1. **Resolve files in scope.** Use files the caller explicitly named, or files named in the prior phase's requirement summary. If neither names any file, STOP and ask: *"Which files should I touch?"* Do NOT guess. Do NOT scan the repo.
 2. **Load coding standards.** Invoke the `comply` skill, passing the task context and the resolved file list.
-3. **Implement the change.** Apply the rules `comply` returned. Touch only the resolved files. Use `Edit` for existing files; use `Write` only for files that do not yet exist. If the caller passed red test files from `write-tests`, write the minimum implementation that turns them green. NEVER modify the tests.
-4. **Self-check.** Re-read the rules `comply` returned. Fix any violations before step 5.
-5. **Pause for review.** Ask: *"Implementation complete. Would you like to review before running lint and tests?"*
+3. **Explore code via `my-explore-0` ONLY.** When you need to read or query source code, invoke the `my-explore-0` skill. NEVER use `Read` or `Grep` on source files directly.
+4. **Implement the change.** Apply the rules `comply` returned. Touch only the resolved files. Use `Edit` for existing files; use `Write` only for files that do not yet exist. If the caller passed red test files, write the minimum implementation that turns them green. NEVER modify the tests.
+5. **Self-check.** Re-read the rules `comply` returned. Fix any violations before step 6.
+6. **Pause for review.** Ask: *"Implementation complete. Would you like to review before running lint and tests?"*
    - **Yes** → wait for feedback, apply changes, return to step 4.
    - **No** → return control to the caller.
 </instructions>
@@ -26,6 +27,7 @@ Review:        accepted | accepted-after-changes | (not requested)
 </output_format>
 
 <final_reminders>
+P0 — NEVER use `Read` or `Grep` on source files. ALL code exploration goes through `my-explore-0` skill. No exceptions.
 P0 — ALWAYS invoke `comply` first. Never read rule files directly in main session.
 P0 — ALWAYS pause at the review STOP. Even if the change is one line.
 P0 — NEVER expand scope unilaterally. If the change needs to grow, STOP and ask.

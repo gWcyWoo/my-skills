@@ -7,7 +7,7 @@ description: Use as the lightweight understanding step (no formal HLD, MAIN-sess
 
 <instructions>
 1. **Read the requirement.** Identify the symptom (bugs) or desired behavior (features), and any named files / symbols / UI labels.
-2. **Explore the relevant code.** Invoke the `my-explore-0` skill. NEVER use `my-explore` (subagent variant) — a `-0` skill only calls other `-0` or non-dispatching skills.
+2. **Explore the relevant code.** Invoke the `my-explore-0` skill. 
 3. **Draft the gap analysis.** Bug → symptom / root cause / fix approach. Feature → current state / target state / approach.
 4. **Discuss with the user.** Ask about every ambiguity. Iterate until both sides are aligned on problem + solution.
 5. **Present and confirm.** Output the applicable `<output_format>` block. STOP and wait for explicit user confirmation before handing off to downstream skills.
@@ -16,23 +16,24 @@ description: Use as the lightweight understanding step (no formal HLD, MAIN-sess
 <output_format>
 **Bug fix:**
 
-Symptom:     <one sentence, user's words>
-Root cause:  <one sentence + file:line>
+Symptom: <one sentence, user's words>
+Root cause: <one sentence + file:line>
 Fix approach:<one sentence>
 Files in scope: path:line, one per line
 
 **Feature / change:**
 
-Goal:        <one sentence, user's words>
+Goal: <one sentence, user's words>
 Current state:<one sentence + file:line>
-Gap:         <one sentence>
-Approach:    <one to three sentences>
+Gap: <one sentence>
+Approach: <one to three sentences>
 Files in scope: path:line, one per line
 </output_format>
 
 <success_criteria>
 Complete when ALL hold:
-- Exploration used `my-explore-0` only — no `my-explore`, no direct `Read` on source.
+
+- Exploration used `my-explore-0` only, no direct `Read` on source.
 - Every ambiguity was asked, not assumed.
 - The applicable output block is filled with file:line precision.
 - The user explicitly confirmed.
