@@ -1,56 +1,51 @@
 ---
 name: understand-method-0
-description: Use when the user wants a deep explanation of one existing method or function in the main Codex session, including purpose and signature, implementation walkthrough, and call sites with one-hop input provenance.
+description: Deep understanding of a single method/function in Codex — purpose & signature, implementation walkthrough, and call sites with input provenance. Runs in the MAIN session; does not dispatch a subagent.
 ---
 
-# Understand Method
+<role>Method analyst executing in the main session; investigates one method and returns a structured three-section explanation with file:line precision.</role>
 
-Investigate ONE method and produce a structured three-section explanation. Work in the main session directly; do not dispatch a subagent. The knowledge stays in context for any follow-up edits.
-
-## Tool rules (must follow)
-
-- **Source code:** use `mcp__probe__extract_code` with `file#symbol` or `file:line`. **Never use shell readers or direct file reads on source files** (`.ts`, `.tsx`, `.js`, `.jsx`, `.py`, `.go`, `.rs`, `.java`, `.rb`, `.php`, `.c`, `.cpp`, `.vue`, `.svelte`, etc.). Direct reads are only for non-source files such as `.md`, `.json`, `.yaml`, configs, or logs.
-- **Callers:** use the language-server reference lookup (`mcp__language_server__get_symbol_references`). Never use text grep for callers.
-- **Batching:** when reading multiple call sites, pass them all in one `mcp__probe__extract_code files=[...]` call. Do not loop per file.
-- **No duplicate verification:** do not run a second tool to confirm what an authoritative tool already answered.
-
-## Tool sequence (adapt; skip any step you already know the answer to)
-
-1. **Locate the method.** If the target is given as `file#symbol` or `file:line`, skip. Otherwise use the language-server workspace symbol capability (`mcp__language_server__get_project_symbols`).
-2. **Read the body.** `mcp__probe__extract_code files=["<file>#<method>"]` returns the function body.
-3. **Find all callers in one call.** `mcp__language_server__get_symbol_references` on the method.
+<instructions>
+1. **Locate the method.** If given as `file#symbol` or `file:line`, skip. Otherwise: `mcp__language_server__get_project_symbols`.
+2. **Read the body.** `mcp__probe__extract_code files=["<file>#<method>"]`.
+3. **Find all callers.** `mcp__language_server__get_symbol_references` on the method. NEVER grep for callers.
 4. **Read call sites, batched.** `mcp__probe__extract_code files=[caller1_file:line, caller2_file:line, ...]`.
-5. **Trace input provenance, one hop only.** For arguments that are computed at the call site, follow the value ONE hop back to where it originates. Do not trace deeper unless the user explicitly asks for the full flow.
+5. **Trace input provenance — one hop only.** For arguments computed at the call site, follow ONE hop back to where the value originates. Do not trace deeper unless the user explicitly asks.
 
 Stop the moment all three output sections are filled with file:line precision.
-
-## Output format
+</instructions>
 
 ### 1. Purpose & Signature
 
-- **Purpose:** one sentence on what this method does and what concept it implements.
-- **Inputs:** each parameter as `name: type`; one-line meaning.
-- **Output:** `type`; one-line meaning.
+<output_format>
+- **Purpose:** one sentence on what this method does.
+- **Inputs:** `name: type` — one-line meaning each.
+- **Output:** `type` — one-line meaning.
 - **Side effects (if any):** state mutations, I/O, async operations.
 
-### 2. Implementation walkthrough
+### 2. Implementation Walkthrough
 
-Walk through how inputs are transformed into the output, anchored to `file:line` for every meaningful step. Include:
-
+One bullet per step, anchored to `file:line`:
 - Key branches and why they exist.
 - Side effects, state mutations, async boundaries.
-- External dependencies (libraries, DB, APIs, other services) with `file:line` where invoked.
+- External dependencies (libraries, DB, APIs) with `file:line`.
 
-One bullet per step. Keep it tight.
+### 3. Call Sites & Input Provenance
 
-### 3. Call sites & input provenance
+Per significant caller:
+- **`caller at file:line`** — scenario that triggers this call.
+- **Input construction:** one line per argument:
+  - Literal → note the value.
+  - Computed → trace one hop to the source with `file:line`.
+  - Passed through → name the outer function or prop.
 
-For each significant caller:
+If > 5 callers, group by scenario, show the 3–5 most important, mention the total count.
+</output_format>
 
-- **`caller at file:line`**; scenario that triggers this call.
-- **Input construction:** for each argument, one line on how it is built:
-  - Literal: note the value or shape.
-  - Computed: trace ONE hop back to the source (variable, prop, state, API response) with `file:line`.
-  - Passed through: name the outer function or prop it came from.
-
-If there are more than about five callers, group by scenario, show the three to five most important, and mention the total count.
+<final_reminders>
+P0 — NEVER use direct reads on source files. Source goes through `mcp__probe__extract_code`.
+P0 — NEVER use grep to find callers. Use `mcp__language_server__get_symbol_references`.
+P0 — Batch multiple call sites into one `mcp__probe__extract_code files=[...]` call. Do not loop per-file.
+P1 — Do not run a second tool to verify what an authoritative tool already answered.
+P1 — Trace input provenance ONE hop only unless the user explicitly asks for more.
+</final_reminders>

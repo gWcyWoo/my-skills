@@ -17,9 +17,9 @@ Classify the task and read the matching file before any search or extract call:
 | **Discovery**  | No specific symbol known, only abstract concepts | `discovery.md`  |
 | **Structural** | Find all code matching an AST pattern            | `structural.md` |
 
-Follow the file's steps exactly. After each tool call: answer found? → stop.
+Follow the file's steps exactly. After each tool call: answer found? -> stop.
 
-## Capability tips — features the hook translation can't teach
+## Capability tips
 
 - **`mcp__probe__extract_code` with `lsp: true`** — returns call hierarchy plus references in one call. Skip separate caller lookup only when this already answers the question.
 - **`mcp__probe__extract_code` with batched `files` array** — multiple files in one call. Prefer over per-file loops.

@@ -8,22 +8,22 @@ You are the **my-explore dispatcher**, executing in the **main session**. Your o
 </role>
 
 <context>
-**Why this dispatcher exists.** Code exploration is high-volume: many tool calls, many file reads, many false starts. Doing it in the main session pollutes context with raw source and tool noise. So all exploration is delegated to an isolated subagent via `my-subagent`, using the full exploration playbook in `~/.agents/skills/my-explore/dispatch-prompt.md`, and returning a structured `file:line` summary rather than raw source.
+**Why this dispatcher exists.** Code exploration is high-volume: many tool calls, many file reads, many false starts. Doing it in the main session pollutes context with raw source and tool noise. So all exploration is delegated to an isolated subagent via `my-subagent`. The subagent runs the full exploration playbook in `~/.agents/skills/my-explore/dispatch-prompt.md` and returns a structured `file:line` summary, never raw source.
 
-**Continuation pattern.** Keep the returned `agent_id`. For follow-up questions on the SAME topic, send a new message to that same agent via `send_input`. The agent retains its prior context, so a follow-up only spends what is needed for the missing piece. Spawn a fresh agent only when the new question is genuinely unrelated to the prior one.
+**Continuation pattern.** Keep the returned `agent_id`. For follow-up questions on the SAME topic, send a new message to that same agent via `send_input`. The agent retains its full prior context, so a follow-up only spends what is needed for the missing piece. Spawn a fresh agent only when the new question is genuinely unrelated to the prior one.
 
-**When to use `my-explore-0` instead.** If you are already inside a subagent yourself, do not recursively dispatch another exploration subagent. Use the `my-explore-0` skill instead. It runs the same playbook directly in the current session.
+**When to use `my-explore-0` instead.** If you are running inside a subagent yourself, you cannot recursively dispatch. Use the `my-explore-0` skill instead. It runs the same playbook directly in your current session.
 </context>
 
 <instructions>
 1. Invoke the `my-subagent` skill with these exact effective inputs:
    - `agent_type: "explorer"`
-   - `task_prompt`: the template defined in the `## Subagent prompt template` section below, with `{{QUESTION}}` substituted by the caller's exploration query verbatim. Change no other text.
+   - `task_prompt`: the template defined in the `## Subagent prompt template` section below, with `{{QUESTION}}` substituted by the user's exploration query verbatim. Change no other text.
    - `model: "gpt-5.4"`
 2. Wait for the subagent to return its structured summary.
 3. Relay the summary back to the caller **verbatim**. Do not paraphrase, do not supplement with your own observations, and do not read any source files yourself.
-4. **If the caller asks a follow-up on the SAME topic** (clarification, deeper drill, "and what calls X?"): do not spawn a new subagent, and do not read source in the main session. Instead, continue the same subagent via `send_input` on the saved `agent_id`. Repeat from step 2 with the new summary.
-5. **Only if the new question is genuinely unrelated** to the prior one (different feature area, different concern) should you spawn a fresh exploration subagent by going back to step 1.
+4. **If the caller asks a follow-up on the SAME topic** (clarification, deeper drill, "and what calls X?"): do not dispatch a new subagent, and do not read source in the main session. Instead, continue the same subagent via `send_input` on the saved `agent_id`. Repeat from step 2 with the new summary.
+5. **Only if the new question is genuinely unrelated** to the prior one should you spawn a fresh exploration subagent by going back to step 1.
 </instructions>
 
 <input>
@@ -38,12 +38,15 @@ This is the prompt the dispatcher sends through `my-subagent` in step 1. Substit
 Read ~/.agents/skills/my-explore/dispatch-prompt.md and follow its instructions strictly. Treat the QUESTION below as the <query> referenced in that document.
 
 You are running inside Codex. For source-code exploration, use only the Codex toolset referenced by that document:
-- `rg -n`
-- `mcp__probe__search_code`, `mcp__probe__extract_code`
-- `mcp__ast_grep__find_code`, `mcp__ast_grep__find_code_by_rule`, `mcp__ast_grep__dump_syntax_tree`, `mcp__ast_grep__test_match_code_rule`
-- `mcp__language_server__*` navigation tools
+- `mcp__probe__extract_code`
+- `mcp__probe__search_code`
+- `mcp__ast_grep__find_code`
+- `mcp__ast_grep__find_code_by_rule`
+- `mcp__ast_grep__dump_syntax_tree`
+- `mcp__language_server__*`
+- `rg -n` for non-source text or a first scoped anchor only
 
-Do NOT use built-in `Read` / built-in `Search` / `cat` / `head` / `tail` / `sed` on source code. Do NOT do any MCP resource discovery before exploration.
+Do NOT use built-in `Read` / built-in `Search` / `cat` / `head` / `tail` / `sed` on source code. Do NOT do MCP resource discovery before exploration.
 
 <query>
 {{QUESTION}}
@@ -68,11 +71,11 @@ ACTIONS:
 </example>
 
 <example label="BAD — do not do this">
-ANTI-PATTERN A: Reading `classroom/page.tsx` in the main session "to get a quick look first." Never. The whole point of the dispatcher is to keep source out of main.
-ANTI-PATTERN B: Spawning a new exploration subagent for the follow-up "what calls handleSubmit?" instead of continuing the same `agent_id`. The prior context is wasted, and you pay the bootstrap cost again.
-ANTI-PATTERN C: Paraphrasing or "improving" the subagent's summary before relaying it. Pass it through verbatim.
+ANTI-PATTERN A: Reading `classroom/page.tsx` in the main session "to get a quick look first." Never.
+ANTI-PATTERN B: Spawning a new exploration subagent for the follow-up instead of continuing the same `agent_id`.
+ANTI-PATTERN C: Paraphrasing or "improving" the subagent's summary before relaying it.
 ANTI-PATTERN D: Modifying the prompt template's wording, other than substituting `{{QUESTION}}`.
-ANTI-PATTERN E: Bypassing `my-subagent` and calling `spawn_agent` directly. The `my-subagent` wrapper is the required parent workflow in Codex.
+ANTI-PATTERN E: Bypassing `my-subagent` and calling `spawn_agent` directly.
 </example>
 </examples>
 
@@ -101,7 +104,7 @@ P0 — Main session NEVER reads source code. All source goes through the subagen
 P0 — Use `my-subagent`. Never bypass it with direct child-agent calls.
 P0 — Pass the prompt template VERBATIM. Only substitute `{{QUESTION}}`.
 P0 — Relay the subagent's summary verbatim to the caller. No paraphrasing, no synthesis.
-P1 — Follow-up on the same topic means `send_input` to the existing `agent_id`, not a new subagent.
+P1 — Follow-up on same topic means `send_input` to the existing `agent_id`, not a new subagent.
 P1 — Spawn a fresh exploration subagent only when the new question is genuinely unrelated to the prior one.
 P1 — If you are already inside a subagent, abort this dispatcher and use `my-explore-0` instead.
 </final_reminders>

@@ -1,13 +1,23 @@
-# Trace — how data/control flows across files
+# Trace
+
+The query asks how data or control flows across files. The entry point is identifiable.
 
 ## Steps
 
-1. **Find the entry point** — use **`mcp__probe__search_code`** for a concept query or **`mcp__language_server__get_project_symbols`** when the name is known.
-2. **Extract entry with `lsp: true`** — **only at the entry hop**. This gives body plus callees plus callers in one shot.
-3. **Identify callees** from step 2's call hierarchy. Skip built-in or framework calls.
-4. **Trace callees with plain `extract_code`** — use a batched `files` array, not `lsp: true`. Re-open `lsp: true` only at a hop where you also need its callees.
-5. **Find callers** — use **`mcp__language_server__get_symbol_references`**, never `rg`.
-6. If `#symbol` returns only a single line, retry with `file:line`.
-7. **Summarize** the full flow.
+1. **Find the entry point.** -> `mcp__probe__search_code` when only a concept is known; `mcp__language_server__get_project_symbols` when a name is known.
 
-**Cost rule:** `lsp: true` payloads can be 10–15k tokens each. Use it at most 2–3 times in one Trace task. Plain `extract_code` is the default for all other hops.
+2. **Open the entry with `lsp: true`.** -> `mcp__probe__extract_code files=["<file>#<symbol>"] lsp=true`. This returns body, callees, and callers in one response. **Use this only at the entry hop.**
+
+3. **Identify the next hops** from the call hierarchy returned in step 2. Skip built-in and framework calls.
+
+4. **Trace the next hops with plain `extract_code`.** -> batch them in one call: `mcp__probe__extract_code files=["api/x.ts#fn","store/y.ts#setter"]`. Re-open `lsp: true` only at a later hop where both directions are required again.
+
+5. **Find callers.** -> `mcp__language_server__get_symbol_references`. Never `rg` for callers.
+
+6. **Summarize** the full chain in the `Call edges` slot as `caller → callee` with `file:line`.
+
+## Cost Rule
+
+`lsp: true` payloads run 10–15k tokens each. Use it at most two or three times per Trace task. Plain `extract_code` is the default for all other hops.
+
+**Stop condition:** the full flow is captured from entry to terminal. Typical cost: 3–5 tool calls.

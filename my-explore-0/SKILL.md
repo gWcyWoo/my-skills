@@ -1,77 +1,62 @@
 ---
 name: my-explore-0
-description: MUST invoke for code exploration tasks in Codex when the work must run inline in the current session — same exploration playbook as `my-explore`, but without subagent dispatch.
+description: MUST invoke for code exploration tasks in Codex when running in the main session, or inside a subagent that cannot dispatch. Returns a `file:line`-precise structured summary with no raw source dump.
 ---
 
-<role>
-You are a code exploration specialist running inside the current session with no subagent dispatch. You investigate code, then return a structured `file:line`-precise summary. You never dump raw source into your reply, even though you are in the current session.
-</role>
+<role>Code exploration specialist returning `file:line` structured summaries.</role>
 
-<context>
-The exploration playbook (tool reference, type playbooks, examples, success criteria, output format) lives in `~/.agents/skills/my-explore/dispatch-prompt.md`. That document is the single source of truth for how to explore. This skill exists only to override where the exploration runs.
+<target>
+Locate the code path most relevant to the query and report:
+- **Location** — `file:line` for every relevant file and symbol, each with a one-line role
+- **Flow** — where the value is produced, consumed, and released; for Trace queries, `caller → callee` edges with `file:line`
+- **Behavior** — two to four sentences describing what the code does
+- **Confidence** — `high` / `medium` / `low`, naming the specific gap if not `high`
+</target>
 
-Read `~/.agents/skills/my-explore/dispatch-prompt.md` once at the start of execution, then follow it strictly. Treat the user's question as the `<query>` referenced in that document.
+<steps>
+1. On the first invocation of this skill per session, you MUST read:
 
-**Difference from `my-explore`:**
-- `my-explore` dispatches an isolated exploration subagent through `my-subagent`.
-- `my-explore-0` skips the dispatch and runs the same playbook directly in the current session. Use it when:
-  - The caller is itself a subagent and should not recursively dispatch.
-  - Exploration results must be visible inline for the next current-session step.
-  - The current session is already small and can absorb a focused exploration without harm.
-</context>
+       ~/.agents/skills/my-explore/tool.md
 
-<instructions>
-1. Read `~/.agents/skills/my-explore/dispatch-prompt.md` in full.
-2. Treat the user's question or the caller's passed query as the `<query>` referenced in that document.
-3. Output the 3-line plan block (Classification / Evidence / Plan) before the first tool call, exactly as `dispatch-prompt.md` requires.
-4. Execute the matching branch from the type playbooks in `dispatch-prompt.md`.
-5. Stop the moment every `<output_format>` slot from `dispatch-prompt.md` is filled. Do not run one more check.
-6. Return the answer in the same `<output_format>` shape as `my-explore` would have returned.
-</instructions>
+   Reuse it on follow-up turns.
 
-<input>
-- {{QUESTION}}: the user's exploration query, passed verbatim from the caller.
-</input>
+2. **Classify the query and emit a three-line plan block** before the first tool call:
 
-<examples>
-<example>
-QUESTION: "What does the handleSubmit function in classroom/page.tsx do?"
-ACTIONS:
-  1. Output the 3-line plan block.
-  2. Run `mcp__probe__extract_code` on `classroom/page.tsx#handleSubmit`.
-OUTPUT: Files / Symbols / Behavior / Confidence per `dispatch-prompt.md`. No raw source dump.
-</example>
+       Classification: <Pinpoint | Trace | Discovery | Structural>
+       Evidence: "<exact words from the query that determine the type>"
+       Plan: <one-sentence first action>
 
-<example label="BAD — do not do this">
-ANTI-PATTERN A: Dispatching any subagent. The whole point of `-0` is to not dispatch.
-ANTI-PATTERN B: Skipping the 3-line plan block "because we're already in the current session". The plan block is required regardless of where execution happens.
-ANTI-PATTERN C: Using direct file reads on `.ts`, `.tsx`, `.py`, or similar source files. Even in the current session, source goes through `mcp__probe__extract_code`.
-</example>
-</examples>
+   Classification rules:
+   - A specific symbol, file, or UI label is named → **Pinpoint**
+   - The query asks how data or control flows from A to B → **Trace**
+   - Only abstract concepts appear; nothing is named → **Discovery**
+   - "Find all code matching pattern P" → **Structural**
+   - Domain words alone, for example "rate limiting", are insufficient for Pinpoint — treat as Discovery.
 
-<output_format>
-Use the exact `<output_format>` block from `~/.agents/skills/my-explore/dispatch-prompt.md`:
+3. **Load the matching playbook**:
 
-Files:      path:line per relevant location
-Symbols:    name at file:line, one-line role each
-Behavior:   2–4 sentences on what the code does
-Call edges: caller → callee with file:line   (Trace only)
-Confidence: high | medium | low, with the gap if not high
-</output_format>
+       Pinpoint   → ~/.agents/skills/my-explore/pinpoint.md
+       Trace      → ~/.agents/skills/my-explore/trace.md
+       Discovery  → ~/.agents/skills/my-explore/discovery.md
+       Structural → ~/.agents/skills/my-explore/structural.md
 
-<success_criteria>
-Complete when ALL of these hold:
-- The 3-line plan block was output before the first tool call.
-- Every applicable slot in `<output_format>` is filled with `file:line` precision.
-- No raw source block larger than 10 lines appears in the reply.
-- No subagent dispatch was made.
+4. Before every tool call, print a three-line data block that commits you to one scenario in `tool.md`:
 
-Stop the moment those hold.
-</success_criteria>
+       Have: <data already in hand — file path, symbol name, partial output, or "nothing yet">
+       Want: <data needed next — symbol body, file outline, call sites, etc.>
+       Via:  <the exact <intent> from tool.md that supplies Want>
 
-<final_reminders>
-P0 — Run in the current session. Never dispatch a subagent from this skill.
-P0 — Read `~/.agents/skills/my-explore/dispatch-prompt.md` as your first action and follow every rule in it strictly.
-P0 — Output the 3-line plan block before the first tool call.
-P1 — For follow-up questions in the same conversation, continue exploring in the current session. There is no subagent to resume.
-</final_reminders>
+5. **Execute the playbook.** Stop the moment every item in `<target>` has been reported. Do not run "one more check".
+</steps>
+
+<NEVER>
+- **NEVER use direct file reads on source files** (`.ts/.tsx/.js/.jsx/.py/.go/.rs/.java/.rb/.php/.c/.cpp/.swift/.kt/.vue/.svelte`). Source goes through `mcp__probe__extract_code`. Direct reads are permitted only for non-source files such as `.md/.json/.yaml/.toml/.txt`, configs, and logs.
+- **NEVER use `rg` on source files as a broad browser.** Replacements: `mcp__language_server__get_symbol_references` for callers, `mcp__language_server__get_project_symbols` for name lookup, `mcp__probe__search_code` for concepts, `mcp__ast_grep__find_code` for AST shape. `rg -n` is reserved for non-source files or a first scoped anchor when exact text is known.
+- **NEVER pass a line range to `mcp__probe__extract_code`**. Use a single anchor. If the symbol name is unknown, call `mcp__language_server__get_symbols file_path="<file>"` first, then use `file#<symbol>`.
+- **NEVER pass a bare file path to `mcp__probe__extract_code`**. A path without `#symbol` or `:line` is invalid.
+- **NEVER use regex alternation (`|`) on source files.** If tempted, re-classify the query and pick language server, ast-grep, or `mcp__probe__search_code`.
+- **NEVER open `lsp: true` at more than one hop per Trace.** Open it once at the entry; use plain `extract_code` everywhere else.
+- **NEVER call a subagent from this skill.** The purpose of `-0` is to execute in the current session without dispatching.
+- **NEVER run "one more check"** once every item in `<target>` has been reported.
+- **NEVER paraphrase or extend the playbook** loaded in step 2. Follow it verbatim.
+</NEVER>
