@@ -13,13 +13,13 @@ Read `{procedure_dir}/requirement.md` to get the user's original request (and an
 
 ## Code Navigation
 
-The `my-explore` skill (loaded at session start) is your sole navigation methodology. Follow it exactly.
+The `my-explore` family is your sole navigation methodology. In the main session, use `my-explore`. Inside a subagent that cannot dispatch another exploration subagent, use `my-explore-0`. Follow that exploration playbook exactly.
 
-This file defines analysis steps only. It does not define, refine, or override any code-exploration tool choice, tool sequence, fallback rule, or shell rule. All code-exploration tool usage remains delegated to `my-explore`.
+This file defines analysis steps only. It does not define, refine, or override any code-exploration tool choice, tool sequence, fallback rule, or shell rule. All code-exploration tool usage remains delegated to `my-explore` or `my-explore-0`, which in turn follow `my-explore/dispatch-prompt.md`.
 
 Analyze based on the current codebase state. Do not check git status, git diff, git log, or any version control state — these are irrelevant to requirements analysis and design.
 
-**Do NOT inspect test-file bodies** (`*.test.*`, `*.spec.*`, `__tests__/**`, `*.e2e.*`, `.detoxrc.*`) during requirements analysis. Test files are out of scope for analysis, even if `my-explore` later identifies a related test file that should be listed in Affected Files.
+**Do NOT inspect test-file bodies** (`*.test.*`, `*.spec.*`, `__tests__/**`, `*.e2e.*`, `.detoxrc.*`) during requirements analysis. Test files are out of scope for analysis, even if `my-explore` or `my-explore-0` later identifies a related test file that should be listed in Affected Files.
 
 ## Purpose & Method
 
@@ -106,7 +106,7 @@ Format:
 - AMB-02: "return summary" — what is summary? Possible: (a) first N characters of parsed content; (b) LLM-generated abstract; (c) structured object with key fields. Source and format undefined.
 ```
 
-**Affected Files completeness**: For each file being modified, use `my-explore` to identify any relevant test files or dependent files that should appear in Affected Files. If a test file exists and the modification changes the tested behavior, include the test file in Affected Files. Do not add tool-specific instructions here; `my-explore` decides the method.
+**Affected Files completeness**: For each file being modified, use the `my-explore` family to identify any relevant test files or dependent files that should appear in Affected Files. If a test file exists and the modification changes the tested behavior, include the test file in Affected Files. Do not add tool-specific instructions here; `my-explore` or `my-explore-0` decides the method.
 
 ### AC Writing Rule
 
