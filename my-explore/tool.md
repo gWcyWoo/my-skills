@@ -1,77 +1,101 @@
-# Tool Reference
+<tool_reference>
 
-Shared by `my-explore` and `my-explore-0`.
+<scenarios>
 
-## `probe extract_code` — three modes
+<scenario>
+<intent>The source body (~30 lines) of a specific symbol, identified by name or line anchor.</intent>
+<tool>`probe extract_code files=["<file>#<symbol>"]`. If the symbol name is unknown, call `LSP documentSymbol filePath="<file>"` first to list the file's symbols, then use `file#<symbol>`.</tool>
+<invalid>Line ranges (`file:320-480`); bare file paths with no anchor.</invalid>
+</scenario>
 
-1. **`file#symbol` or `file:line`** — returns the function or class body at the exact anchor (~30 lines).
-   - Use when the symbol name is known, or a `file:line` is already available from another tool's output.
-   - Not `Read`: `Read` returns the whole file (200+ lines); `extract_code` returns only the target symbol.
-   - **Line ranges are forbidden.** `file:320-480` is invalid. Use a single anchor. If the symbol name is unknown, call `LSP documentSymbol filePath="<file>"` first to list symbols, then use `file#<symbol>`.
-   - **Bare file paths are invalid.** The anchor (`#symbol` or `:line`) is required on every entry.
+<scenario>
+<intent>The bodies of N related symbols returned in a single response.</intent>
+<tool>`probe extract_code files=["a#x","b#y","c#z"]`. Prefer one batched call over N narrow calls; every entry must still be `file#symbol` or `file:line`.</tool>
+</scenario>
 
-2. **`lsp: true` flag** — returns the body, callees, and callers in one response.
-   - Expensive: 10–15k tokens per hot symbol.
-   - Use only at the entry hop of a Trace. Every other hop uses plain `extract_code`.
-   - Not a general replacement for LSP. It is a three-dimensional snapshot for one anchor.
+<scenario>
+<intent>A full outline of every symbol declared in a file.</intent>
+<tool>`LSP documentSymbol filePath="<file>"`. Required before `file#symbol` extraction when the file is known but the symbol name is not.</tool>
+</scenario>
 
-3. **Batched `files` array** — returns multiple symbols in one response.
-   - Use when inspecting N related symbols together.
-   - Prefer one batched call over N narrow calls. Every entry must still be `file#symbol` or `file:line`.
+<scenario>
+<intent>The file:line of every declaration matching a given symbol name, across the project.</intent>
+<tool>`LSP workspaceSymbol query="<name>"`. Use when the name is known but the file is not.</tool>
+</scenario>
 
----
+<scenario>
+<intent>Every call site of a symbol — the caller file:line for every reference.</intent>
+<tool>`LSP findReferences symbol="<name>" in="<file>"`. Semantically accurate; `Grep` misses renamed imports, destructured calls, and namespace references.</tool>
+</scenario>
 
-## Other Tools
+<scenario>
+<intent>Every outgoing call made from inside a symbol's body (its callees).</intent>
+<tool>`probe extract_code files=["<file>#<symbol>"]`, then read the call expressions inside the returned body. There is no dedicated outgoing-calls LSP endpoint; the body is the source of truth.</tool>
+</scenario>
 
-- **`probe search_code`** — semantic search by concept. First choice when the exact path is unknown. Always set `path`. **One-shot bootstrap: at most two calls per query.** Stop the moment a concrete symbol surfaces.
-- **`ast-grep find_code`** — AST pattern match. `$NAME` matches one node; `$$$` matches zero or more. Prefer over `Grep` for code structure; no false positives from comments or string literals.
-- **`ast-grep find_code_by_rule`** — the same, with `inside` / `has` / `follows` relations for structural queries.
-- **`ast-grep dump_syntax_tree`** — inspect the AST of a known-good example when a pattern fails to match.
-- **`ast-grep analyze-imports`** — import dependency map. Use `mode: "usage"` for refactoring, `mode: "discovery"` for exploration.
-- **LSP** — `documentSymbol` lists symbols in a file; `workspaceSymbol` finds a symbol by name project-wide; `findReferences` returns callers (**never `Grep` for this**); `goToDefinition`, `goToImplementation`, and `hover` navigate from a position.
-- **`Grep`** — text search on **non-source files only** (`.md/.json/.yaml/.toml/.txt`, configs, logs). Never run on source code.
-- **`Glob`** — find files by name or path pattern. Replaces `ls` and `find`.
-
----
-
-## Tool Selection Matrix
-
-| Intent | Tool |
-|---|---|
-| List symbols in a file | `LSP documentSymbol filePath="<file>"` |
-| Find a symbol by name, project-wide | `LSP workspaceSymbol query="<name>"` |
-| Read one symbol's body | `probe extract_code files=["<file>#<symbol>"]` |
-| Read multiple related symbols | `probe extract_code files=["a#x","b#y","c#z"]` (batched) |
-| Find who calls a symbol | `LSP findReferences symbol="<name>" in="<file>"` |
-| Find what a symbol calls | `probe extract_code` the body, read the calls inside |
-| Trace entry: body + callers + callees in one | `probe extract_code files=["<file>#<symbol>"] lsp=true` (once only) |
-| Concept → concrete symbol bootstrap | `probe search_code query="<keywords>" path="<dir>"` |
-| Files by path pattern (e.g. all `route.ts`) | `Glob pattern="<glob>"` |
-| AST-shape matches | `ast-grep find_code pattern="<pattern>"` |
-| Text in non-source files | `Grep pattern="<text>" path="<dir>"` |
-
----
-
-## `lsp: true` Gate
-
-Open `lsp: true` only when **all three** conditions hold:
-
-1. The exact `file#symbol` is already known (no `workspaceSymbol` or `documentSymbol` step required first).
+<scenario>
+<intent>The body plus every caller plus every callee of one symbol, delivered in a single response. Used at the entry hop of a Trace.</intent>
+<tool>`probe extract_code files=["<file>#<symbol>"] lsp=true`. Expensive (10–15k tokens); open at the entry hop only — every subsequent hop uses plain `extract_code`.</tool>
+<gate>
+Open `lsp: true` only when ALL three conditions hold:
+1. The exact `file#symbol` is already known (no `workspaceSymbol` / `documentSymbol` step needed first).
 2. `extract_code` and `findReferences` will run on the **same** symbol back-to-back.
 3. Callees are also required in the same response.
+If any condition fails, use targeted tools (plain `extract_code` + separate `findReferences` + `documentSymbol`) — 3–5× cheaper.
+</gate>
+</scenario>
 
-If any condition fails, use the targeted tool instead (plain `extract_code`, a separate `findReferences`, or `documentSymbol`). Targeted calls are 3–5× cheaper.
+<scenario>
+<intent>A concrete file:line for a concept described only by domain keywords (no symbol, file, or UI label named).</intent>
+<tool>`probe search_code query="<domain keywords>" path="<scoped dir>" limit=5-10`. One-shot bootstrap: at most two calls per query. Stop the moment a concrete symbol surfaces and switch to `probe extract_code` or `LSP workspaceSymbol`.</tool>
+</scenario>
 
----
+<scenario>
+<intent>The list of files whose paths match a glob pattern.</intent>
+<tool>`Glob pattern="<glob>"`. Replaces `ls` and `find`. Use when the question is "which files match path X", not "which lines contain text Y".</tool>
+</scenario>
 
-## Priority Under Ambiguity
+<scenario>
+<intent>Every code location matching a given AST pattern.</intent>
+<tool>`ast-grep find_code pattern="<language pattern>"` — `$NAME` matches one node, `$$$` matches zero or more. Prefer over `Grep` for code structure: no false positives from comments or string literals.</tool>
+</scenario>
 
+<scenario>
+<intent>A subset of AST matches constrained by an enclosing, contained, or adjacent node.</intent>
+<tool>`ast-grep find_code_by_rule` with `inside` / `has` / `follows`. Use when `find_code` returns too many matches.</tool>
+</scenario>
+
+<scenario>
+<intent>The raw AST shape of a known-good example, to debug a pattern that fails to match.</intent>
+<tool>`ast-grep dump_syntax_tree`. Inspect the tree, then rewrite the pattern to match.</tool>
+</scenario>
+
+<scenario>
+<intent>The import dependency graph of a module or directory.</intent>
+<tool>`ast-grep analyze-imports mode="usage"` (for refactoring) or `mode="discovery"` (for exploration).</tool>
+</scenario>
+
+<scenario>
+<intent>Text occurrences inside non-source files (md / json / yaml / configs / logs).</intent>
+<tool>`Grep pattern="<text>" path="<dir>"`. Always pass `path` or `glob`. Never run on source files — use `LSP`, `ast-grep`, or `probe search_code` for those.</tool>
+</scenario>
+
+<scenario>
+<intent>The raw contents of a non-source file (spec / README / config / log).</intent>
+<tool>`Read file_path="<path>"`. Permitted for `.md/.json/.yaml/.toml/.txt`, configs, and logs. Not for source code.</tool>
+</scenario>
+
+</scenarios>
+
+<priority_under_ambiguity>
 `LSP` (position known) > `ast-grep` (code shape known) > `Grep` (literal text, non-source only) > `probe search_code` (concept only).
+</priority_under_ambiguity>
 
----
-
-## Recovery Rules
-
+<recovery>
 - A tool errored or returned less than expected → fix the arguments and retry the same tool. Never switch to `Read` as a workaround.
 - A suggested file path does not exist → do not enumerate `Glob` variants. Use `probe search_code` with a concept keyword to locate the real file.
 - A location has already been identified → do not re-search to verify. Trust the authoritative tool.
+- You are reaching for regex alternation (`|`) on source files → you are using the wrong tool. Re-classify the query and pick `LSP` / `ast-grep` / `Glob` / `probe search_code`.
+</recovery>
+
+</tool_reference>
