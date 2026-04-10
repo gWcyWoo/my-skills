@@ -36,7 +36,7 @@ Classification rules:
 
 4. **Before every tool call, print one `Thinking:` line.** Every field is MANDATORY.
 
-    Thinking: known=<what data you have>; goal=<what's still missing>; need=<body | callers | file-path | concept-location | references>; tool=<exact tool name>; shortest=<why this is the minimum next step, and what to batch>
+    Thinking: known=<what data you have>; goal=<what's still missing>; need=<body | callers | file-path | concept-location | references>; tool=<name, exact args, tool.md scenario>; shortest=<why this is the minimum next step>
 
    If you cannot fill `tool=`, walk through these steps until you can:
    1. What do I already have? (files, symbols, code bodies) → write `known=`
