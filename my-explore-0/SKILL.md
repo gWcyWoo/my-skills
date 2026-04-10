@@ -33,14 +33,13 @@ Locate the code path most relevant to the query and report:
     - "Find all code matching pattern P" → **Structural** → MUST read `~/.agents/skills/my-explore/structural.md`
     - Domain words alone (e.g. "rate limiting") are insufficient for Pinpoint — treat as Discovery.
 
-4.  Before every tool call, MUST print one structured `Thinking:` line:
+4.  Before every tool call, MUST print one `Thinking:` line that reasons about the shortest path from what you now know to the goal:
 
-        Thinking: state=<current>; need=<what>; action=<tool> <target>; hit=<next>; miss=<fallback>
+        Thinking: known=<what data you have>; goal=<what's still missing>; tool=<exact tool name>; shortest=<why this is the minimum next step, and what to batch>
 
-    This line is a hard precondition for the tool call itself.
-    - The tool call is invalid unless it is immediately preceded by exactly one such `Thinking:` line.
-    - Do not place any prose, summary, separator, or extra commentary between the `Thinking:` line and the tool call.
-    - If a tool call happens without that line, treat the run as invalid and restart from the missing thinking step.
+    Rules for `shortest=`:
+    - If you can name symbols, go straight to `mcp__probe__extract_code file#symbol`. If the name is unknown, use `mcp__probe__search_code` or `mcp__ast_grep__find_code` — never language-server outline tools.
+    - If you need N symbols from different files, batch them in ONE `mcp__probe__extract_code files=[...]` call.
 
 5.  Execute the playbook until every item in `<target>` has been reported. Every failed tool call must do exactly one of:
     - Fix bad arguments and retry, or
@@ -51,5 +50,6 @@ Locate the code path most relevant to the query and report:
 
 <NEVER>
 - **NEVER use direct file reads on source files** (`.ts/.tsx/.js/.jsx/.py/.go/.rs/.java/.rb/.php/.c/.cpp/.swift/.kt/.vue/.svelte`). Source always goes through `mcp__probe__extract_code` (`file#symbol` or `file:line`). Direct reads are permitted only for non-source files (`.md/.json/.yaml/.toml/.txt`, configs, logs).
-- **NEVER issue a tool call without the required `Thinking: state=<current>; need=<what>; action=<tool> <target>; hit=<next>; miss=<fallback>` line immediately above it.** That is an invalid run.
+- **NEVER call `mcp__language_server__get_symbols` or `mcp__language_server__get_project_symbols`.** These tools are banned — they return massive symbol lists that waste tokens. Use `mcp__probe__search_code` or `mcp__ast_grep__find_code` to locate unknown symbols, then `mcp__probe__extract_code file#symbol` to get the body.
+- **NEVER issue a tool call without the required `Thinking:` line immediately above it.** That is an invalid run.
 </NEVER>

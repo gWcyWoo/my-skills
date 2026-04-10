@@ -34,14 +34,13 @@ Classification rules:
 
     ~/.agents/skills/my-explore/tool.md
 
-4. **MUST: Before every tool call, emit one structured `Thinking:` line**:
+4. **Before every tool call, print one `Thinking:` line** that reasons about the shortest path from what you now know to the goal:
 
-    Thinking: state=<current>; need=<what>; action=<tool> <target>; hit=<next>; miss=<fallback>
+    Thinking: known=<what data you have>; goal=<what's still missing>; tool=<exact tool name>; shortest=<why this is the minimum next step, and what to batch>
 
-   This line is a hard precondition for the tool call itself.
-   - The tool call is invalid unless it is immediately preceded by exactly one such `Thinking:` line.
-   - Do not place any prose, summary, separator, or extra commentary between the `Thinking:` line and the tool call.
-   - If a tool call happens without that line, treat the run as invalid and restart from the missing thinking step.
+   Rules for `shortest=`:
+   - If you can name symbols, go straight to `mcp__probe__extract_code file#symbol`. If the name is unknown, use `mcp__probe__search_code` or `mcp__ast_grep__find_code` — never language-server outline tools.
+   - If you need N symbols from different files, batch them in ONE `mcp__probe__extract_code files=[...]` call.
 
 5. **Execute the playbook.** Every failed tool call must do exactly one of:
     - Fix bad arguments and retry, or
@@ -52,12 +51,13 @@ Classification rules:
 
 <NEVER>
 - **NEVER use direct file reads on source files** (`.ts/.tsx/.js/.jsx/.py/.go/.rs/.java/.rb/.php/.c/.cpp/.swift/.kt/.vue/.svelte`). Source goes through `mcp__probe__extract_code`. Direct reads are permitted only for non-source files such as `.md/.json/.yaml/.toml/.txt`, configs, and logs.
-- **NEVER use `rg` on source files as a broad browser.** Replacements: `mcp__language_server__get_symbol_references` for callers, `mcp__language_server__get_project_symbols` for name lookup, `mcp__probe__search_code` for concepts, `mcp__ast_grep__find_code` for AST shape. `rg -n` is reserved for non-source files or a first scoped anchor when exact text is known.
-- **NEVER pass a line range to `mcp__probe__extract_code`**. Use a single anchor. If the symbol name is unknown, call `mcp__language_server__get_symbols file_path="<file>"` first, then use `file#<symbol>`.
+- **NEVER call `mcp__language_server__get_symbols` or `mcp__language_server__get_project_symbols`.** These tools are banned — they return massive symbol lists that waste tokens. Use `mcp__probe__search_code` or `mcp__ast_grep__find_code` to locate unknown symbols, then `mcp__probe__extract_code file#symbol` to get the body.
+- **NEVER use `rg` on source files as a broad browser.** Replacements: `mcp__language_server__get_symbol_references` for callers, `mcp__probe__search_code` for name/concept lookup, `mcp__ast_grep__find_code` for AST shape. `rg -n` is reserved for non-source files or a first scoped anchor when exact text is known.
+- **NEVER pass a line range to `mcp__probe__extract_code`**. Use a single anchor.
 - **NEVER pass a bare file path to `mcp__probe__extract_code`**. A path without `#symbol` or `:line` is invalid.
 - **NEVER use regex alternation (`|`) on source files.** If tempted, re-classify the query and pick language server, ast-grep, or `mcp__probe__search_code`.
 - **NEVER open `lsp: true` at more than one hop per Trace.** Open it once at the entry; use plain `extract_code` everywhere else.
 - **NEVER run "one more check"** once every item in `<target>` has been reported. Stop immediately.
-- **NEVER issue a tool call without the required `Thinking: state=<current>; need=<what>; action=<tool> <target>; hit=<next>; miss=<fallback>` line immediately above it.** That is an invalid run.
+- **NEVER issue a tool call without the required `Thinking:` line immediately above it.** That is an invalid run.
 - **NEVER paraphrase or extend the playbook** loaded in step 2. Follow it verbatim.
 </NEVER>
