@@ -34,13 +34,18 @@ Locate the code path most relevant to the query and report:
     - "Find all code matching pattern P" → **Structural** → MUST read ~/.claude/skills/my-explore/structural.md
     - Domain words alone (e.g. "rate limiting") are insufficient for Pinpoint — treat as Discovery.
 
-4.  Before every tool call, Must print a three-line data block that commits you to one `tool.md` scenario:
+4.  Before every tool call, MUST print a four-line block that commits you to one `tool.md` scenario:
 
     Have: <data already in hand — file path, symbol name, partial output, or "nothing yet">
-    Want: <data needed next — symbol body, file outline, call sites, etc.>
-    Via: <the exact <intent> from tool.md that supplies Want>
+    Need: <the single missing precondition and what you expect to find>
+    If-miss: <what changes if this call returns nothing — new hypothesis, or stage retreat>
+    Via: <the exact <intent> from tool.md that supplies Need>
 
-5.  until every item in `<target>` has been reported. Stop immediately — do not run "one more check".
+5.  Execute the playbook until every item in `<target>` has been reported. Every failed tool call must do exactly one of:
+    - Fix bad arguments and retry, or
+    - State a new hypothesis in `Need` and choose the appropriate tool.
+
+    Never switch tools only to "keep trying" the same unresolved need.
     </steps>
 
 <NEVER>

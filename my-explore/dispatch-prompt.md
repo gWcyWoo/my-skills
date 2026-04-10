@@ -35,7 +35,18 @@ Locate the code path most relevant to the `<query>` and report:
 
        ~/.claude/skills/my-explore/tool.md
 
-4. **Execute the playbook.** Stop the moment every item in `<target>` has been reported. Do not run "one more check".
+4. **Before every tool call, emit a four-line block**:
+
+       Have: <data already in hand — file path, symbol name, partial output, or "nothing yet">
+       Need: <the single missing precondition and what you expect to find>
+       If-miss: <what changes if this call returns nothing — new hypothesis, or stage retreat>
+       Via: <the exact <intent> from tool.md that supplies Need>
+
+5. **Execute the playbook.** Every failed tool call must do exactly one of:
+   - Fix bad arguments and retry, or
+   - State a new hypothesis in `Need` and choose the appropriate tool.
+
+   Stop the moment every item in `<target>` has been reported. Do not run "one more check".
 </steps>
 
 <NEVER>

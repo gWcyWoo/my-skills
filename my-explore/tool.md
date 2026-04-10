@@ -103,6 +103,8 @@ If any condition fails, use targeted tools (plain `extract_code` + separate `fin
 - A location has already been identified → do not re-search to verify. Trust the authoritative tool.
 - You are reaching for regex alternation (`|`) on source files → you are using the wrong tool. Re-classify the query and pick `LSP` / `ast-grep` / `Glob` / `probe search_code`.
 - An LSP call reports "No language servers are currently running" or equivalent → mark LSP unavailable for the rest of this query. Do not retry any LSP calls; switch to `probe extract_code`, `probe search_code`, or `ast-grep`.
+- An exact source file path is already known → keep the search radius file-local until existence and declaration shape are resolved, unless the file path itself is now suspect.
+- Two successive calls failed to confirm the same hypothesis → stop varying tools on that hypothesis. State the new hypothesis first, then choose the next tool.
 - The current question is already answered at this layer → stop. Do not drill into downstream callees or side effects unless the query explicitly asks for them.
 </recovery>
 
