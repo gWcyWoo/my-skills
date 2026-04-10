@@ -34,14 +34,14 @@ Classification rules:
 
     ~/.agents/skills/my-explore/tool.md
 
-4. **MUST: Before every tool call, emit a one-line commitment**:
+4. **MUST: Before every tool call, emit one structured `Thinking:` line**:
 
-    → <tool> <target> (need: <what>; miss → <fallback>)
+    Thinking: state=<current>; need=<what>; action=<tool> <target>; hit=<next>; miss=<fallback>
 
    This line is a hard precondition for the tool call itself.
-   - The tool call is invalid unless it is immediately preceded by exactly one such commitment line.
-   - Do not place any prose, summary, separator, or extra commentary between the commitment line and the tool call.
-   - If a tool call happens without that line, treat the run as invalid and restart from the missing commitment.
+   - The tool call is invalid unless it is immediately preceded by exactly one such `Thinking:` line.
+   - Do not place any prose, summary, separator, or extra commentary between the `Thinking:` line and the tool call.
+   - If a tool call happens without that line, treat the run as invalid and restart from the missing thinking step.
 
 5. **Execute the playbook.** Every failed tool call must do exactly one of:
     - Fix bad arguments and retry, or
@@ -58,6 +58,6 @@ Classification rules:
 - **NEVER use regex alternation (`|`) on source files.** If tempted, re-classify the query and pick language server, ast-grep, or `mcp__probe__search_code`.
 - **NEVER open `lsp: true` at more than one hop per Trace.** Open it once at the entry; use plain `extract_code` everywhere else.
 - **NEVER run "one more check"** once every item in `<target>` has been reported. Stop immediately.
-- **NEVER issue a tool call without the required `→ <tool> <target> (need: <what>; miss → <fallback>)` line immediately above it.** That is an invalid run.
+- **NEVER issue a tool call without the required `Thinking: state=<current>; need=<what>; action=<tool> <target>; hit=<next>; miss=<fallback>` line immediately above it.** That is an invalid run.
 - **NEVER paraphrase or extend the playbook** loaded in step 2. Follow it verbatim.
 </NEVER>

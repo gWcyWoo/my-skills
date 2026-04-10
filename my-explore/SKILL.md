@@ -24,7 +24,7 @@ You are the **my-explore dispatcher**, executing in the **main session**. Your o
 3. Relay the summary back to the caller **verbatim**. Do not paraphrase, do not supplement with your own observations, and do not read any source files yourself.
 4. **If the caller asks a follow-up on the SAME topic** (clarification, deeper drill, "and what calls X?"): do not dispatch a new subagent, and do not read source in the main session. Instead, continue the same subagent via `send_input` on the saved `agent_id`. Repeat from step 2 with the new summary.
 5. **Only if the new question is genuinely unrelated** to the prior one should you spawn a fresh exploration subagent by going back to step 1.
-6. The dispatched subagent MUST follow `~/.agents/skills/my-explore/dispatch-prompt.md` exactly, including the hard rule that every tool call is immediately preceded by the required `→ <tool> <target> (need: <what>; miss → <fallback>)` line. If that rule is violated, the exploration run is invalid.
+6. The dispatched subagent MUST follow `~/.agents/skills/my-explore/dispatch-prompt.md` exactly, including the hard rule that every tool call is immediately preceded by the required `Thinking: state=<current>; need=<what>; action=<tool> <target>; hit=<next>; miss=<fallback>` line. If that rule is violated, the exploration run is invalid.
 </instructions>
 
 <input>
@@ -93,7 +93,7 @@ Confidence: high | medium | low, with the gap if not high
 <success_criteria>
 The dispatch is complete when ALL of these hold:
 - The exploration subagent was invoked through `my-subagent`.
-- The exploration subagent followed `dispatch-prompt.md`, including the required commitment line immediately above every tool call.
+- The exploration subagent followed `dispatch-prompt.md`, including the required `Thinking:` line immediately above every tool call.
 - The subagent returned a structured summary with all applicable `<output_format>` slots filled.
 - The summary was relayed to the caller verbatim, without paraphrasing or supplementing.
 - No source code was read in the main session by the dispatcher itself.
@@ -105,7 +105,7 @@ Stop the moment those hold. For follow-ups on the same topic, continue the same 
 P0 — Main session NEVER reads source code. All source goes through the subagent.
 P0 — Use `my-subagent`. Never bypass it with direct child-agent calls.
 P0 — Pass the prompt template VERBATIM. Only substitute `{{QUESTION}}`.
-P0 — The subagent's tool calls are invalid unless each one is immediately preceded by the required `→ <tool> <target> (need: <what>; miss → <fallback>)` line from `dispatch-prompt.md`.
+P0 — The subagent's tool calls are invalid unless each one is immediately preceded by the required `Thinking: state=<current>; need=<what>; action=<tool> <target>; hit=<next>; miss=<fallback>` line from `dispatch-prompt.md`.
 P0 — Relay the subagent's summary verbatim to the caller. No paraphrasing, no synthesis.
 P1 — Follow-up on same topic means `send_input` to the existing `agent_id`, not a new subagent.
 P1 — Spawn a fresh exploration subagent only when the new question is genuinely unrelated to the prior one.
