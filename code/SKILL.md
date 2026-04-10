@@ -1,34 +1,37 @@
 ---
 name: code
-description: Implementation via isolated `implementer` subagent. Requires pre-loaded `RULES` from caller's `comply` invocation.
+description: Implementation via isolated `implementer` subagent. Loads coding standards via `comply`, then dispatches.
 ---
 
 <role>Coordinator: validate inputs, dispatch `implementer` through `my-subagent`, relay summary.</role>
 
 <instructions>
 
-**Phase 1 — Validate the input bundle (main session).**
+**Phase 1 — Validate inputs (main session).**
 
-1. Confirm all required inputs are present:
-    - `{{REQUIREMENT_SUMMARY}}` — if missing → STOP and tell the caller: _"`code` requires a confirmed requirement summary. Invoke `understand-0` or `understand` first."_
-    - `{{FILES_IN_SCOPE}}` — if missing → STOP and ask the user: _"Which files should the implementation touch?"_
-    - `{{RULES}}` — if missing → STOP and tell the caller: _"`code` requires pre-loaded rules. Invoke `comply` first with the task context, then pass the extract as `RULES`."_
-2. Confirm `{{FILES_IN_SCOPE}}` is non-empty. An empty scope means "nothing to implement" — return `Status: blocked` with `Notes: empty scope`.
+1. Confirm required inputs are present:
+    - `{{REQUIREMENT_SUMMARY}}` — if missing → STOP: _"Invoke `understand-0` or `understand` first."_
+    - `{{FILES_IN_SCOPE}}` — if missing → STOP and ask: _"Which files should the implementation touch?"_
+2. Confirm `{{FILES_IN_SCOPE}}` is non-empty. Empty scope → return `Status: blocked`.
 
-**Phase 2 — Dispatch the `implementer` subagent.**
+**Phase 2 — Load coding standards.**
 
-3. Invoke the `my-subagent` skill with these exact effective inputs:
+3. Invoke the `comply` skill, passing the requirement summary and files in scope. Store the returned rules as `{{RULES}}`.
+
+**Phase 3 — Dispatch the `implementer` subagent.**
+
+4. Invoke the `my-subagent` skill with these exact effective inputs:
     - `agent_type: "worker"`
     - `model: "gpt-5.4"`
     - `task_prompt`: the template defined in the `## Subagent prompt template` section below, with `{{...}}` placeholders substituted from the input bundle. Change no other text in the template.
-4. Save the returned `agent_id` immediately and treat it as the `implementer` handle for follow-up feedback.
+5. Save the returned `agent_id` immediately and treat it as the `implementer` handle for follow-up feedback.
 
-**Phase 3 — Review the subagent summary (main session).**
+**Phase 4 — Review the subagent summary (main session).**
 
-5. When the subagent returns terminal `STATUS: COMPLETE`, present the structured summary that follows the status line to the user **verbatim** (paste it — do not paraphrase, do not add your own commentary about the code content). Then ask the literal question: _"Implementation complete. Would you like to review the diffs in your IDE before running lint and tests?"_
-6. **STOP** and wait for the user. Behavior branches:
-    - If the user says **"no"** / **"proceed"** / **"继续"** / **"skip"** / **"ok"** → return control to the caller (typically `tdd` Step 4 verify) with `Status: ready-for-verify` and the relayed summary in the `<output_format>` block below.
-    - If the user says **"yes"** or provides specific change requests → gather the feedback and send it back to the SAME `agent_id` via `send_input`, passing the user's feedback verbatim. Continue the same `my-subagent` wait loop, then loop back to step 5. Spawn a fresh `implementer` agent only if the scope has fundamentally changed (different files entirely).
+6. When the subagent returns terminal `STATUS: COMPLETE`, present the structured summary that follows the status line to the user **verbatim**. Then ask: _"Implementation complete. Would you like to review the diffs in your IDE before running lint and tests?"_
+7. **STOP** and wait for the user.
+    - **"no"** / **"proceed"** / **"继续"** / **"skip"** / **"ok"** → return `Status: ready-for-verify` with the relayed summary.
+    - **"yes"** or specific change requests → `send_input(target: "<agent_id>", message: "<feedback verbatim>")`, wait for new summary, loop back to step 6.
       </instructions>
 
 ## Subagent prompt template
@@ -36,7 +39,7 @@ description: Implementation via isolated `implementer` subagent. Requires pre-lo
 Substitute `{{...}}` placeholders with values from the input bundle. **Do not modify any other text.**
 
 ```
-You are the `implementer` subagent. Write implementation code, self-check against rules, and return a structured summary (no diffs).
+You are the `implementer` subagent. Write implementation code, self-check against rules, return a structured summary (no diffs).
 
 <task>
 Requirement: {{REQUIREMENT_SUMMARY}}
@@ -49,7 +52,7 @@ Red test files (optional — your goal is to make them turn green): {{TEST_FILES
 </rules>
 
 <instructions>
-1. Think through the requirement against the files in scope. For any source-code exploration, invoke the `my-explore-0` skill. Never read source files directly and never bypass that skill for ad hoc probing.
+1. Think through the requirement against the files in scope. For any code exploration, invoke the `my-explore-0` skill (never use Read/Grep/probe/LSP on source directly).
 2. If red test files were passed, use `my-explore-0` to read and understand the test contract. Do NOT modify the tests.
 3. Implement the change, touching ONLY files listed in `<task>` → `Files in scope`. Use `apply_patch` for manual edits, including genuinely new files when needed.
 4. **Self-check against `<rules>`**: re-read each rule section and verify the diff complies. Fix any violations before returning.
