@@ -11,11 +11,9 @@ Locate the code path most relevant to the `<query>` and report:
 </target>
 
 <steps>
-1. **Classify `<query>` and emit a three-line plan block** before the first tool call:
+1. **Classify `<query>` and emit a one-line classification** before the first tool call:
 
-       Classification: <Pinpoint | Trace | Discovery | Structural>
-       Evidence: "<exact words from <query> that determine the type>"
-       Plan: <one-sentence first action>
+       ⊕ <Pinpoint|Trace|Discovery|Structural>: "<evidence>" → <first action>
 
    Classification rules:
    - A specific symbol, file, or UI label is named → **Pinpoint**
@@ -35,16 +33,13 @@ Locate the code path most relevant to the `<query>` and report:
 
        ~/.claude/skills/my-explore/tool.md
 
-4. **Before every tool call, emit a four-line block**:
+4. **Before every tool call, emit a one-line commitment**:
 
-       Have: <data already in hand — file path, symbol name, partial output, or "nothing yet">
-       Need: <the single missing precondition and what you expect to find>
-       If-miss: <what changes if this call returns nothing — new hypothesis, or stage retreat>
-       Via: <the exact <intent> from tool.md that supplies Need>
+       → <tool> <target> (need: <what>; miss → <fallback>)
 
 5. **Execute the playbook.** Every failed tool call must do exactly one of:
    - Fix bad arguments and retry, or
-   - State a new hypothesis in `Need` and choose the appropriate tool.
+   - State a new hypothesis and choose the appropriate tool.
 
    Stop the moment every item in `<target>` has been reported. Do not run "one more check".
 </steps>
