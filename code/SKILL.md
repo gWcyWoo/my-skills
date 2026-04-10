@@ -14,24 +14,20 @@ description: Implementation via isolated `implementer` subagent. Loads coding st
     - `{{FILES_IN_SCOPE}}` — if missing → STOP and ask: _"Which files should the implementation touch?"_
 2. Confirm `{{FILES_IN_SCOPE}}` is non-empty. Empty scope → return `Status: blocked`.
 
-**Phase 2 — Load coding standards.**
+**Phase 2 — Dispatch the `implementer` subagent.**
 
-3. Invoke the `comply` skill, passing the requirement summary and files in scope. Store the returned rules as `{{RULES}}`.
-
-**Phase 3 — Dispatch the `implementer` subagent.**
-
-4. Call the `Agent` tool with these exact parameters:
+3. Call the `Agent` tool with these exact parameters:
     - `subagent_type: "general-purpose"`
     - `name: "implementer"` (named handle for follow-up via `SendMessage`)
     - `model: "opus"`
     - `prompt`: the template defined in the `## Subagent prompt template` section below, with `{{...}}` placeholders substituted from the input bundle. Change no other text in the template.
 
-**Phase 4 — Review the subagent summary (main session).**
+**Phase 3 — Review the subagent summary (main session).**
 
-5. When the subagent returns, present its structured summary to the user **verbatim**. Then ask: _"Implementation complete. Would you like to review the diffs in your IDE before running lint and tests?"_
-6. **STOP** and wait for the user.
+4. When the subagent returns, present its structured summary to the user **verbatim**. Then ask: _"Implementation complete. Would you like to review the diffs in your IDE before running lint and tests?"_
+5. **STOP** and wait for the user.
     - **"no"** / **"proceed"** / **"继续"** / **"skip"** / **"ok"** → return `Status: ready-for-verify` with the relayed summary.
-    - **"yes"** or specific change requests → `SendMessage(to: "implementer", message: "<feedback verbatim>")`, wait for new summary, loop back to step 5.
+    - **"yes"** or specific change requests → `SendMessage(to: "implementer", message: "<feedback verbatim>")`, wait for new summary, loop back to step 4.
       </instructions>
 
 ## Subagent prompt template
@@ -39,7 +35,7 @@ description: Implementation via isolated `implementer` subagent. Loads coding st
 Substitute `{{...}}` placeholders with values from the input bundle. **Do not modify any other text.**
 
 ```
-You are the `implementer` subagent. Write implementation code, self-check against rules, return a structured summary (no diffs).
+You are the `implementer` subagent. Write implementation code, load rules from diff, self-check, return a structured summary (no diffs).
 
 <task>
 Requirement: {{REQUIREMENT_SUMMARY}}
@@ -47,17 +43,14 @@ Files in scope (touch ONLY these): {{FILES_IN_SCOPE}}
 Red test files (optional — your goal is to make them turn green): {{TEST_FILES}}
 </task>
 
-<rules>
-{{RULES}}
-</rules>
-
 <instructions>
 1. Think through the requirement against the files in scope. For any code exploration, invoke the `my-explore-0` skill (never use Read/Grep/probe/LSP on source directly).
 2. If red test files were passed, use `my-explore-0` to read and understand the test contract. Do NOT modify the tests.
 3. Implement the change, touching ONLY files listed in `<task>` → `Files in scope`. Use `Edit` for existing files and `Write` only for files that genuinely do not yet exist.
-4. **Self-check against `<rules>`**: re-read each rule section and verify the diff complies. Fix any violations before returning.
-5. **Red-test reasoning**: if red test files were passed, REASON whether your implementation would turn them green. If any red test already passes BEFORE your implementation (tautology), surface it in Notes with Status:blocked.
-6. Return ONLY the structured summary in the subagent output_format below. No diff paste, no code blocks longer than 3 lines, no rule text dumps.
+4. **Load coding standards from diff.** Run `git diff` on the changed files, then invoke the `comply` skill, passing the diff and the file list.
+5. **Self-check against comply rules**: re-read each rule section comply returned and verify the diff complies. Fix any violations before returning.
+6. **Red-test reasoning**: if red test files were passed, REASON whether your implementation would turn them green. If any red test already passes BEFORE your implementation (tautology), surface it in Notes with Status:blocked.
+7. Return ONLY the structured summary in the subagent output_format below. No diff paste, no code blocks longer than 3 lines, no rule text dumps.
 </instructions>
 
 <subagent_output_format>
