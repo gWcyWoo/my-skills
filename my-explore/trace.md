@@ -13,7 +13,7 @@ The query asks how data or control flows across files. The goal is to build one 
 2. **Open the entry anchor.**
    - If the exact `file#symbol` is known and both callers and callees are needed, use `probe extract_code files=["<file>#<symbol>"] lsp=true` at the entry hop only.
    - Otherwise use plain `probe extract_code`.
-   Record the current anchor before proceeding.
+   Before proceeding, confirm in your `Thinking:` line whether the entry anchor is confirmed, weakened, or broken.
 
 3. **Advance one hop at a time.**
    For each hop, identify exactly one justified next anchor from the current anchor.
@@ -21,10 +21,10 @@ The query asks how data or control flows across files. The goal is to build one 
    Disallowed question: "What else in the repo mentions this concept?"
 
 4. **Keep the chain anchored.**
-   Every subsequent step must be expressed as:
+   Every subsequent `Thinking:` line must name:
    - current anchor
    - next anchor
-   - why this is the next hop
+   - why this is the shortest next hop
    Once an anchor exists, do not return to broad `probe search_code` unless the chain is broken and you explicitly say so.
 
 5. **Use narrow fallback when LSP is unavailable.**

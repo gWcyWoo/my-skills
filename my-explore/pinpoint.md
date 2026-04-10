@@ -17,8 +17,8 @@ Work in this order and do not skip a stage:
    - Do not ask caller/callee questions while Existence or Shape is unresolved.
 
 2. **Resolve Existence and Shape file-locally first.**
-   - **Symbol name known, file unknown** → `LSP workspaceSymbol query="<name>"`
-   - **File known, symbol unknown** → `LSP documentSymbol filePath="<file>"`, then pick the symbol from the outline
+   - **Symbol name known, file unknown** → `probe search_code query="<name>"` to locate the file, then `extract_code file#symbol`
+   - **File known, symbol unknown** → `probe search_code` or `ast-grep find_code` scoped to the file, then `extract_code file#symbol`
    - **File known, code shape unresolved** → `ast-grep find_code` scoped to the known file or nearest directory
    - **UI text or literal known** → `ast-grep find_code` on the JSX or template pattern, or `Grep` on **non-source files only** (i18n, templates, markdown)
    - Do not widen to project-wide search while a known file still has unresolved Existence or Shape.

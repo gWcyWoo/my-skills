@@ -34,9 +34,13 @@ Classification rules:
 
     ~/.claude/skills/my-explore/tool.md
 
-4. **MUST: Before every tool call, MUST thinking and MUST print this line — no line, no call:**
+4. **Before every tool call, print one `Thinking:` line** that reasons about the shortest path from what you now know to the goal:
 
-    → <tool> <target> (need: <what>; miss → <fallback>)
+    Thinking: known=<what data you have>; goal=<what's still missing>; tool=<exact tool name>; shortest=<why this is the minimum next step, and what to batch>
+
+   Rules for `shortest=`:
+   - If you can name symbols, go straight to `extract_code file#symbol`. If the name is unknown, use `probe search_code` or `ast-grep find_code` — never LSP outline tools.
+   - If you need N symbols from different files, batch them in ONE `extract_code files=[...]` call.
 
 5. **Execute the playbook.** Every failed tool call must do exactly one of:
     - Fix bad arguments and retry, or
@@ -47,11 +51,13 @@ Classification rules:
 
 <NEVER>
 - **NEVER use `Read` on source files** (`.ts/.tsx/.js/.jsx/.py/.go/.rs/.java/.rb/.php/.c/.cpp/.swift/.kt/.vue/.svelte`). Source goes through `probe extract_code`. `Read` is permitted only for non-source files (`.md/.json/.yaml/.toml/.txt`, configs, logs).
-- **NEVER use `Grep` on source files.** Replacements: `LSP findReferences` for callers · `LSP workspaceSymbol` for name lookup · `Glob` for path patterns · `probe search_code` for concepts · `ast-grep` for AST shape. `Grep` is reserved for non-source files.
-- **NEVER pass a line range to `probe extract_code`** (`file:320-480` is forbidden). Use a single anchor. If the symbol name is unknown, call `LSP documentSymbol filePath="<file>"` first, then use `file#<symbol>`.
+- **NEVER call LSP `documentSymbol` or `workspaceSymbol`.** These tools are banned — they return massive symbol lists that waste tokens. Use `probe search_code` or `ast-grep find_code` to locate unknown symbols, then `extract_code file#symbol` to get the body.
+- **NEVER use `Grep` on source files.** Replacements: `LSP findReferences` for callers · `probe search_code` for name/concept lookup · `Glob` for path patterns · `ast-grep` for AST shape. `Grep` is reserved for non-source files.
+- **NEVER pass a line range to `probe extract_code`** (`file:320-480` is forbidden). Use a single anchor.
 - **NEVER pass a bare file path to `probe extract_code`** — a path without `#symbol` or `:line` is invalid.
 - **NEVER use regex alternation (`|`) on source files.** If tempted, re-classify the query and pick `LSP`, `ast-grep`, `Glob`, or `probe search_code`.
 - **NEVER open `lsp: true` at more than one hop per Trace.** Open it once at the entry; use plain `extract_code` everywhere else.
 - **NEVER run "one more check"** once every item in `<target>` has been reported. Stop immediately.
+- **NEVER issue a tool call without the required `Thinking:` line immediately above it.** That is an invalid run.
 - **NEVER paraphrase or extend the playbook** loaded in step 2. Follow it verbatim.
 </NEVER>

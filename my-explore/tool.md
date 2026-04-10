@@ -4,7 +4,7 @@
 
 <scenario>
 <intent>The source body (~30 lines) of a specific symbol, identified by name or line anchor.</intent>
-<tool>`probe extract_code files=["<file>#<symbol>"]`. If the symbol name is unknown, call `LSP documentSymbol filePath="<file>"` first to list the file's symbols, then use `file#<symbol>`. When both file and symbol are already known (even approximately), go straight to `file#symbol` — do not call `documentSymbol`, `workspaceSymbol`, `search_code`, or `ast-grep` first.</tool>
+<tool>`probe extract_code files=["<file>#<symbol>"]`. If the symbol name is unknown, use `probe search_code` or `ast-grep find_code` to locate it first. When both file and symbol are already known (even approximately), go straight to `file#symbol`.</tool>
 <note>`file:line` returns the AST node at that line, NOT the enclosing function/method. If you want the enclosing block, find its symbol name first, then use `file#symbol`.</note>
 <invalid>Line ranges (`file:320-480`); bare file paths with no anchor; `file:line` when the target is the enclosing block rather than the node at that line.</invalid>
 </scenario>
@@ -14,17 +14,7 @@
 <tool>`probe extract_code files=["a#x","b#y","c#z"]`. Prefer one batched call over N narrow calls; every entry must still be `file#symbol` or `file:line`.</tool>
 </scenario>
 
-<scenario>
-<intent>A full outline of every symbol declared in a file.</intent>
-<tool>`LSP documentSymbol filePath="<file>"`. If LSP reports unavailable/not running, fall back to `probe extract_code files=["<file>#"]` (empty symbol = file outline) or `ast-grep analyze-imports`.</tool>
-<gate>Use ONLY when the file is known but the symbol name is genuinely unknown. If you can name the symbol (even approximately), skip this and go straight to `probe extract_code files=["<file>#<symbol>"]`. Do not use documentSymbol as a "see what's in the file" step before an extraction you already know the target for.</gate>
-</scenario>
 
-<scenario>
-<intent>The file:line of every declaration matching a given symbol name, across the project.</intent>
-<tool>`LSP workspaceSymbol query="<name>"`. Use when the name is known but the file is not.</tool>
-<gate>Never use when the file is already known — use `documentSymbol` (if symbol unknown) or `extract_code file#symbol` (if symbol known) instead.</gate>
-</scenario>
 
 <scenario>
 <intent>Every call site of a symbol — the caller file:line for every reference.</intent>
@@ -41,16 +31,16 @@
 <tool>`probe extract_code files=["<file>#<symbol>"] lsp=true`. Expensive (10–15k tokens); open at the entry hop only — every subsequent hop uses plain `extract_code`.</tool>
 <gate>
 Open `lsp: true` only when ALL three conditions hold:
-1. The exact `file#symbol` is already known (no `workspaceSymbol` / `documentSymbol` step needed first).
+1. The exact `file#symbol` is already known.
 2. `extract_code` and `findReferences` will run on the **same** symbol back-to-back.
 3. Callees are also required in the same response.
-If any condition fails, use targeted tools (plain `extract_code` + separate `findReferences` + `documentSymbol`) — 3–5× cheaper.
+If any condition fails, use targeted tools (plain `extract_code` + separate `findReferences`) — 3–5× cheaper.
 </gate>
 </scenario>
 
 <scenario>
 <intent>A concrete file:line for a concept described only by domain keywords (no symbol, file, or UI label named).</intent>
-<tool>`probe search_code query="<domain keywords>" path="<scoped dir>" limit=5-10`. One-shot bootstrap: at most two calls per query. Stop the moment a concrete symbol surfaces and switch to `probe extract_code` or `LSP workspaceSymbol`.</tool>
+<tool>`probe search_code query="<domain keywords>" path="<scoped dir>" limit=5-10`. One-shot bootstrap: at most two calls per query. Stop the moment a concrete symbol surfaces and switch to `probe extract_code`.</tool>
 </scenario>
 
 <scenario>
@@ -85,7 +75,7 @@ If any condition fails, use targeted tools (plain `extract_code` + separate `fin
 
 <scenario>
 <intent>The enclosing function / method / callback for a matched line or AST hit.</intent>
-<tool>Find the enclosing symbol name first (via `LSP documentSymbol` or `probe extract_code files=["<file>#"]`), then `probe extract_code files=["<file>#<enclosing_symbol>"]`. Do NOT use `file:line` — it returns the node at that line, not the enclosing block.</tool>
+<tool>Find the enclosing symbol name first (via `probe search_code` or `probe extract_code files=["<file>#"]`), then `probe extract_code files=["<file>#<enclosing_symbol>"]`. Do NOT use `file:line` — it returns the node at that line, not the enclosing block.</tool>
 </scenario>
 
 <scenario>
