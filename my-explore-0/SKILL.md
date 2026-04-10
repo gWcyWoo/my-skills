@@ -22,11 +22,9 @@ Locate the code path most relevant to the query and report:
 
 2. On the first invocation of this skill per session, you MUST read `~/.agents/skills/my-explore/tool.md`. Reuse it on follow-up turns.
 
-3. Classify the query and emit a three-line plan block before the first tool call:
+3. Classify the query and emit a one-line classification before the first tool call:
 
-       Classification: <Pinpoint | Trace | Discovery | Structural>
-       Evidence: "<exact words from the query that determine the type>"
-       Plan: <one-sentence first action>
+       ⊕ <Pinpoint|Trace|Discovery|Structural>: "<evidence>" → <first action>
 
    Classification rules — each rule names the playbook you MUST read for this query:
    - A specific symbol, file, or UI label is named → **Pinpoint** → MUST read `~/.agents/skills/my-explore/pinpoint.md`
@@ -35,19 +33,15 @@ Locate the code path most relevant to the query and report:
    - "Find all code matching pattern P" → **Structural** → MUST read `~/.agents/skills/my-explore/structural.md`
    - Domain words alone (e.g. "rate limiting") are insufficient for Pinpoint — treat as Discovery.
 
-4. Before every tool call, print a five-line uncertainty block that commits you to one `tool.md` scenario:
+4. Before every tool call, MUST print a one-line commitment that names the tool, target, need, and fallback:
 
-       Have: <data already in hand — file path, symbol name, partial output, or "nothing yet">
-       Need: <the single missing precondition for the current stage — existence, shape, body, callers, or provenance>
-       Hypothesis: <what this tool call is testing>
-       If false: <how the task state changes if the hypothesis fails>
-       Via: <the exact <intent> from tool.md that supplies Need>
+       → <tool> <target> (need: <what>; miss → <fallback>)
 
-5. Execute the playbook until every item in `<target>` has been reported. Every failed tool call must do exactly one of two things before the next tool call:
-   - Fix bad arguments and retry the same hypothesis, or
-   - Explicitly change the hypothesis or stage.
+5. Execute the playbook until every item in `<target>` has been reported. Every failed tool call must do exactly one of:
+   - Fix bad arguments and retry, or
+   - State a new hypothesis and choose the appropriate tool.
 
-   Never switch tools only to "keep trying" the same unresolved hypothesis.
+   Never switch tools only to "keep trying" the same unresolved need.
 </steps>
 
 <NEVER>
