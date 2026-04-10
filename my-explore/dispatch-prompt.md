@@ -35,7 +35,19 @@ Locate the code path most relevant to the `<query>` and report:
 
        ~/.agents/skills/my-explore/tool.md
 
-4. **Execute the playbook.** Stop the moment every item in `<target>` has been reported. Do not run "one more check".
+4. **Before every tool call, emit a five-line uncertainty block**:
+
+       Have: <data already in hand — file path, symbol name, partial output, or "nothing yet">
+       Need: <the single missing precondition for the current stage — existence, shape, body, callers, or provenance>
+       Hypothesis: <what this tool call is testing>
+       If false: <how the task state changes if the hypothesis fails>
+       Via: <the exact <intent> from tool.md that supplies Need>
+
+5. **Execute the playbook.** Every failed tool call must do exactly one of two things before the next tool call:
+   - Fix bad arguments and retry the same hypothesis, or
+   - Explicitly change the hypothesis or stage.
+
+   Stop the moment every item in `<target>` has been reported. Do not run "one more check".
 </steps>
 
 <NEVER>

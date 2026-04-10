@@ -10,6 +10,12 @@
 </scenario>
 
 <scenario>
+<intent>A first scoped anchor inside a known source file or its nearest relevant directory, when the exact file is already known but existence or declaration shape is unresolved.</intent>
+<tool>`rg -n "<exact text>" <known-file-or-nearest-dir>`. This is the only allowed `rg` use on source files: the exact path is already known, the exact text being tested is known, and the goal is to anchor existence or declaration shape before switching back to `mcp__probe__extract_code` or `mcp__ast_grep__find_code`.</tool>
+<note>Use this to test narrow hypotheses like `POST`, `export`, `handler`, `NextResponse`, or an exact UI literal. Do not use it to browse source broadly. If the exact text is not known, use `mcp__ast_grep__find_code` or `mcp__probe__search_code` instead.</note>
+</scenario>
+
+<scenario>
 <intent>The bodies of N related symbols returned in a single response.</intent>
 <tool>`mcp__probe__extract_code files=["a#x","b#y","c#z"]`. Prefer one batched call over N narrow calls; every entry must still be `file#symbol` or `file:line`.</tool>
 </scenario>
@@ -91,7 +97,7 @@ If any condition fails, use targeted tools instead: plain `extract_code` + separ
 </scenarios>
 
 <priority_under_ambiguity>
-Language server (position known) > ast-grep (code shape known) > `rg -n` (literal text, non-source only) > `mcp__probe__search_code` (concept only).
+Language server (position known) > ast-grep (code shape known) > `rg -n` (literal text, non-source or first scoped source anchor only) > `mcp__probe__search_code` (concept only).
 </priority_under_ambiguity>
 
 <recovery>
@@ -99,6 +105,8 @@ Language server (position known) > ast-grep (code shape known) > `rg -n` (litera
 - A suggested file path does not exist → do not enumerate path guesses. Use `mcp__probe__search_code` with a concept keyword to locate the real file.
 - A location has already been identified → do not re-search to verify. Trust the authoritative tool.
 - A language-server call reports that no server is running or available → mark LSP unavailable for the rest of this query. Do not retry other language-server calls unless the server is explicitly started; switch to `mcp__probe__extract_code`, `mcp__probe__search_code`, or `mcp__ast_grep__*`.
+- An exact source file path is already known → keep the search radius file-local until existence and declaration shape are resolved, unless the file path itself is now suspect.
+- Two successive calls failed to confirm the same hypothesis → stop varying tools on that hypothesis. State the new hypothesis first, then choose the next tool.
 - The current question is already answered at the current layer → stop. Do not drill into downstream callees or side effects unless the query explicitly asks for them.
 - You are reaching for regex alternation (`|`) on source files → you are using the wrong tool. Re-classify the query and pick language server, ast-grep, or `mcp__probe__search_code`.
 </recovery>
