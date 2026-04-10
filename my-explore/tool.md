@@ -4,7 +4,7 @@
 
 <scenario>
 <intent>The source body (~30 lines) of a specific symbol, identified by name or line anchor.</intent>
-<tool>`probe extract_code files=["<file>#<symbol>"]`. If the symbol name is unknown, call `LSP documentSymbol filePath="<file>"` first to list the file's symbols, then use `file#<symbol>`. When both file and symbol are already known, go straight to `file#symbol` — do not re-search with `search_code`, `ast-grep`, or `workspaceSymbol`.</tool>
+<tool>`probe extract_code files=["<file>#<symbol>"]`. If the symbol name is unknown, call `LSP documentSymbol filePath="<file>"` first to list the file's symbols, then use `file#<symbol>`. When both file and symbol are already known (even approximately), go straight to `file#symbol` — do not call `documentSymbol`, `workspaceSymbol`, `search_code`, or `ast-grep` first.</tool>
 <note>`file:line` returns the AST node at that line, NOT the enclosing function/method. If you want the enclosing block, find its symbol name first, then use `file#symbol`.</note>
 <invalid>Line ranges (`file:320-480`); bare file paths with no anchor; `file:line` when the target is the enclosing block rather than the node at that line.</invalid>
 </scenario>
@@ -16,12 +16,14 @@
 
 <scenario>
 <intent>A full outline of every symbol declared in a file.</intent>
-<tool>`LSP documentSymbol filePath="<file>"`. Required before `file#symbol` extraction when the file is known but the symbol name is not. If LSP reports unavailable/not running, fall back to `probe extract_code files=["<file>#"]` (empty symbol = file outline) or `ast-grep analyze-imports`.</tool>
+<tool>`LSP documentSymbol filePath="<file>"`. If LSP reports unavailable/not running, fall back to `probe extract_code files=["<file>#"]` (empty symbol = file outline) or `ast-grep analyze-imports`.</tool>
+<gate>Use ONLY when the file is known but the symbol name is genuinely unknown. If you can name the symbol (even approximately), skip this and go straight to `probe extract_code files=["<file>#<symbol>"]`. Do not use documentSymbol as a "see what's in the file" step before an extraction you already know the target for.</gate>
 </scenario>
 
 <scenario>
 <intent>The file:line of every declaration matching a given symbol name, across the project.</intent>
 <tool>`LSP workspaceSymbol query="<name>"`. Use when the name is known but the file is not.</tool>
+<gate>Never use when the file is already known — use `documentSymbol` (if symbol unknown) or `extract_code file#symbol` (if symbol known) instead.</gate>
 </scenario>
 
 <scenario>
