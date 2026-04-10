@@ -34,7 +34,7 @@ Locate the code path most relevant to the query and report:
 
 4.  Before every tool call, MUST print one `Thinking:` line. Every field is MANDATORY.
 
-        Thinking: known=<what data you have>; goal=<what's still missing>; need=<body | callers | file-path | concept-location | references>; tool=<name, exact args, tool.md scenario>; shortest=<why this is the minimum next step>
+        Thinking: known=<what data you have>; goal=<what's still missing>; need=<body | callers | file-path | concept-location | references>; tool=<name, exact args, tool.md scenario>; why-not-simpler=<is there a more direct tool? Check: (1) if I have a line number, what symbol is at that line? use file#symbol — file:line only returns one AST node, file#symbol returns the full function body; (2) can I use extract_code instead of search? (3) search_code instead of Grep on source?>
 
     If you cannot fill `tool=`, walk through these steps until you can:
     1. What do I already have? (files, symbols, code bodies) → write `known=`
