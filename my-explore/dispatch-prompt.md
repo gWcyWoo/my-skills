@@ -15,34 +15,40 @@ Locate the code path most relevant to the `<query>` and report:
 
        ⊕ <Pinpoint|Trace|Discovery|Structural>: "<evidence>" → <first action>
 
-   Classification rules:
-   - A specific symbol, file, or UI label is named → **Pinpoint**
-   - The query asks how data or control flows from A to B → **Trace**
-   - Only abstract concepts appear; nothing is named → **Discovery**
-   - "Find all code matching pattern P" → **Structural**
-   - Domain words alone (e.g. "rate limiting") are insufficient for Pinpoint — treat as Discovery.
+Classification rules:
+
+- A specific symbol, file, or UI label is named → **Pinpoint**
+- The query asks how data or control flows from A to B → **Trace**
+- Only abstract concepts appear; nothing is named → **Discovery**
+- "Find all code matching pattern P" → **Structural**
+- Domain words alone (e.g. "rate limiting") are insufficient for Pinpoint — treat as Discovery.
 
 2. **Load the matching playbook** (Read once):
 
-       Pinpoint   → ~/.agents/skills/my-explore/pinpoint.md
-       Trace      → ~/.agents/skills/my-explore/trace.md
-       Discovery  → ~/.agents/skills/my-explore/discovery.md
-       Structural → ~/.agents/skills/my-explore/structural.md
+    Pinpoint → ~/.agents/skills/my-explore/pinpoint.md
+    Trace → ~/.agents/skills/my-explore/trace.md
+    Discovery → ~/.agents/skills/my-explore/discovery.md
+    Structural → ~/.agents/skills/my-explore/structural.md
 
 3. **Load the tool reference** (Read once per session; reuse on follow-up turns):
 
-       ~/.agents/skills/my-explore/tool.md
+    ~/.agents/skills/my-explore/tool.md
 
-4. **Before every tool call, emit a one-line commitment**:
+4. **MUST: Before every tool call, emit a one-line commitment**:
 
-       → <tool> <target> (need: <what>; miss → <fallback>)
+    → <tool> <target> (need: <what>; miss → <fallback>)
+
+   This line is a hard precondition for the tool call itself.
+   - The tool call is invalid unless it is immediately preceded by exactly one such commitment line.
+   - Do not place any prose, summary, separator, or extra commentary between the commitment line and the tool call.
+   - If a tool call happens without that line, treat the run as invalid and restart from the missing commitment.
 
 5. **Execute the playbook.** Every failed tool call must do exactly one of:
-   - Fix bad arguments and retry, or
-   - State a new hypothesis and choose the appropriate tool.
+    - Fix bad arguments and retry, or
+    - State a new hypothesis and choose the appropriate tool.
 
-   Stop the moment every item in `<target>` has been reported. Do not run "one more check".
-</steps>
+    Stop the moment every item in `<target>` has been reported. Do not run "one more check".
+    </steps>
 
 <NEVER>
 - **NEVER use direct file reads on source files** (`.ts/.tsx/.js/.jsx/.py/.go/.rs/.java/.rb/.php/.c/.cpp/.swift/.kt/.vue/.svelte`). Source goes through `mcp__probe__extract_code`. Direct reads are permitted only for non-source files such as `.md/.json/.yaml/.toml/.txt`, configs, and logs.
@@ -52,5 +58,6 @@ Locate the code path most relevant to the `<query>` and report:
 - **NEVER use regex alternation (`|`) on source files.** If tempted, re-classify the query and pick language server, ast-grep, or `mcp__probe__search_code`.
 - **NEVER open `lsp: true` at more than one hop per Trace.** Open it once at the entry; use plain `extract_code` everywhere else.
 - **NEVER run "one more check"** once every item in `<target>` has been reported. Stop immediately.
+- **NEVER issue a tool call without the required `→ <tool> <target> (need: <what>; miss → <fallback>)` line immediately above it.** That is an invalid run.
 - **NEVER paraphrase or extend the playbook** loaded in step 2. Follow it verbatim.
 </NEVER>

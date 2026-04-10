@@ -37,6 +37,11 @@ Locate the code path most relevant to the query and report:
 
        → <tool> <target> (need: <what>; miss → <fallback>)
 
+   This line is a hard precondition for the tool call itself.
+   - The tool call is invalid unless it is immediately preceded by exactly one such commitment line.
+   - Do not place any prose, summary, separator, or extra commentary between the commitment line and the tool call.
+   - If a tool call happens without that line, treat the run as invalid and restart from the missing commitment.
+
 5. Execute the playbook until every item in `<target>` has been reported. Every failed tool call must do exactly one of:
    - Fix bad arguments and retry, or
    - State a new hypothesis and choose the appropriate tool.
@@ -46,4 +51,5 @@ Locate the code path most relevant to the query and report:
 
 <NEVER>
 - **NEVER use direct file reads on source files** (`.ts/.tsx/.js/.jsx/.py/.go/.rs/.java/.rb/.php/.c/.cpp/.swift/.kt/.vue/.svelte`). Source always goes through `mcp__probe__extract_code` (`file#symbol` or `file:line`). Direct reads are permitted only for non-source files (`.md/.json/.yaml/.toml/.txt`, configs, logs).
+- **NEVER issue a tool call without the required `→ <tool> <target> (need: <what>; miss → <fallback>)` line immediately above it.** That is an invalid run.
 </NEVER>
