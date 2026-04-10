@@ -34,13 +34,21 @@ Classification rules:
 
     ~/.agents/skills/my-explore/tool.md
 
-4. **Before every tool call, print one `Thinking:` line** that reasons about the shortest path from what you now know to the goal:
+4. **Before every tool call, print one `Thinking:` line.** Every field is MANDATORY.
 
-    Thinking: known=<what data you have>; goal=<what's still missing>; tool=<exact tool name>; shortest=<why this is the minimum next step, and what to batch>
+    Thinking: known=<what data you have>; goal=<what's still missing>; need=<body | callers | file-path | concept-location | references>; tool=<name, exact args, tool.md scenario>; shortest=<why this is the minimum next step>
 
-   Rules for `shortest=`:
-   - If you can name symbols, go straight to `mcp__probe__extract_code file#symbol`. If the name is unknown, use `mcp__probe__search_code` or `mcp__ast_grep__find_code` — never language-server outline tools.
-   - If you need N symbols from different files, batch them in ONE `mcp__probe__extract_code files=[...]` call.
+   If you cannot fill `tool=`, walk through these steps until you can:
+   1. What do I already have? (files, symbols, code bodies) → write `known=`
+   2. What single piece of data am I missing next? → write `goal=`
+   3. What kind of data is that? Pick one:
+      - I need the **source body** of a symbol I can name → `need=body` → `tool=mcp__probe__extract_code`
+      - I need to know **who calls** a symbol → `need=callers` → `tool=mcp__language_server__get_symbol_references`
+      - I need to find **which file** something is in → `need=file-path` → `tool=rg --files`
+      - I need to find code by **keyword or concept** → `need=concept-location` → `tool=mcp__probe__search_code`
+      - I need **all usages** of a symbol → `need=references` → `tool=mcp__language_server__get_symbol_references`
+   4. If you can name the symbol, always choose `mcp__probe__extract_code` over any search tool.
+   5. If you need N symbol bodies, batch them: ONE `mcp__probe__extract_code files=[...]` call.
 
 5. **Execute the playbook.** Every failed tool call must do exactly one of:
     - Fix bad arguments and retry, or
