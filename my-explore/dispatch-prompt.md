@@ -36,7 +36,7 @@ Classification rules:
 
 4. **Before every tool call, print one `Thinking:` line.** Every field is MANDATORY.
 
-    Thinking: known=<what data you have>; goal=<what's still missing>; need=<body | callers | file-path | concept-location | references>; tool=<name, exact args, tool.md scenario>; why-not-simpler=<is there a more direct tool? Check: (1) if I have a line number, what symbol is at that line? use file#symbol — file:line only returns one AST node, file#symbol returns the full function body; (2) can I use extract_code instead of search? (3) search_code instead of Grep on source?>
+    Thinking: known=<what data you have>; goal=<what's still missing>; need=<body | callers | file-path | concept-location | references>; tool=<name, exact args, tool.md scenario>; why-not-simpler=<Check: (1) am I passing a bare file path? use search_code scoped to that file instead; (2) do I have a line number? find the symbol name, use file#symbol — file:line only returns one AST node; (3) can I use extract_code file#symbol instead of search? (4) search_code instead of Grep on source?>
 
    If you cannot fill `tool=`, walk through these steps until you can:
    1. What do I already have? (files, symbols, code bodies) → write `known=`
@@ -60,6 +60,7 @@ Classification rules:
 <NEVER>
 - **NEVER use `Read` on source files** (`.ts/.tsx/.js/.jsx/.py/.go/.rs/.java/.rb/.php/.c/.cpp/.swift/.kt/.vue/.svelte`). Source goes through `probe extract_code`. `Read` is permitted only for non-source files (`.md/.json/.yaml/.toml/.txt`, configs, logs).
 - **NEVER call LSP `documentSymbol` or `workspaceSymbol`.** These tools are banned — they return massive symbol lists that waste tokens. Use `probe search_code` or `ast-grep find_code` to locate unknown symbols, then `extract_code file#symbol` to get the body.
+- **NEVER pass a bare file path to `extract_code`** (no `#symbol` or `:line`). A bare path dumps the whole file, wasting context. If you don't know symbol names in a file, use `probe search_code` scoped to that file to find the specific symbols first.
 - **NEVER use `Grep` on source files.** Replacements: `LSP findReferences` for callers · `probe search_code` for name/concept lookup · `Glob` for path patterns · `ast-grep` for AST shape. `Grep` is reserved for non-source files.
 - **NEVER pass a line range to `probe extract_code`** (`file:320-480` is forbidden). Use a single anchor.
 - **NEVER pass a bare file path to `probe extract_code`** — a path without `#symbol` or `:line` is invalid.
