@@ -32,13 +32,21 @@ Locate the code path most relevant to the query and report:
     - "Find all code matching pattern P" → **Structural** → MUST read ~/.claude/skills/my-explore/structural.md
     - Domain words alone (e.g. "rate limiting") are insufficient for Pinpoint — treat as Discovery.
 
-4.  Before every tool call, MUST print one `Thinking:` line that reasons about the shortest path from what you now know to the goal:
+4.  Before every tool call, MUST print one `Thinking:` line. Every field is MANDATORY.
 
-        Thinking: known=<what data you have>; goal=<what's still missing>; tool=<exact tool name>; shortest=<why this is the minimum next step, and what to batch>
+        Thinking: known=<what data you have>; goal=<what's still missing>; need=<body | callers | file-path | concept-location | references>; tool=<exact tool name>; shortest=<why this is the minimum next step, and what to batch>
 
-    Rules for `shortest=`:
-    - If you can name symbols, go straight to `extract_code file#symbol`. If the name is unknown, use `probe search_code` or `ast-grep find_code` — never LSP outline tools.
-    - If you need N symbols from different files, batch them in ONE `extract_code files=[...]` call.
+    If you cannot fill `tool=`, walk through these steps until you can:
+    1. What do I already have? (files, symbols, code bodies) → write `known=`
+    2. What single piece of data am I missing next? → write `goal=`
+    3. What kind of data is that? Pick one:
+       - I need the **source body** of a symbol I can name → `need=body` → `tool=extract_code`
+       - I need to know **who calls** a symbol → `need=callers` → `tool=LSP findReferences`
+       - I need to find **which file** something is in → `need=file-path` → `tool=Glob`
+       - I need to find code by **keyword or concept** → `need=concept-location` → `tool=probe search_code`
+       - I need **all usages** of a symbol → `need=references` → `tool=LSP findReferences`
+    4. If you can name the symbol, always choose `extract_code` over any search tool.
+    5. If you need N symbol bodies, batch them: ONE `extract_code files=[...]` call.
 
 5.  Execute the playbook until every item in `<target>` has been reported. Every failed tool call must do exactly one of:
     - Fix bad arguments and retry, or
