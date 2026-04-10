@@ -32,7 +32,7 @@ Locate the code path most relevant to the query and report:
     - "Find all code matching pattern P" → **Structural** → MUST read ~/.claude/skills/my-explore/structural.md
     - Domain words alone (e.g. "rate limiting") are insufficient for Pinpoint — treat as Discovery.
 
-4.  Before every tool call, MUST print a one-line commitment that names the tool, target, need, and fallback:
+4.  **MUST: Before every tool call, MUST thinking and MUST print this line — no line, no call:**
 
         → <tool> <target> (need: <what>; miss → <fallback>)
 

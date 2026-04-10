@@ -15,34 +15,35 @@ Locate the code path most relevant to the `<query>` and report:
 
        ⊕ <Pinpoint|Trace|Discovery|Structural>: "<evidence>" → <first action>
 
-   Classification rules:
-   - A specific symbol, file, or UI label is named → **Pinpoint**
-   - The query asks how data or control flows from A to B → **Trace**
-   - Only abstract concepts appear; nothing is named → **Discovery**
-   - "Find all code matching pattern P" → **Structural**
-   - Domain words alone (e.g. "rate limiting") are insufficient for Pinpoint — treat as Discovery.
+Classification rules:
+
+- A specific symbol, file, or UI label is named → **Pinpoint**
+- The query asks how data or control flows from A to B → **Trace**
+- Only abstract concepts appear; nothing is named → **Discovery**
+- "Find all code matching pattern P" → **Structural**
+- Domain words alone (e.g. "rate limiting") are insufficient for Pinpoint — treat as Discovery.
 
 2. **Load the matching playbook** (Read once):
 
-       Pinpoint   → ~/.claude/skills/my-explore/pinpoint.md
-       Trace      → ~/.claude/skills/my-explore/trace.md
-       Discovery  → ~/.claude/skills/my-explore/discovery.md
-       Structural → ~/.claude/skills/my-explore/structural.md
+    Pinpoint → ~/.claude/skills/my-explore/pinpoint.md
+    Trace → ~/.claude/skills/my-explore/trace.md
+    Discovery → ~/.claude/skills/my-explore/discovery.md
+    Structural → ~/.claude/skills/my-explore/structural.md
 
 3. **Load the tool reference** (Read once per session; reuse on follow-up turns):
 
-       ~/.claude/skills/my-explore/tool.md
+    ~/.claude/skills/my-explore/tool.md
 
-4. **Before every tool call, emit a one-line commitment**:
+4. **MUST: Before every tool call, MUST thinking and MUST print this line — no line, no call:**
 
-       → <tool> <target> (need: <what>; miss → <fallback>)
+    → <tool> <target> (need: <what>; miss → <fallback>)
 
 5. **Execute the playbook.** Every failed tool call must do exactly one of:
-   - Fix bad arguments and retry, or
-   - State a new hypothesis and choose the appropriate tool.
+    - Fix bad arguments and retry, or
+    - State a new hypothesis and choose the appropriate tool.
 
-   Stop the moment every item in `<target>` has been reported. Do not run "one more check".
-</steps>
+    Stop the moment every item in `<target>` has been reported. Do not run "one more check".
+    </steps>
 
 <NEVER>
 - **NEVER use `Read` on source files** (`.ts/.tsx/.js/.jsx/.py/.go/.rs/.java/.rb/.php/.c/.cpp/.swift/.kt/.vue/.svelte`). Source goes through `probe extract_code`. `Read` is permitted only for non-source files (`.md/.json/.yaml/.toml/.txt`, configs, logs).
