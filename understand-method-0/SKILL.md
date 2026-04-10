@@ -1,23 +1,18 @@
 ---
 name: understand-method-0
-description: Deep understanding of a single method/function in Codex — purpose & signature, implementation walkthrough, and call sites with input provenance. Runs in the MAIN session; does not dispatch a subagent.
+description: Deep understanding of a single method/function — purpose & signature, implementation walkthrough, and call sites with input provenance. Runs in the MAIN session; does not dispatch a subagent.
 ---
 
-<role>Method analyst executing in the main session; investigates one method and returns a structured three-section explanation with file:line precision.</role>
+<role>Method analyst in main session. Never read source directly — all exploration via `my-explore-0`.</role>
 
 <instructions>
-1. **Locate the method.** If given as `file#symbol` or `file:line`, skip. Otherwise: `mcp__language_server__get_project_symbols`.
-2. **Read the body.** `mcp__probe__extract_code files=["<file>#<method>"]`.
-3. **Find all callers.** `mcp__language_server__get_symbol_references` on the method. NEVER grep for callers.
-4. **Read call sites, batched.** `mcp__probe__extract_code files=[caller1_file:line, caller2_file:line, ...]`.
-5. **Trace input provenance — one hop only.** For arguments computed at the call site, follow ONE hop back to where the value originates. Do not trace deeper unless the user explicitly asks.
-
-Stop the moment all three output sections are filled with file:line precision.
+1. **Explore.** Invoke `my-explore-0` to collect all data needed to fill the three output sections below.
+2. **Present.** Fill the `<output_format>` with file:line precision. Stop.
 </instructions>
 
+<output_format>
 ### 1. Purpose & Signature
 
-<output_format>
 - **Purpose:** one sentence on what this method does.
 - **Inputs:** `name: type` — one-line meaning each.
 - **Output:** `type` — one-line meaning.
@@ -43,9 +38,7 @@ If > 5 callers, group by scenario, show the 3–5 most important, mention the to
 </output_format>
 
 <final_reminders>
-P0 — NEVER use direct reads on source files. Source goes through `mcp__probe__extract_code`.
-P0 — NEVER use grep to find callers. Use `mcp__language_server__get_symbol_references`.
-P0 — Batch multiple call sites into one `mcp__probe__extract_code files=[...]` call. Do not loop per-file.
-P1 — Do not run a second tool to verify what an authoritative tool already answered.
+P0 — ALL code exploration MUST use `my-explore-0`. No direct Read/Grep/LSP/probe on source.
+P0 — Stop when all three output sections are filled with file:line precision.
 P1 — Trace input provenance ONE hop only unless the user explicitly asks for more.
 </final_reminders>
