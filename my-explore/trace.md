@@ -1,59 +1,76 @@
 # Trace
 
-The query asks how data or control flows across files. The goal is to build one anchored chain, not to broadly search related code.
+The query asks how data or control flows across files. The goal is to answer the user's question by reading code and squeezing maximum insight from every piece of data before reaching for more.
 
-## Steps
+## Core principle
 
-1. **Resolve the entry anchor.**
-   The first goal is not "find related code", but to obtain one concrete entry anchor:
-   - `file#symbol`, or
-   - `file:line`
-   If only a concept is known, use one bootstrap search to get the first anchor. Do not continue until the anchor is concrete.
+**Think before you fetch.** After every tool call, exhaust what you can derive from data already in hand. Only call another tool when you hit something you genuinely cannot deduce from existing data.
 
-2. **Open the entry anchor.**
-   - If the exact `file#symbol` is known and both callers and callees are needed, use `mcp__probe__extract_code files=["<file>#<symbol>"] lsp=true` at the entry hop only.
-   - Otherwise use plain `mcp__probe__extract_code`.
-   Before proceeding, confirm in your `Thinking:` line whether the entry anchor is confirmed, weakened, or broken.
+## Before every tool call — mandatory Derive block
 
-3. **Advance one hop at a time.**
-   For each hop, identify exactly one justified next anchor from the current anchor.
-   Allowed question: "From this anchor, what is the next relevant symbol or storage boundary in the flow?"
-   Disallowed question: "What else in the repo mentions this concept?"
+Before ANY tool call (including the first one), print this block. Every field is mandatory.
 
-4. **Keep the chain anchored.**
-   Every subsequent `Thinking:` line must name:
-   - current anchor
-   - next anchor
-   - why this is the shortest next hop
-   Once an anchor exists, do not return to broad `mcp__probe__search_code` unless the chain is broken and you explicitly say so.
+```
+Goal: <the user's question in one sentence>
+Missing: <what you still don't know to answer the goal>
 
-5. **Use narrow fallback when LSP is unavailable.**
-   If language server is unavailable:
-   - stay in the current file or nearest relevant directory
-   - use AST shape search (`mcp__ast_grep__find_code`) to get the next anchor
-   - do not widen to repo-wide concept search while the current chain is still localizable
+Have:
+- <file:line — concrete code line or fact you already obtained>
+- <file:line — another one>
+- (list everything relevant you have so far)
 
-6. **Trace callers only when the query needs reverse flow.**
-   Use `mcp__language_server__get_symbol_references`. Never `rg` for callers.
-   Do not branch into caller tracing unless the question actually asks for reverse flow.
+Derive:
+- From <file:line>: <what this tells us> → Missing updates: <what is no longer missing>
+- From <file:line>: <what this tells us> → next hop is <symbol> because <code says so>
+- From <file:line> + <file:line>: <combined inference> → can now confirm <conclusion>
+- ... (keep going until you cannot derive anything more from Have)
+- STUCK: <the specific thing you need that cannot be derived from any data in Have>
 
-7. **Summarize as an anchor chain.**
-   Report `Call edges` as:
-   `anchor A → anchor B → anchor C`
-   Each edge must be justified by code opened from the prior anchor.
+Decision:
+- ANSWER: Have + Derive is enough to answer Goal → write the answer, no more tool calls
+- FETCH: STUCK names a concrete symbol/event visible in Have → tool call to get it
+- GAP: STUCK names something not visible in any data in Have → mark [gap], do not search
+```
 
-## Drift Rules
+Rules for the Derive block:
+- Every Derive line must reference a specific `file:line` from Have. No line, no derivation.
+- Derive is a multi-step chain. Keep deriving until no more conclusions can be drawn.
+- STUCK must name ONE specific thing. "I need more context" is not valid. "I need the listener for EVENT_RESUME_UPLOADED which appears at upload.service.ts:45" is valid.
+- Decision FETCH is only allowed when STUCK names a symbol that literally appears in Have. If it doesn't appear in Have, the decision is GAP.
 
-A Trace run is drifting if any of these happen:
-- two consecutive steps fail to produce a new anchor
-- broad search resumes after a concrete anchor already exists
-- multiple unrelated branches are pursued in parallel
-- a new subsystem is opened without proving its connection to the current anchor
+## Flow
 
-If drift occurs, stop and restate the current anchor, the missing link, and the next single hypothesis.
+### Step 1 — Bootstrap
 
-## Cost Rule
+The only step where concept search is allowed. Use `mcp__probe__search_code` or `rg -n` to find the entry point.
 
-Use `lsp: true` only at the entry hop or at a later hop where both directions are required again. Plain `extract_code` is the default.
+Print the Derive block before this call. At this point Have may be empty or contain only the user's query context — that's fine. STUCK should be "entry point for [concept] is unknown."
 
-**Stop condition:** the full flow is captured as one anchored chain from entry to terminal. Typical cost: 3–5 tool calls.
+### Step 2+ — Derive-then-fetch loop
+
+After each tool call:
+1. Add the new data to Have
+2. Run Derive — squeeze everything you can from all data in Have
+3. If Decision = ANSWER → stop, write the answer
+4. If Decision = FETCH → make the tool call, then return to step 1
+5. If Decision = GAP → mark it, check if you can still ANSWER with gaps; if not, report partial answer
+
+### Answer
+
+When Decision = ANSWER, write:
+- **Flow**: the chain `A (file:line) → B (file:line) → C (file:line)`, with `[gap: reason]` for unresolved links
+- **Behavior**: what happens at each step, derived from code you read
+- **Gaps**: what you could not confirm and why
+
+## Rules
+
+- **No searching for symbols not in Have.** Every FETCH target must be a symbol literally visible in code you already read. Guessing names is forbidden.
+- **No re-searching.** If a search returns nothing, try ONE alternative term. If that also fails, it's a GAP.
+- **Concept search only in Step 1.** After Step 1, all tool calls must target specific symbols/files extracted from Have.
+- **Prefer `file#symbol` over `file:line` for extract_code.** `file:line` returns the node at that line; `file#symbol` returns the full function body.
+- **Batch when possible.** If Derive identifies multiple FETCH targets, use ONE `mcp__probe__extract_code files=[...]` call.
+- **Maximum 5 tool calls.** If you hit 5, stop and ANSWER with what you have.
+
+## Boundary
+
+Use the boundary declared in the skill entrypoint. If a FETCH target would cross the boundary, do not fetch it — mark it `[gap: crosses boundary into X]` and continue Derive with remaining data.

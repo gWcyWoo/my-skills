@@ -8,7 +8,7 @@ description: MUST invoke for code exploration tasks (search, find, trace, explai
 <target>
 Locate the code path most relevant to the query and report:
 - **Location** — `file:line` for every relevant file and symbol, each with a one-line role
-- **Flow** — where the value is produced, consumed, and released; for Trace queries, `caller → callee` edges with `file:line`
+- **Flow** — where the value is produced, consumed, and released; for Trace queries, report only the in-boundary `caller → callee` edges with `file:line`
 - **Behavior** — two to four sentences describing what the code does
 </target>
 
@@ -33,23 +33,31 @@ Locate the code path most relevant to the query and report:
     - "Find all code matching pattern P" → **Structural** → MUST read `~/.agents/skills/my-explore/structural.md`
     - Domain words alone (e.g. "rate limiting") are insufficient for Pinpoint — treat as Discovery.
 
-4.  Before every tool call, MUST print one `Thinking:` line. Every field is MANDATORY.
+4.  After classification and before the first tool call, MUST print exactly one `Boundary:` block:
 
-        Thinking: known=<what data you have>; goal=<what's still missing>; need=<body | callers | file-path | concept-location | references>; tool=<name, exact args, tool.md scenario>; shortest=<why this is the minimum next step>
+        Boundary:
+        - Do: <what this trace will cover to answer the query>
+        - Not do: <related branches that are out of scope unless they become required to answer the query>
+        - Stop at: <the first handoff or condition where the trace is complete>
 
-    If you cannot fill `tool=`, walk through these steps until you can:
-    1. What do I already have? (files, symbols, code bodies) → write `known=`
-    2. What single piece of data am I missing next? → write `goal=`
-    3. What kind of data is that? Pick one:
-       - I need the **source body** of a symbol I can name → `need=body` → `tool=mcp__probe__extract_code`
-       - I need to know **who calls** a symbol → `need=callers` → `tool=mcp__language_server__get_symbol_references`
-       - I need to find **which file** something is in → `need=file-path` → `tool=rg --files`
-       - I need to find code by **keyword or concept** → `need=concept-location` → `tool=mcp__probe__search_code`
-       - I need **all usages** of a symbol → `need=references` → `tool=mcp__language_server__get_symbol_references`
-    4. If you can name the symbol, always choose `mcp__probe__extract_code` over any search tool.
-    5. If you need N symbol bodies, batch them: ONE `mcp__probe__extract_code files=[...]` call.
+    Rules for the `Boundary:` block:
+    - It must be specific to this query. Never use fixed presets or architecture-specific categories.
+    - Every later exploration step must remain inside this declared boundary.
+    - If the next hop would cross the boundary, stop at that handoff and report it instead of following it.
+    - Change the boundary only if the user explicitly widens or changes the question.
 
-5.  Execute the playbook until every item in `<target>` has been reported. Every failed tool call must do exactly one of:
+5.  Before every tool call, MUST print exactly one merged `Thinking:` block:
+
+        Thinking:
+        - <current step>
+        - **Boundary checking**: <why this directly serves the user's actual question and stays within the declared `Boundary` and `<target>`>
+        - **Best tool**: <tool>(<parameter names only>) — <matching scenario in tool preference>; simpler alternative: <tool1 or none>; decision: <use tool1 / keep tool>
+
+    Rules for the `Thinking:` block:
+    - The tool line must name only the intended parameter fields, not the full concrete argument payload.
+    - The purpose is to force correct tool selection and usage shape, not to log or preview the exact runtime arguments.
+
+6.  Execute the playbook until every item in `<target>` has been reported. Every failed tool call must do exactly one of:
     - Fix bad arguments and retry, or
     - State a new hypothesis and choose the appropriate tool.
 
@@ -60,4 +68,5 @@ Locate the code path most relevant to the query and report:
 - **NEVER use direct file reads on source files** (`.ts/.tsx/.js/.jsx/.py/.go/.rs/.java/.rb/.php/.c/.cpp/.swift/.kt/.vue/.svelte`). Source always goes through `mcp__probe__extract_code` (`file#symbol` or `file:line`). Direct reads are permitted only for non-source files (`.md/.json/.yaml/.toml/.txt`, configs, logs).
 - **NEVER call `mcp__language_server__get_symbols` or `mcp__language_server__get_project_symbols`.** These tools are banned — they return massive symbol lists that waste tokens. Use `mcp__probe__search_code` or `mcp__ast_grep__find_code` to locate unknown symbols, then `mcp__probe__extract_code file#symbol` to get the body.
 - **NEVER issue a tool call without the required `Thinking:` line immediately above it.** That is an invalid run.
+- **NEVER use `Thinking:` as a fill-in form.** It must justify why this exact tool call is the shortest path right now.
 </NEVER>
