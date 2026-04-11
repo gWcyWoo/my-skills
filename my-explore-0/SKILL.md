@@ -32,21 +32,20 @@ Locate the code path most relevant to the query and report:
     - "Find all code matching pattern P" → **Structural** → MUST read ~/.claude/skills/my-explore/structural.md
     - Domain words alone (e.g. "rate limiting") are insufficient for Pinpoint — treat as Discovery.
 
-4.  Before every tool call, MUST print one `Thinking:` line. Every field is MANDATORY.
+4.  Before every tool call, MUST print a `Thinking:` block. Every line is MANDATORY — if you can't fill `tool:`, you're not ready to call.
 
-        Thinking: known=<what data you have>; goal=<what's still missing>; need=<body | callers | file-path | concept-location | references>; tool=<name, exact args, tool.md scenario>; why-not-simpler=<Check: (1) am I passing a bare file path? use search_code scoped to that file instead; (2) do I have a line number? find the symbol name, use file#symbol — file:line only returns one AST node; (3) can I use extract_code file#symbol instead of search? (4) search_code instead of Grep on source?>
+        Thinking:
+        <what am I looking for?>
+        <what files, symbols, or code do I already have?>
+        <tool name, exact args — check: bare path→search_code scoped; line number→file#symbol; can extract_code replace search?; search_code replace Grep?>
 
-    If you cannot fill `tool=`, walk through these steps until you can:
-    1. What do I already have? (files, symbols, code bodies) → write `known=`
-    2. What single piece of data am I missing next? → write `goal=`
-    3. What kind of data is that? Pick one:
-       - I need the **source body** of a symbol I can name → `need=body` → `tool=extract_code`
-       - I need to know **who calls** a symbol → `need=callers` → `tool=LSP findReferences`
-       - I need to find **which file** something is in → `need=file-path` → `tool=Glob`
-       - I need to find code by **keyword or concept** → `need=concept-location` → `tool=probe search_code`
-       - I need **all usages** of a symbol → `need=references` → `tool=LSP findReferences`
-    4. If you can name the symbol, always choose `extract_code` over any search tool.
-    5. If you need N symbol bodies, batch them: ONE `extract_code files=[...]` call.
+    How to decide `tool:`:
+    - I need **source body** of a symbol I can name → `extract_code file#symbol`
+    - I need to know **who calls** a symbol → `LSP findReferences`
+    - I need to find **which file** → `Glob`
+    - I need to find code by **keyword** → `probe search_code`
+    - Can name the symbol? Always prefer `extract_code`.
+    - Need N bodies? Batch: ONE `extract_code files=[...]` call.
 
 5.  Execute the playbook until every item in `<target>` has been reported. Every failed tool call must do exactly one of:
     - Fix bad arguments and retry, or
