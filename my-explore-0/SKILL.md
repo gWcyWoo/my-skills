@@ -22,12 +22,12 @@ Locate the code path most relevant to the query and report:
 
 2.  On the first invocation of this skill per session, you MUST read `~/.agents/skills/my-explore/tool.md`. Reuse it on follow-up turns.
 
-3.  Before every tool call, MUST print exactly one `Derive` block:
+3.  Before every tool call, MUST print exactly one `Thinking` block:
 
         Goal: <the user's question in one sentence>
         Missing: <what you still don't know to answer the goal>
 
-        Derive:
+        Thinking:
         - From <file:line>: <what this tells us> → Missing updates: <what is no longer missing>
         - From <file:line> + <file:line>: <combined inference> → can now confirm <conclusion>
         - ... (keep deriving until no more conclusions can be drawn from data you already read)
@@ -35,21 +35,23 @@ Locate the code path most relevant to the query and report:
 
         Decision: ANSWER / FETCH / GAP
         (if FETCH):
-        Tool: <tool>(key params) — matches tool.md scenario: "<quote the matching scenario>"
-        Better? Check tool.md and NEVER rules: is there a tool that achieves the same result with fewer tokens or simpler invocation, and is the chosen tool allowed by NEVER rules? → <yes: replace with X / no: keep>
-        Final: <the tool to actually call>
+        Tool: <chosen tool>(key params)
+        Rejected: <alternative tool>(key params) | none
+        Reason: chosen matches tool.md scenario: "<quote the matching scenario>"; reject <alternative tool or none> because <specific reason tied to tool.md, NEVER rules, scope fit, or token cost>
 
     Rules:
-    - Every Derive line must reference a specific `file:line` from code you already read. No citation, no derivation.
+    - Every Thinking line must reference a specific `file:line` from code you already read. No citation, no derivation.
     - Keep deriving until no more conclusions can be drawn. Do not stop after one line.
     - STUCK must name ONE specific thing with a concrete symbol reference. "I need more context" is not valid.
-    - ANSWER: Derive is enough to answer Goal → write the answer, no more tool calls.
+    - ANSWER: Thinking is enough to answer Goal → write the answer, no more tool calls.
     - FETCH: STUCK names a concrete symbol that literally appears in code you already read → tool call to get it.
     - GAP: STUCK names something not visible in any code you already read → mark [gap], do not search.
+    - `Rejected` must name one plausible alternative if one exists; otherwise write `none`.
+    - `Reason` must justify both sides: why the chosen tool fits and why the rejected alternative loses. Generic claims like "better", "simpler", or "more appropriate" are invalid.
     - Before the first tool call, you have no code data yet — STUCK should be "entry point for [concept] is unknown."
     - Concept search (`mcp__probe__search_code`) is only allowed for the first tool call (bootstrap). After that, all FETCH targets must come from symbols in read code.
     - If a search returns nothing, try ONE alternative term. If that also fails, it's a GAP.
-    - Batch when possible: if Derive identifies multiple FETCH targets, use ONE `mcp__probe__extract_code files=[...]` call.
+    - Batch when possible: if Thinking identifies multiple FETCH targets, use ONE `mcp__probe__extract_code files=[...]` call.
     - Prefer `file#symbol` over `file:line` for extract_code. `file:line` returns the node at that line; `file#symbol` returns the full function body.
     - Maximum 5 tool calls. If you hit 5, stop and ANSWER with what you have.
 
@@ -62,6 +64,6 @@ Locate the code path most relevant to the query and report:
 <NEVER>
 - **NEVER use direct file reads on source files** (`.ts/.tsx/.js/.jsx/.py/.go/.rs/.java/.rb/.php/.c/.cpp/.swift/.kt/.vue/.svelte`). Source always goes through `mcp__probe__extract_code` (`file#symbol` or `file:line`). Direct reads are permitted only for non-source files (`.md/.json/.yaml/.toml/.txt`, configs, logs).
 - **NEVER call `mcp__language_server__get_symbols` or `mcp__language_server__get_project_symbols`.** These tools are banned — they return massive symbol lists that waste tokens. Use `mcp__probe__search_code` or `mcp__ast_grep__find_code` to locate unknown symbols, then `mcp__probe__extract_code file#symbol` to get the body.
-- **NEVER issue a tool call without the required `Derive` block immediately above it.** That is an invalid run.
-- **NEVER use `Derive` as a fill-in form.** Every line must reference concrete `file:line` and derive a specific conclusion.
+- **NEVER issue a tool call without the required `Thinking` block immediately above it.** That is an invalid run.
+- **NEVER use `Thinking` as a fill-in form.** Every line must reference concrete `file:line` and derive a specific conclusion.
 </NEVER>

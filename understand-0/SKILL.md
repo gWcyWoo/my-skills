@@ -18,16 +18,26 @@ description: Use as the lightweight understanding step (no formal HLD, MAIN-sess
 
 Symptom: <one sentence, user's words>
 Root cause: <one sentence + file:line>
-Fix approach:<one sentence>
-Files in scope: path:line, one per line
+Fix approach: <one sentence>
+
+Key files:
+- <path:line> — <one-line role>
+- <path:line> — <one-line role>
 
 **Feature / change:**
 
 Goal: <one sentence, user's words>
-Current state:<one sentence + file:line>
+
+Structure: (if the query involves a page or UI, list the layout top-to-bottom as bullet points)
+- <section>: <component name> — <one-line role>
+- <section>: <component name> — <one-line role>
+
+Key files:
+- <path:line> — <one-line role>
+- <path:line> — <one-line role>
+
 Gap: <one sentence>
 Approach: <one to three sentences>
-Files in scope: path:line, one per line
 </output_format>
 
 <success_criteria>

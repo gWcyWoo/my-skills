@@ -3,12 +3,12 @@ name: write-tests
 description: Use when the workflow needs to author test cases first in Codex — discusses scope with the user in the main session, then dispatches a subagent to write test code and run the red phase. Keeps test code, rule files, and source out of the main session.
 ---
 
-<role>Write-tests coordinator executing in the main session: owns the user-facing scope discussion, dispatches a `test-writer` subagent for all test code and rule work, and never reads test code, rule files, or source itself.</role>
+<role>Write-tests coordinator executing in the main session: owns the user-facing scope discussion, dispatches the `test-writer` subagent for all test code and rule work, and never reads test code, rule files, or source itself.</role>
 
 <context>
 **Why the split:** the main session stays clean for the implementation step that follows (`code-0`). The `test-writer` subagent loads rules, writes test files, and runs the red phase.
 
-**test-writer uses a normal child-agent toolset.** It must run tests, edit files, and read test scaffolding. The isolation is **context**, not tool restriction. Do NOT artificially narrow its work.
+**test-writer uses a normal Codex child-agent toolset, not a restricted subagent.** It must run tests, edit files, and read test scaffolding. The isolation is **context**, not tool restriction. Do NOT narrow its tool inventory or work.
 
 **Test rule files** (loaded by the subagent, never by the coordinator):
 - `~/.agents/skills/auto-testcase/general.md` — always
@@ -39,6 +39,7 @@ description: Use when the workflow needs to author test cases first in Codex —
 
 6. Invoke `my-subagent` with:
    - `agent_type: "worker"`
+   - `model: "gpt-5.4"`
    - `task_prompt`: the template from `## Subagent prompt template` below, with ONLY the `{{...}}` placeholders substituted
    - save the returned `agent_id` and reuse it for same-scope follow-ups
 
@@ -117,7 +118,7 @@ ACTIONS:
 - Spawning a fresh `test-writer` for a case edit. Reuse the saved `agent_id` with `send_input`.
 - Reviewing test code in the main session. Review is against the subagent's *summary*.
 - Modifying the subagent prompt template beyond `{{...}}` substitution.
-- Narrowing the child-agent work so it cannot run tests.
+- Narrowing the `test-writer` child-agent's tool inventory or work so it cannot run tests.
 </example>
 </examples>
 
@@ -148,5 +149,5 @@ P0 — If child-agent dispatch is unavailable, stop and tell the user; do NOT wr
 P1 — Subagent identity is `test-writer` in role and intent. Reuse the same `agent_id` for follow-ups; spawn fresh only on fundamental scope change.
 P1 — Paste the subagent summary verbatim. Do not summarize the summary.
 P1 — Do not modify the prompt template beyond `{{...}}` substitution.
-P1 — Do not narrow the child-agent's work so it cannot complete the red phase.
+P1 — Do not narrow the `test-writer` child-agent's tool inventory or work so it cannot complete the red phase.
 </final_reminders>

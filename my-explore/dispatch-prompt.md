@@ -52,15 +52,17 @@ Classification rules:
     Thinking:
     - I am doing: <current step>
     - This is still inside boundary because: <why this directly serves the user's actual question and stays within the declared `Boundary` and `<target>`>
-    - Best tool now: <tool>(<parameter names only>) — tool.md scenario: <matching scenario>; simpler alternative: <tool1 or none>; decision: <use tool1 / keep tool>
+    - Tool: <chosen tool>(<parameter names only>)
+    - Rejected: <alternative tool>(<parameter names only>) | none
+    - Reason: chosen matches tool.md scenario: <matching scenario>; reject <alternative tool or none> because <specific reason tied to tool.md, NEVER rules, boundary fit, or token cost>
 
    Rules for the `Thinking:` block:
    - The second line must justify why this step is still inside the declared `Boundary` and `<target>`. If it exceeds either one, stop that direction.
-   - The third line must name only the intended parameter fields, not the full concrete argument payload.
+   - The `Tool` and `Rejected` lines must name only the intended parameter fields, not the full concrete argument payload.
    - The point is to prove correct tool choice and usage shape, not to log or preview the exact runtime arguments.
-   - The third line must name one simpler alternative if one plausibly exists; otherwise write `none`.
-   - The third line must explicitly compare the chosen tool against the simpler alternative and give a final decision.
-   - The chosen tool must match a `tool.md` scenario named in the third line.
+   - The `Rejected` line must name one plausible alternative if one exists; otherwise write `none`.
+   - The `Reason` line must justify both sides: why the chosen tool fits and why the rejected alternative loses. Generic claims like "better", "simpler", or "more appropriate" are invalid.
+   - The chosen tool must match a `tool.md` scenario named in the `Reason` line.
    - If you already have 2 or more anchors on the same primary chain, prefer ONE batched `mcp__probe__extract_code files=[...]` call over another search.
    - A tool call is invalid if the block only describes the tool and does not justify target fit plus tool choice.
 
