@@ -10,7 +10,7 @@ description: Implementation via isolated `implementer` subagent. Loads coding st
 **Phase 1 — Validate inputs (main session).**
 
 1. Confirm required inputs are present:
-    - `{{REQUIREMENT_SUMMARY}}` — if missing → STOP: _"Invoke `understand-0` or `understand` first."_
+    - `{{REQUIREMENT_SUMMARY}}` — if missing → STOP: _"Invoke `understand-0` first."_
     - `{{FILES_IN_SCOPE}}` — if missing → STOP and ask: _"Which files should the implementation touch?"_
 2. Confirm `{{FILES_IN_SCOPE}}` is non-empty. Empty scope → return `Status: blocked`.
 

@@ -16,7 +16,7 @@
 ## 2. Input Discovery
 
 - **With HLD**: Use HLD-defined component interfaces and module boundaries as API contracts. The HLD is the sole contract. You may read type/interface definition files (e.g., `schema.ts`, `types.ts`) even if listed in Affected Files — they define contracts. You MUST NOT read files that contain function bodies or business logic (e.g., `parser.ts`, `api.ts`, `handler.ts`). See SKILL.md "Code Reading Boundaries" for the full rule.
-- **Without HLD**: Invoke `Skill(my-explore)` to load code navigation methodology, then use it on symbols from `understand` → Affected Files. Extract component props, container interfaces, service method signatures. These become the API contracts. Do NOT invent APIs.
+- **Without HLD**: Invoke `Skill(my-explore-0)` to load code navigation methodology, then use it on symbols from `understand-0` → Affected Files. Extract component props, container interfaces, service method signatures. These become the API contracts. Do NOT invent APIs.
 
 ### 2b. HLD Edge Contract Extraction (mandatory when HLD exists)
 
@@ -39,11 +39,11 @@ Each contract becomes a **mandatory assertion** in at least one test case. Contr
 AI must target "Contract Fragility" specified by the user. Every integration test plan must include a Direction.
 
 **How to obtain Direction:**
-1. Check if the user provided Direction in the `understand` output or conversation context. If found, use those directly.
-2. If no Direction is found, **analyze and recommend** based on HLD and `understand` output, then STOP:
+1. Check if the user provided Direction in the `understand-0` output or conversation context. If found, use those directly.
+2. If no Direction is found, **analyze and recommend** based on HLD and `understand-0` output, then STOP:
 
    **Analysis process:**
-   a. Read the Module Interaction Flow from HLD (or Affected Files from `understand` if no HLD).
+   a. Read the Module Interaction Flow from HLD (or Affected Files from `understand-0` if no HLD).
    b. For each module boundary / edge, identify the specific risk category:
       - **Prop Drilling Failure** — handler or data passed through layers may not trigger correctly
       - **Context Desync** — shared state update may not propagate to all consumers
@@ -116,7 +116,7 @@ expect(calledOptions.body.key).toBe('value');
 
 For each assertion's expected value, execute this checklist:
 
-1. **Derive from requirement** — the expected value must come from the AC/understand description, not from reading what the implementation code currently produces.
+1. **Derive from requirement** — the expected value must come from the AC/understand-0 description, not from reading what the implementation code currently produces.
 2. **Cross-check against mock inputs** — if the expected value equals any mock input unchanged, this is a §5 violation signal. Ask: "Does this module combine/transform the input with other data (e.g., other state, config, safe area insets)?" If yes, the expected value must reflect that transformation.
 3. **State the derivation** — add a comment above the assertion showing how the expected value was calculated from the requirement:
 
@@ -158,7 +158,7 @@ When the HLD defines a multi-step event sequence (A → B → C → D), and the 
 Integration test cases are **defined by the user**. AI does NOT auto-generate integration tests — it translates user-specified Directions into concrete test cases.
 
 - **Direction Coverage** (primary): Every user-provided Direction MUST have at least one test targeting it. Only these are included in the test plan by default.
-- **AC Gap Check**: After mapping Directions to test cases, check if any AC ID from `understand` remains uncovered. For each uncovered AC, apply the **Scope Filter** from §1:
+- **AC Gap Check**: After mapping Directions to test cases, check if any AC ID from `understand-0` remains uncovered. For each uncovered AC, apply the **Scope Filter** from §1:
 
   - **Cross-module behavior** (function calls other modules) → valid integration test candidate. List in integration gap.
   - **Single-module logic** (input validation, format checking, boundary guards that short-circuit before calling any other module) → **unit test scope**. Collect separately for unit test supplementation.
@@ -187,7 +187,7 @@ Integration test cases are **defined by the user**. AI does NOT auto-generate in
 ## 7. Traceability
 
 Every test case MUST map to:
-- An **AC ID** from `understand` output
+- An **AC ID** from `understand-0` output
 - A specific **Direction** (from §3)
 - A concrete **artifact** (component or container from HLD or source code)
 

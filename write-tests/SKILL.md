@@ -29,7 +29,7 @@ description: Use when the workflow needs to author test cases first — discusse
 <instructions>
 **Phase 1 — Draft and confirm scope (main session).**
 
-1. Draft a unit test plan from the requirement summary: functions/modules under test, scenarios (happy path, edge cases, errors), expected behavior per case. For code inspection, invoke `my-explore` (main session) or `my-explore-0` (inside a subagent).
+1. Draft a unit test plan from the requirement summary: functions/modules under test, scenarios (happy path, edge cases, errors), expected behavior per case. For code inspection, invoke `my-explore-0`.
 2. **STOP #1.** Present the plan. Wait for the user to confirm or adjust.
 3. Ask literally: *"Do you need integration or E2E tests?"*
 4. **STOP #2** (if yes). Collect the cases, present them back, wait for explicit confirmation. If no, skip.
@@ -138,7 +138,7 @@ Stop immediately when these hold.
 </success_criteria>
 
 <final_reminders>
-P0 — Main session NEVER reads `~/.claude/skills/auto-testcase/*.md`, test code, or source files. Use `my-explore` / `my-explore-0` for any source inspection.
+P0 — Main session NEVER reads `~/.claude/skills/auto-testcase/*.md`, test code, or source files. Use `my-explore-0` for any source inspection.
 P0 — All 3 STOP points are mandatory. A "go ahead" satisfies only the STOP it was given for.
 P0 — Never claim red phase passed without the subagent reporting actual runner output.
 P0 — If the `Agent` tool is missing from your inventory, you are inside a subagent — cannot dispatch. Escalate to the user; do NOT write tests in place. Subagents cannot spawn subagents (`~/.claude/skills/HARNESS_REFERENCE.md` §1).

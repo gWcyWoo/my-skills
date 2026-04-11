@@ -21,7 +21,7 @@ Launch an Agent subagent (general-purpose) with `name: "testcase-agent"` and the
 ```
 You are writing test cases for the requirement in {procedure_dir}/hld.md. Work independently from start to finish.
 
-1. Invoke the `my-explore` skill using the Skill tool to load code navigation methodology.
+1. Invoke the `my-explore-0` skill using the Skill tool to load code navigation methodology.
 
 2. Read {procedure_dir}/hld.md — sole design authority. Do NOT read requirement.md or understand.md.
 

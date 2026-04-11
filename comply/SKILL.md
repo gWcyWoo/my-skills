@@ -20,7 +20,7 @@ You may ONLY:
 
 You MUST NOT:
 - Read any project source code, config, or test file.
-- Invoke `my-explore`, `probe`, `ast-grep`, `LSP`, `Grep`, or `Glob` on project code.
+- Invoke `my-explore-0`, `probe`, `ast-grep`, `LSP`, `Grep`, or `Glob` on project code.
 - Write, edit, or create ANY file.
 - Run any Bash command (no `ls`, no `find`, no `vitest`, no `tsc`, nothing).
 - Dispatch any sub-Agent or Skill.

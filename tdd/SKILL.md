@@ -4,7 +4,7 @@ description: Default development workflow for requirements and bug fixes — seq
 ---
 
 <role>
-You are the **TDD workflow coordinator**, executing in the **main session** with the user in the loop. You orchestrate three sub-skills plus one local instruction file (`verify.md`) across four sequential steps, and never inline their work. For changes that require a formal HLD (High-Level Design), defer to the `understand` skill instead of running this workflow.
+You are the **TDD workflow coordinator**, executing in the **main session** with the user in the loop. You orchestrate three sub-skills plus one local instruction file (`verify.md`) across four sequential steps, and never inline their work.
 </role>
 
 <context>
@@ -16,7 +16,7 @@ This is the default workflow for any code change that does not require a formal 
 4. `verify.md` (instruction file in this skill's directory, **not a skill**) — lint + test + done check, runs in main session.
 
 **Sub-skill boundaries:**
-- `understand-0` may itself invoke `my-explore` (the dispatched-subagent variant) for code exploration. It only falls back to `my-explore-0` when it is itself running inside a subagent that cannot recursively dispatch.
+- `understand-0` invokes `my-explore-0` for code exploration.
 - `write-tests` dispatches a `test-writer` subagent so test code never enters main session.
 - `code` dispatches an `implementer` subagent so implementation code never enters main session. Rules are pre-loaded by THIS workflow (Step 3a) via `comply` and passed into `code` as input — `code` itself never invokes `comply`.
 
@@ -59,7 +59,6 @@ CORRECT BEHAVIOR: "Proceed" advances to Step 2 (test decision), NOT to Step 3 (i
 ANTI-PATTERN A: Inlining `understand-0` ("I already understand it, let me just implement"). The skill MUST be invoked.
 ANTI-PATTERN B: Combining Step 2 and Step 3 into a single "write tests then implement" pass. They are sequential and each has its own STOP points.
 ANTI-PATTERN C: Skipping Step 4 verify because "the tests passed during implementation." Step 4 is the official lint+test+done gate.
-ANTI-PATTERN D: Running this workflow for a change that needs HLD. Use `understand` instead.
 ANTI-PATTERN E: Skipping Step 3a (comply) and invoking `code` without `RULES`. `code` will STOP and return an error — it will NOT fall back to invoking `comply` itself. Always load rules in Step 3a first.
 ANTI-PATTERN F: Invoking `code-0` (main-session variant) instead of `code` (subagent variant) in Step 3b. `code-0` is an explicit fallback for when the user wants inline diffs; the standard `tdd` flow uses `code` for clean main-session isolation.
 </example>
@@ -90,11 +89,10 @@ Stop the moment those hold. Do not loop back to add features or refactors not in
 P0 — Steps are SEQUENTIAL. Each step must complete before the next starts. "Proceed" advances by one step, not to the end. Step 3 itself has two sequential sub-steps: 3a (`comply`) MUST run before 3b (`code`).
 P0 — Every step that says "Invoke skill" MUST actually invoke the skill via the Skill tool. Do not inline, summarize, or skip skill invocations.
 P0 — NEVER claim tests passed without actually running them. Step 4 verify.md is the canonical run.
-P0 — For changes that need HLD, **abort this workflow before invoking Step 1**: STOP, tell the user *"This change appears to need formal HLD — please run `/understand` instead"*, and exit without invoking any sub-skill. Do NOT silently proceed with `understand-0` as a substitute.
 P0 — Step 3b MUST call `code` (subagent-dispatching variant), NOT `code-0` (main-session variant). `code-0` is an explicit escape hatch for when the user specifically wants inline diffs; the standard `tdd` flow uses `code` for clean main-session isolation. If `code` fails due to subagent dispatch unavailability, you may fall back to `code-0` and surface the degradation to the user.
 P0 — `code` requires pre-loaded rules via the `RULES` input. NEVER skip Step 3a and invoke `code` without rules — it will block. Step 3a is not optional.
 P1 — Do not expand scope unilaterally. If you discover something out of scope during Step 3, STOP and ask the user.
 P1 — If `write-tests` returns `Status: aborted` (per its `<output_format>`), do not proceed to Step 3 — surface the blocker to the user and STOP.
 P1 — If `code` returns `Status: blocked` (e.g. empty scope, rules missing, tautology test surfaced), do not proceed to Step 4 — surface the blocker to the user and STOP.
-P2 — Keep the main session clean: rely on `my-explore` (invoked from inside `understand-0`) for code reading in Step 1, the `test-writer` subagent for test code in Step 2, `comply` + the `implementer` subagent (via `code`) for rule loading and implementation in Step 3, and the main session itself only for discussion, STOP points, and the Step 4 verify.
+P2 — Keep the main session clean: rely on `my-explore-0` (invoked from inside `understand-0`) for code reading in Step 1, the `test-writer` subagent for test code in Step 2, `comply` + the `implementer` subagent (via `code`) for rule loading and implementation in Step 3, and the main session itself only for discussion, STOP points, and the Step 4 verify.
 </final_reminders>

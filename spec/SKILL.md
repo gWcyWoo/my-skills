@@ -22,7 +22,7 @@ Ask the user: **Is this a new spec or an update to an existing one?**
 - If new: ask for the feature area and version (e.g., "community post, v1"). This determines the directory: `specs/{area}/v{n}/`. Proceed to Step 1.
 
 **Tool loading (automatic — do not ask the user):**
-- If the user's description references existing code (e.g., "like the feedback upload") → invoke `my-explore` skill to examine current implementation before starting elicitation
+- If the user's description references existing code (e.g., "like the feedback upload") → invoke `my-explore-0` skill to examine current implementation before starting elicitation
 - If the requirement is vague or exploratory → invoke `superpowers:brainstorming` skill to help clarify direction
 - Load tools as needed during elicitation, not only at the start
 
@@ -49,7 +49,7 @@ Guide the conversation to fill all dimensions. Do NOT ask all dimensions at once
 1. **Start from the user's description** — extract what's already provided, map to dimensions.
 2. **Ask about gaps, not everything** — if the user already described the UI, don't ask about UI. Ask about what's missing.
 3. **Group related questions** — ask 2-3 related questions per turn, not 8 at once.
-4. **Use the codebase** — if the user references existing code ("like the feedback upload"), use `my-explore` to examine that code and confirm the pattern.
+4. **Use the codebase** — if the user references existing code ("like the feedback upload"), use `my-explore-0` to examine that code and confirm the pattern.
 5. **Confirm understanding** — after each round, summarize what you've captured and ask "Is this correct? Anything to adjust?"
 6. **Don't invent requirements** — only capture what the user confirms. If a dimension is intentionally not specified, mark it as "Not specified — to be determined during implementation."
 
@@ -139,19 +139,19 @@ Present the completed (or updated) spec to the user:
 > 1. **Request changes** — tell me what to adjust, and we'll update the spec
 > 2. **Discuss next requirement** — add another feature/bugfix to this spec
 > 3. **Proceed to implementation**:
->    - **understand** — run requirement analysis + HLD design, then choose next step
->    - **auto-tdd** — fully automated pipeline (auto-testcase + auto-code parallel → verify, zero intervention; requires understand first)
+>    - **understand-0** — run lightweight requirement analysis, then choose next step
+>    - **auto-tdd** — fully automated pipeline (auto-testcase + auto-code parallel → verify, zero intervention; requires understand-0 first)
 
 Wait for user selection:
 
 - User requests changes → go back to Step 1 with the feedback, update the spec
 - User wants to discuss next requirement → go back to Step 5 (Incremental Update) since the spec is already loaded
-- User selects `understand` → create procedure directory (Step 4), then invoke the `understand` skill
-- User selects `auto-tdd` → create procedure directory (Step 4), then invoke the `understand` skill; after it completes, invoke the `auto-tdd` skill with the procedure directory path
+- User selects `understand-0` → create procedure directory (Step 4), then invoke the `understand-0` skill
+- User selects `auto-tdd` → create procedure directory (Step 4), then invoke the `understand-0` skill; after it completes, invoke the `auto-tdd` skill with the procedure directory path
 
 ### Step 4: Create Procedure Directory
 
-Before invoking understand or auto-tdd:
+Before invoking understand-0 or auto-tdd:
 
 1. Generate a short name (≤20 chars, kebab-case) from the changelog entry description
 2. Create directory: `{spec_dir}/procedure/{YYYY-MM-DD}-{name}/`
@@ -185,4 +185,4 @@ Do NOT silently overwrite — always surface conflicts for user resolution.
 2. **Spec body = current truth** — the spec body always represents the latest complete state. Historical changes are in the changelog only.
 3. **One spec per feature scope** — a spec covers a coherent feature area (e.g., "Post Page", "User Profile"). Don't split into micro-specs per change.
 4. **Changelog is append-only** — never modify or delete changelog entries.
-5. **Procedure directories are created by spec** — understand/SKILL.md no longer creates them.
+5. **Procedure directories are created by spec** — downstream skills do not create them.

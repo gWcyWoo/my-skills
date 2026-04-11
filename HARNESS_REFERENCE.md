@@ -140,7 +140,7 @@ mcpServers:
 ### Built-in (provided by the harness or plugins)
 
 - `general-purpose` — full tool access.
-- `Explore` — **all tools except `Agent`, `ExitPlanMode`, `Edit`, `Write`, `NotebookEdit`**. ⚠️ This means `Bash` and `Read` are still in the inventory — empirically the cause of `find`/`ls`/`cat` regressions in our `my-explore` skill before we built the custom variant.
+- `Explore` — **all tools except `Agent`, `ExitPlanMode`, `Edit`, `Write`, `NotebookEdit`**. ⚠️ This means `Bash` and `Read` are still in the inventory — empirically the cause of `find`/`ls`/`cat` regressions in exploration subagents. Use a custom agent with a stricter `tools:` allowlist if you need to prevent this.
 - `Plan`, `statusline-setup`, plus various plugin-provided agents (`code-reviewer`, `claude-code-guide`, etc.).
 
 ### Custom
@@ -172,7 +172,6 @@ mcpServers:
 
 | Requirement | Mechanism | Status |
 |---|---|---|
-| Prevent the exploration subagent from using Bash / Read on source | Custom `~/.claude/agents/my-explore.md` with strict `tools:` allowlist | ✅ in place — requires session restart or `/agents` to take effect |
 | Keep test code, rules, and source out of the main session for `write-tests` | Dispatch a named `test-writer` subagent (`general-purpose` type) | ✅ in place |
 | Restrict tools in the main session itself | **Only achievable via `PreToolUse` hooks** | ⏳ not yet implemented |
 | Deny a tool to the main session but allow it in a subagent | **Not currently possible** at the harness level | ❌ blocked by GitHub #30161 |
