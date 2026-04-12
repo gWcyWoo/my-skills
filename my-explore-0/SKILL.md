@@ -38,17 +38,17 @@ Priority: `mcp__probe__extract_code` > `mcp__language_server__get_symbol_referen
 <budget>
 Default max: 5 points.
 
-| Tool                                                                                      | Cost  |
-| ----------------------------------------------------------------------------------------- | ----- |
-| `mcp__probe__extract_code`                                                                | 1 pt  |
-| `mcp__probe__search_code`                                                                 | 1 pt  |
+| Tool                                                                                      | Cost    |
+| ----------------------------------------------------------------------------------------- | ------- |
+| `mcp__probe__extract_code`                                                                | 1 pt    |
+| `mcp__probe__search_code`                                                                 | 1 pt    |
 | `rg -n` / direct Read of non-source files                                                 | 100 pts |
-| `rg --files` / `mcp__language_server__get_symbol_references` / `mcp__ast_grep__find_code` | 1 pt  |
-| `mcp__language_server__get_symbols` / `mcp__language_server__get_project_symbols`        | 100 pts |
+| `rg --files` / `mcp__language_server__get_symbol_references` / `mcp__ast_grep__find_code` | 1 pt    |
+| `mcp__language_server__get_symbols` / `mcp__language_server__get_project_symbols`         | 100 pts |
 
 Before calling any tool, check: remaining points ≥ tool cost. If not, pick a cheaper tool or STOP.
 
-Print `[N/5]` after each call. When 0, STOP, report findings, and state: "Need N more points to explore: [specific gaps]". User decides.
+**MUST Print `[N/5]`** after each call. **When 0, MUST STOP**, **MUST reason as deeply as possible from current evidence, estimate how many more points are needed**, and **state** that to the user together with the specific remaining gaps. User decides.
 </budget>
 
 <NEVER>
