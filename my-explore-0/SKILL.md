@@ -36,7 +36,7 @@ Priority: extract_code > findReferences > ast-grep > Grep > search_code
 </tool_selection>
 
 <budget>
-`1 extract / 1 search`. Print `[extract N/1, search N/1]` after each tool call. When budget is spent, MUST STOP, apply to user for new budget. Report findings and mark gaps as [NOT_EXPLORED]. No more tool calls of any kind.
+`1 extract / 1 search`. Print `[extract N/1, search N/1]` after each tool call. When budget is spent, **MUST STOP** and apply to user for new budget. Report findings and mark gaps as [NOT_EXPLORED]. No more tool calls of any kind.
 </budget>
 
 <NEVER>
