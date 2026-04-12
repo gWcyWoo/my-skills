@@ -1,17 +1,50 @@
 # tool.md
 
+## Purpose
+
+This file routes code-exploration tool choice.
+
+Use it together with the skill's internal decision loop.
+
+The goal is not a globally shortest path.
+The goal is the **best next step under current evidence**.
+
+Move only downward on the anchor ladder for the same `Missing`:
+
+`concept` -> `path/file` -> `file:line` -> `file#symbol` -> `semantic reference`
+
+Once a stronger anchor is available, do not move back to a weaker route unless that anchor was proven wrong.
+
 ## How to choose
 
-Choose the first scenario whose preconditions are already satisfied and whose tool closes the current `Missing` with the fewest calls and the narrowest scope.
+Choose the first scenario whose preconditions are already satisfied and whose tool can directly close the current `Missing`.
 
 When multiple scenarios fit, prefer the route with:
 
-1. a stronger existing anchor (`file`, `symbol`, `line`, `literal`, `ID`, exact path)
+1. a stronger current anchor
 2. more structured and bounded output
 3. a smaller search radius
 4. lower side effects
+5. fewer follow-up branches
 
-Do not use a broader scenario once a narrower anchored scenario is already available.
+A route is invalid if a narrower anchored route is already available.
+
+---
+
+## Global ban on `search_code` misuse
+
+`mcp__probe__search_code` is bootstrap-only.
+
+It is forbidden when the proposed query contains any of:
+
+- regex alternation such as `|`
+- two or more symbol-like identifiers
+- declaration-shape text such as `export`, `class`, `const`, `type`, `interface`, `async`, `function`, `=>`
+- exact filenames, file extensions, or known paths
+- a list of constant names, event names, method names, or symbol names
+
+If any of the above are present, this is not concept search.
+Choose an anchored route instead.
 
 ---
 
@@ -35,15 +68,15 @@ The body of one specific function, method, class member, callback, or exported s
 
 **Avoid**
 
-- `mcp__language_server__get_project_symbols`
 - `mcp__probe__search_code`
 - `mcp__ast_grep__find_code`
 - `rg -n`
+- repo-wide search
   when the target symbol is already known.
 
 **Notes**
 
-- Use `file:line` only when the local node itself is the target.
+- Use `file:line` only when the local AST node itself is the target.
 - If the real target is the enclosing block, identify the symbol first and then use `file#symbol`.
 
 ---
@@ -89,61 +122,7 @@ A precise local node at a known `file:line`, not the enclosing function.
 
 ---
 
-## Scenario: file known, symbol name unknown
-
-**Intent**  
-The file is known, but you still need the declaration names in that file to choose the right target.
-
-**Preconditions**
-
-- exact file is known
-- the symbol name is genuinely unknown
-- getting the file’s declaration list directly closes the current `Missing`
-
-**Use**
-
-- `mcp__ast_grep__find_code pattern="<single parseable declaration shape>"` when the declaration shape is known
-- `rg -n "<exact text>" <file>` only when testing a narrow literal or declaration anchor inside that same file
-
-**Avoid**
-
-- repo-wide search
-- `mcp__language_server__get_symbols`
-- using broad symbol-listing just to “see what is in the file”
-
----
-
-## Scenario: symbol name known, file unknown
-
-**Intent**  
-Find where a known symbol is declared across the project.
-
-**Preconditions**
-
-- stable symbol name is known
-- file is unknown
-
-**Preferred**
-
-- `mcp__language_server__get_project_symbols query="<name>"`
-
-**Fallback if LSP is unavailable**
-
-- `mcp__probe__search_code query="<exact symbol or exact literal>" path="<scoped dir>"`
-
-**Avoid**
-
-- `mcp__language_server__get_symbols`
-- broad symbol listing on guessed files
-- broad concept search when the exact symbol name is already known
-
-**Notes**
-
-- If the symbol name is very generic, narrow the path first if possible.
-
----
-
-## Scenario: every caller / reference of a symbol
+## Scenario: every caller / semantic reference of a known symbol
 
 **Intent**  
 Every code location that references one exact symbol.
@@ -151,14 +130,11 @@ Every code location that references one exact symbol.
 **Preconditions**
 
 - symbol identity is known precisely enough for semantic references
+- LSP is usable
 
-**Preferred**
+**Use**
 
 - `mcp__language_server__get_symbol_references`
-
-**Fallback if LSP is unavailable**
-
-- use scoped structural or scoped text search only when the call shape is stable enough, and note that aliases, renamed imports, namespace access, or destructuring may be missed
 
 **Avoid**
 
@@ -166,7 +142,7 @@ Every code location that references one exact symbol.
 
 ---
 
-## Scenario: outgoing calls made from inside one symbol
+## Scenario: outgoing calls or value transitions inside one known symbol
 
 **Intent**  
 The callees or value transitions inside one known symbol body.
@@ -196,6 +172,7 @@ At the first hop of a trace, get the symbol body together with callers and calle
 - exact `file#symbol` is already known
 - you need both callers and callees immediately
 - separate `extract_code` + `get_symbol_references` would otherwise run back-to-back on the same symbol
+- LSP is usable
 
 **Use**
 
@@ -216,7 +193,7 @@ At the first hop of a trace, get the symbol body together with callers and calle
 ## Scenario: exact literal inside a known file or nearest relevant directory
 
 **Intent**  
-Test a narrow literal or declaration hypothesis locally.
+Test one narrow literal or declaration hypothesis locally.
 
 **Preconditions**
 
@@ -230,13 +207,14 @@ Test a narrow literal or declaration hypothesis locally.
 **Allowed on source only when**
 
 - it is a first scoped anchor inside a known file or nearest directory, or
-- it directly tests a narrow literal / declaration hypothesis before switching back to a structured tool
+- it directly tests one narrow literal / declaration hypothesis before switching back to a structured tool
 
 **Avoid**
 
 - regex alternation on source
 - repo-wide literal search when a local path is already known
 - using `rg -n` to browse code broadly
+- packing multiple symbol names into one broad source search
 
 ---
 
@@ -267,6 +245,64 @@ Find code by syntax shape rather than by exact text.
 
 ---
 
+## Scenario: exact symbol name known, file unknown
+
+**Intent**  
+Find where a known symbol is declared across the project.
+
+**Preconditions**
+
+- one stable symbol name is known
+- file is unknown
+
+**Preferred when LSP is usable**
+
+- `mcp__language_server__get_project_symbols query="<name>"`
+
+**Fallback when LSP is unavailable**
+
+- `mcp__ast_grep__find_code pattern="<single declaration pattern containing the exact symbol>"`
+- or `rg -n "\\b<exact symbol>\\b" <scoped dir>` when exact text is known and the scope can be kept tight
+
+**Never**
+
+- never fall back to `mcp__probe__search_code` when a stable symbol name is already known
+
+**Avoid**
+
+- broad concept search
+- regex alternation over many symbol names
+- broad symbol listing on guessed files
+
+**Notes**
+
+- If the symbol name is generic, narrow the directory first if possible.
+
+---
+
+## Scenario: file known, symbol name unknown
+
+**Intent**  
+The file is known, but the declaration name still is not.
+
+**Preconditions**
+
+- exact file is known
+- the symbol name is genuinely unknown
+
+**Preferred**
+
+- `mcp__ast_grep__find_code pattern="<single parseable declaration shape>"` when the declaration shape is known
+- `rg -n "<exact text>" <file>` only when testing a narrow literal or declaration anchor inside that same file
+
+**Never**
+
+- never use repo-wide search for this case
+- never use `mcp__probe__search_code` for this case
+- never use symbol listing just to browse
+
+---
+
 ## Scenario: only a concept is known
 
 **Intent**  
@@ -274,22 +310,28 @@ Bootstrap from domain keywords when no usable anchor exists yet.
 
 **Preconditions**
 
-- no stable file, symbol, line, literal, or exact path anchor exists yet
+- no stable `file`
+- no stable `file:line`
+- no stable `file#symbol`
+- no exact path
+- no exact symbol
+- no exact literal tied to the code
 
 **Use**
 
 - `mcp__probe__search_code query="<domain keywords>" path="<scoped dir>"`
 
-**Limits**
+**Hard limits**
 
-- bootstrap only
-- at most one `mcp__probe__search_code` call per query
-- the moment it returns a usable `file:line`, `file`, or `file#symbol` anchor, stop searching and switch immediately to `mcp__probe__extract_code` or another anchored route
+- exactly one call per reasoning chain
+- the query must be conceptual, not structural
+- the moment it returns a usable `file`, `file:line`, or `file#symbol` anchor, stop searching and switch immediately to an anchored route
 - never use `mcp__probe__search_code` again in that same reasoning chain
 
-**Avoid**
+**If it returns no usable anchor**
 
-- repeated concept searches after anchors already exist
+- do not retry `mcp__probe__search_code`
+- answer with `[gap]`, or switch only if a new non-search anchor already exists
 
 ---
 
@@ -343,10 +385,10 @@ Read the raw contents of a non-source file.
 
 **Examples**
 
-- `README`
+- README
 - spec
 - config
-- JSON/YAML/TOML
+- JSON / YAML / TOML
 - logs
 
 ---
@@ -355,7 +397,7 @@ Read the raw contents of a non-source file.
 
 - If a tool errored or returned less than expected, fix the arguments and retry the same tool once before switching.
 - If LSP reports unavailable, mark it unavailable for the rest of the query and use non-LSP routes.
-- If a source `file:line` extraction returns only an import, comment, or trivial node, switch to the enclosing symbol route instead of broadening search.
+- If a source `file:line` extraction returns only an import, comment, directive, or trivial node, switch to the enclosing `file#symbol` route instead of broadening search.
 - If an exact file path is already known, keep the search radius file-local until that path is shown to be wrong.
 - If two successive calls fail to resolve the same `Missing`, stop varying tools on that hypothesis. Reframe the `Missing` or answer with `[gap]`.
 - If the question is already answered at the current layer, stop. Do not drill into downstream callers, callees, or side effects unless the user explicitly asked.
@@ -369,3 +411,4 @@ When multiple routes are valid, prefer the one that best satisfies the current `
 3. more structured output
 4. narrower scope
 5. lower side effects
+6. less future branching
