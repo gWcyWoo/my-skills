@@ -48,7 +48,7 @@ Default max: 5 points.
 
 Before calling any tool, check: remaining points ≥ tool cost. If not, pick a cheaper tool or STOP.
 
-Print `[N/5]` after each call. When 0, STOP, report findings, and state: "Need N more points to explore: [specific gaps]". User decides.
+**MUST Print** `[N/5]` after each call. When 0, **MUST STOP**, **MUST reason as deeply as possible from current evidence, estimate how many more points are needed**, and **state** that to the user together with the specific remaining gaps. User decides.
 </budget>
 
 <NEVER>
