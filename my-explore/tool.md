@@ -1,121 +1,370 @@
-<tool_reference>
+# tool.md
 
-<scenarios>
+## How to choose
 
-<scenario>
-<intent>The source body (~30 lines) of a specific symbol, identified by name or line anchor.</intent>
-<tool>`mcp__probe__extract_code files=["<file>#<symbol>"]`. If the symbol name is unknown, call `mcp__language_server__get_symbols file_path="<file>"` first to list the file's symbols, then use `file#<symbol>`. When both file and symbol are already known, even approximately, go straight to `file#symbol` — do not call `get_symbols`, `get_project_symbols`, `mcp__probe__search_code`, or `mcp__ast_grep__find_code` first.</tool>
-<invalid>Line ranges (`file:320-480`); bare file paths with no anchor; `file:line` when the target is the enclosing block rather than the node at that line.</invalid>
-<note>`file:line` is a node anchor, not a guarantee of the enclosing function, method, or callback. If the real target is the containing block, identify the enclosing symbol first, then extract `file#<symbol>`.</note>
-</scenario>
+Choose the first scenario whose preconditions are already satisfied and whose tool closes the current `Missing` with the fewest calls and the narrowest scope.
 
-<scenario>
-<intent>A first scoped anchor inside a known source file or its nearest relevant directory, when the exact file is already known but existence or declaration shape is unresolved.</intent>
-<tool>`rg -n "<exact text>" <known-file-or-nearest-dir>`. This is the only allowed `rg` use on source files: the exact path is already known, the exact text being tested is known, and the goal is to anchor existence or declaration shape before switching back to `mcp__probe__extract_code` or `mcp__ast_grep__find_code`.</tool>
-<note>Use this to test narrow hypotheses like `POST`, `export`, `handler`, `NextResponse`, or an exact UI literal. Do not use it to browse source broadly. If the exact text is not known, use `mcp__ast_grep__find_code` or `mcp__probe__search_code` instead.</note>
-</scenario>
+When multiple scenarios fit, prefer the route with:
 
-<scenario>
-<intent>The bodies of N related symbols returned in a single response.</intent>
-<tool>`mcp__probe__extract_code files=["a#x","b#y","c#z"]`. Prefer one batched call over N narrow calls; every entry must still be `file#symbol` or `file:line`.</tool>
-</scenario>
+1. a stronger existing anchor (`file`, `symbol`, `line`, `literal`, `ID`, exact path)
+2. more structured and bounded output
+3. a smaller search radius
+4. lower side effects
 
-<scenario>
-<intent>The enclosing function, method, or callback for a matched line or AST hit.</intent>
-<tool>If an enclosing symbol exists, identify that symbol first, then use `mcp__probe__extract_code files=["<file>#<symbol>"]`. Use `file:line` only when the local AST node itself is the target, not when the enclosing block is the target.</tool>
-</scenario>
+Do not use a broader scenario once a narrower anchored scenario is already available.
 
-<scenario>
-<intent>A full outline of every symbol declared in a file.</intent>
-<tool>`mcp__language_server__get_symbols file_path="<file>"`. Required before `file#symbol` extraction when the file is known but the symbol name is not.</tool>
-<gate>Use ONLY when the file is known but the symbol name is genuinely unknown. If you can name the symbol, even approximately, skip this and go straight to `mcp__probe__extract_code files=["<file>#<symbol>"]`. Do not use `get_symbols` as a "see what's in the file" step before an extraction you already know the target for.</gate>
-<note>If the language server reports that it is unavailable or not running, do not keep calling adjacent language-server endpoints on the same query. Switch to non-LSP routes: `mcp__probe__extract_code`, `mcp__probe__search_code`, or `mcp__ast_grep__*`.</note>
-</scenario>
+---
 
-<scenario>
-<intent>The file:line of every declaration matching a given symbol name, across the project.</intent>
-<tool>`mcp__language_server__get_project_symbols query="<name>"`. Use when the name is known but the file is not.</tool>
-<gate>Never use when the file is already known — use `mcp__language_server__get_symbols` if the symbol is unknown, or `mcp__probe__extract_code files=["<file>#<symbol>"]` if the symbol is known.</gate>
-</scenario>
+## Scenario: exact body of a known symbol
 
-<scenario>
-<intent>Every call site of a symbol — the caller file:line for every reference.</intent>
-<tool>`mcp__language_server__get_symbol_references`. Semantically accurate; `rg -n` misses renamed imports, destructured calls, and namespace references.</tool>
-</scenario>
+**Intent**  
+The body of one specific function, method, class member, callback, or exported symbol.
 
-<scenario>
-<intent>Every outgoing call made from inside a symbol's body (its callees).</intent>
-<tool>`mcp__probe__extract_code files=["<file>#<symbol>"]`, then read the call expressions inside the returned body. There is no dedicated outgoing-calls language-server endpoint; the body is the source of truth.</tool>
-</scenario>
+**Preconditions**
 
-<scenario>
-<intent>The body plus every caller plus every callee of one symbol, delivered in a single response. Used at the entry hop of a Trace.</intent>
-<tool>`mcp__probe__extract_code files=["<file>#<symbol>"] lsp=true`. Expensive (10–15k tokens); open at the entry hop only — every subsequent hop uses plain `extract_code`.</tool>
-<gate>
-Open `lsp: true` only when ALL three conditions hold:
-1. The exact `file#symbol` is already known.
-2. `extract_code` and `get_symbol_references` would run on the **same** symbol back-to-back.
-3. Callees are also required in the same response.
-If any condition fails, use targeted tools instead: plain `extract_code` + separate `get_symbol_references` + `get_symbols`.
-</gate>
-</scenario>
+- `file` is known
+- `symbol` is known well enough to name the target
 
-<scenario>
-<intent>A concrete file:line for a concept described only by domain keywords (no symbol, file, or UI label named).</intent>
-<tool>`mcp__probe__search_code query="<domain keywords>" path="<scoped dir>"`. One-shot bootstrap: at most two calls per query. Stop the moment a concrete symbol surfaces and switch to `mcp__probe__extract_code` or `mcp__language_server__get_project_symbols`.</tool>
-</scenario>
+**Use**
 
-<scenario>
-<intent>The list of files whose paths match a glob pattern.</intent>
-<tool>`rg --files <root>` and, if needed, narrow the result set with a second scoped `rg`. Use when the question is "which files match path X", not "which lines contain text Y".</tool>
-</scenario>
+- `mcp__probe__extract_code files=["<file>#<symbol>"]`
 
-<scenario>
-<intent>Every code location matching a given AST pattern.</intent>
-<tool>`mcp__ast_grep__find_code pattern="<language pattern>"`. `$NAME` matches one node; `$$$` matches zero or more. Prefer over `rg -n` for code structure: no false positives from comments or string literals. Pattern must be a parseable single AST node — if `find_code` reports a parse error, shrink it to a smaller node. When file + symbol are already known, do not write an AST pattern to find the declaration — use `mcp__probe__extract_code files=["<file>#<symbol>"]` directly.</tool>
-<note>The pattern must parse as a valid single AST node. If ast-grep rejects the pattern, shrink it to a smaller parsable node or debug the shape with `mcp__ast_grep__dump_syntax_tree`. If `file#symbol` is already known, do not use ast-grep to re-find that declaration.</note>
-</scenario>
+**Prefer batching when**
 
-<scenario>
-<intent>A subset of AST matches constrained by an enclosing, contained, or adjacent node.</intent>
-<tool>`mcp__ast_grep__find_code_by_rule` with `inside` / `has` / `follows`. Use when `find_code` returns too many matches.</tool>
-</scenario>
+- one `Missing` needs several tightly coupled symbol bodies together
 
-<scenario>
-<intent>The raw AST shape of a known-good example, to debug a pattern that fails to match.</intent>
-<tool>`mcp__ast_grep__dump_syntax_tree`. Inspect the tree, then rewrite the pattern to match.</tool>
-</scenario>
+**Avoid**
 
-<scenario>
-<intent>The import dependency graph of a module or directory.</intent>
-<tool>Use `mcp__ast_grep__find_code` scoped to the file or directory for import/export forms such as `import $$$ from $SRC` and `export $$$ from $SRC`. Use this when you need dependency edges and no dedicated import-graph analyzer exists in Codex.</tool>
-</scenario>
+- `mcp__language_server__get_project_symbols`
+- `mcp__probe__search_code`
+- `mcp__ast_grep__find_code`
+- `rg -n`
+  when the target symbol is already known.
 
-<scenario>
-<intent>Text occurrences inside non-source files (md / json / yaml / configs / logs).</intent>
-<tool>`rg -n "<text>" <path>`. Always scope the path. Never run it on source files — use language server, ast-grep, or `mcp__probe__search_code` for those.</tool>
-</scenario>
+**Notes**
 
-<scenario>
-<intent>The raw contents of a non-source file (spec / README / config / log).</intent>
-<tool>Direct file read on the non-source path. Permitted for `.md/.json/.yaml/.toml/.txt`, configs, and logs. Not for source code.</tool>
-</scenario>
+- Use `file:line` only when the local node itself is the target.
+- If the real target is the enclosing block, identify the symbol first and then use `file#symbol`.
 
-</scenarios>
+---
 
-<priority_under_ambiguity>
-Language server (position known) > ast-grep (code shape known) > `rg -n` (literal text, non-source or first scoped source anchor only) > `mcp__probe__search_code` (concept only).
-</priority_under_ambiguity>
+## Scenario: batched exact reads
 
-<recovery>
-- A tool errored or returned less than expected → fix the arguments and retry the same tool. Never switch to direct file reads on source as a workaround.
-- A suggested file path does not exist → do not enumerate path guesses. Use `mcp__probe__search_code` with a concept keyword to locate the real file.
-- A location has already been identified → do not re-search to verify. Trust the authoritative tool.
-- You are reaching for regex alternation (`|`) on source files → you are using the wrong tool. Re-classify the query and pick language server, ast-grep, `rg --files`, or `mcp__probe__search_code`.
-- A language-server call reports that no server is running or available → mark LSP unavailable for the rest of this query. Do not retry other language-server calls unless the server is explicitly started; switch to `mcp__probe__extract_code`, `mcp__probe__search_code`, or `mcp__ast_grep__*`.
-- An exact source file path is already known → keep the search radius file-local until existence and declaration shape are resolved, unless the file path itself is now suspect.
-- Two successive calls failed to confirm the same hypothesis → stop varying tools on that hypothesis. State the new hypothesis first, then choose the next tool.
-- The current question is already answered at the current layer → stop. Do not drill into downstream callees or side effects unless the query explicitly asks for them.
-</recovery>
+**Intent**  
+The bodies of several related symbols returned in one response.
 
-</tool_reference>
+**Preconditions**
+
+- each target is already known as `file#symbol` or as a precise local `file:line` node
+
+**Use**
+
+- `mcp__probe__extract_code files=["a#x","b#y","c#z"]`
+
+**Prefer when**
+
+- the current `Missing` depends on several tightly related bodies together
+- batching removes obvious extra calls
+
+---
+
+## Scenario: local AST node at a known line
+
+**Intent**  
+A precise local node at a known `file:line`, not the enclosing function.
+
+**Preconditions**
+
+- `file` is known
+- exact line is known
+- the local node itself is the target
+
+**Use**
+
+- `mcp__probe__extract_code files=["<file>:<line>"]`
+
+**Avoid**
+
+- using `file:line` when what you really need is the containing function, method, or callback
+
+---
+
+## Scenario: file known, symbol name unknown
+
+**Intent**  
+The file is known, but you still need the declaration names in that file to choose the right target.
+
+**Preconditions**
+
+- exact file is known
+- the symbol name is genuinely unknown
+- getting the file’s declaration list directly closes the current `Missing`
+
+**Use**
+
+- `mcp__ast_grep__find_code pattern="<single parseable declaration shape>"` when the declaration shape is known
+- `rg -n "<exact text>" <file>` only when testing a narrow literal or declaration anchor inside that same file
+
+**Avoid**
+
+- repo-wide search
+- `mcp__language_server__get_symbols`
+- using broad symbol-listing just to “see what is in the file”
+
+---
+
+## Scenario: symbol name known, file unknown
+
+**Intent**  
+Find where a known symbol is declared across the project.
+
+**Preconditions**
+
+- stable symbol name is known
+- file is unknown
+
+**Preferred**
+
+- `mcp__language_server__get_project_symbols query="<name>"`
+
+**Fallback if LSP is unavailable**
+
+- `mcp__probe__search_code query="<exact symbol or exact literal>" path="<scoped dir>"`
+
+**Avoid**
+
+- `mcp__language_server__get_symbols`
+- broad symbol listing on guessed files
+- broad concept search when the exact symbol name is already known
+
+**Notes**
+
+- If the symbol name is very generic, narrow the path first if possible.
+
+---
+
+## Scenario: every caller / reference of a symbol
+
+**Intent**  
+Every code location that references one exact symbol.
+
+**Preconditions**
+
+- symbol identity is known precisely enough for semantic references
+
+**Preferred**
+
+- `mcp__language_server__get_symbol_references`
+
+**Fallback if LSP is unavailable**
+
+- use scoped structural or scoped text search only when the call shape is stable enough, and note that aliases, renamed imports, namespace access, or destructuring may be missed
+
+**Avoid**
+
+- repo-wide `rg -n` as the first choice for semantic references
+
+---
+
+## Scenario: outgoing calls made from inside one symbol
+
+**Intent**  
+The callees or value transitions inside one known symbol body.
+
+**Preconditions**
+
+- exact `file#symbol` is known
+
+**Use**
+
+- `mcp__probe__extract_code files=["<file>#<symbol>"]`
+
+**Notes**
+
+- Read call expressions and transitions from the returned body.
+- Do not switch to a broader tool if the body already contains the needed evidence.
+
+---
+
+## Scenario: entry-hop trace bundle
+
+**Intent**  
+At the first hop of a trace, get the symbol body together with callers and callees in one response.
+
+**Preconditions**
+
+- exact `file#symbol` is already known
+- you need both callers and callees immediately
+- separate `extract_code` + `get_symbol_references` would otherwise run back-to-back on the same symbol
+
+**Use**
+
+- `mcp__probe__extract_code files=["<file>#<symbol>"] lsp=true`
+
+**Avoid**
+
+- using this beyond the entry hop
+- using this when exact `file#symbol` is not already known
+- using this when callers or callees are not both needed right now
+
+**Notes**
+
+- This route is expensive. Open it only when it truly shortens the path.
+
+---
+
+## Scenario: exact literal inside a known file or nearest relevant directory
+
+**Intent**  
+Test a narrow literal or declaration hypothesis locally.
+
+**Preconditions**
+
+- exact text is known
+- the file or nearest relevant directory is already known
+
+**Use**
+
+- `rg -n "<exact text>" <known-file-or-nearest-dir>`
+
+**Allowed on source only when**
+
+- it is a first scoped anchor inside a known file or nearest directory, or
+- it directly tests a narrow literal / declaration hypothesis before switching back to a structured tool
+
+**Avoid**
+
+- regex alternation on source
+- repo-wide literal search when a local path is already known
+- using `rg -n` to browse code broadly
+
+---
+
+## Scenario: code shape known, but not the symbol
+
+**Intent**  
+Find code by syntax shape rather than by exact text.
+
+**Preconditions**
+
+- you can express the target as a parseable single-node AST pattern
+
+**Use**
+
+- `mcp__ast_grep__find_code pattern="<single AST node pattern>"`
+
+**If too many matches**
+
+- `mcp__ast_grep__find_code_by_rule` with `inside`, `has`, or `follows`
+
+**If the pattern fails to parse or match**
+
+- `mcp__ast_grep__dump_syntax_tree`
+
+**Avoid**
+
+- text search when AST structure is the true constraint
+
+---
+
+## Scenario: only a concept is known
+
+**Intent**  
+Bootstrap from domain keywords when no usable anchor exists yet.
+
+**Preconditions**
+
+- no stable file, symbol, line, literal, or exact path anchor exists yet
+
+**Use**
+
+- `mcp__probe__search_code query="<domain keywords>" path="<scoped dir>"`
+
+**Limits**
+
+- bootstrap only
+- at most two attempts per query
+- stop immediately once a concrete file, symbol, literal, or path anchor surfaces
+
+**Avoid**
+
+- repeated concept searches after anchors already exist
+
+---
+
+## Scenario: path question, not a content question
+
+**Intent**  
+The question is “which files match path X” rather than “which lines contain text Y”.
+
+**Preconditions**
+
+- the problem is about file paths, file names, or directory layout
+
+**Use**
+
+- `rg --files <root>`
+- if needed, narrow with a second scoped `rg`
+
+**Avoid**
+
+- content search tools
+
+---
+
+## Scenario: non-source text search
+
+**Intent**  
+Search within non-source files.
+
+**Preconditions**
+
+- target file is non-source (`.md`, `.json`, `.yaml`, `.yml`, `.toml`, `.txt`, config, log)
+
+**Use**
+
+- `rg -n "<text>" <path>`
+
+---
+
+## Scenario: non-source file contents
+
+**Intent**  
+Read the raw contents of a non-source file.
+
+**Preconditions**
+
+- target file is non-source
+
+**Use**
+
+- direct file read
+
+**Examples**
+
+- `README`
+- spec
+- config
+- JSON/YAML/TOML
+- logs
+
+---
+
+## Recovery rules
+
+- If a tool errored or returned less than expected, fix the arguments and retry the same tool once before switching.
+- If LSP reports unavailable, mark it unavailable for the rest of the query and use non-LSP routes.
+- If a source `file:line` extraction returns only an import, comment, or trivial node, switch to the enclosing symbol route instead of broadening search.
+- If an exact file path is already known, keep the search radius file-local until that path is shown to be wrong.
+- If two successive calls fail to resolve the same `Missing`, stop varying tools on that hypothesis. Reframe the `Missing` or answer with `[gap]`.
+- If the question is already answered at the current layer, stop. Do not drill into downstream callers, callees, or side effects unless the user explicitly asked.
+
+## Priority under ambiguity
+
+When multiple routes are valid, prefer the one that best satisfies the current `Missing` with:
+
+1. fewer calls
+2. stronger anchor
+3. more structured output
+4. narrower scope
+5. lower side effects
