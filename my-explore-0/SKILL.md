@@ -142,6 +142,8 @@ Rules:
 - There may be only one active `Missing` at a time.
 - For the same `Missing`, tool scope may only stay the same or get narrower as stronger anchors appear.
 - Once a stronger anchor exists, broader search is forbidden for that same `Missing` unless the anchor is proven wrong.
+- After a stronger anchor exists, `rg` may not be used to inspect adjacent fields, sibling concepts, or likely-related names "just in case".
+- `rg` is allowed only to test one unresolved exact literal hypothesis that the stronger anchor cannot answer directly.
 - `mcp__probe__search_code` is entry-only. Once it returns a usable anchor, the next source-code call for that same `Missing` MUST switch to an anchored tool.
 - Bare source-file extraction is invalid. On source files, `mcp__probe__extract_code` targets must be `file#symbol` or a precise local `file:line` node.
 - Bare source file paths are forbidden unless the user explicitly asks for the whole file.
@@ -171,7 +173,8 @@ Do not switch tool families repeatedly on the same unresolved hypothesis after t
 Before every `FETCH`, internally prove all four:
 
 1. This call can materially change the final answer.
-2. No already-available narrower route can close the same `Missing`.
+2. No already-available stronger anchor (`file#symbol`, known handler, known owner file, exact anchored file) can close the same `Missing`.
+   If such an anchor exists, weaker routes (`rg`, broader AST search, repo-wide search) are forbidden unless the anchor was proven insufficient by the last result.
 3. If this call fails, the next step will be `ANSWER` or `[gap]`, not another broad exploratory fetch.
 4. The chosen query / target shape matches one scenario in `tool.md` and does not violate any invalid-run trigger.
 
@@ -185,6 +188,9 @@ Before every tool call, internally derive:
 - `Facts` — direct code facts already observed
 - `Inference` — what those facts already imply for the Goal
 - `Missing` — exactly one answer-blocking gap
+- `Missing` must be phrased as one behavioral unit, not as a topic area.
+- Good: "the handler body for EVENT_JOB_CREATED is unknown."
+- Bad: "the task flow is not fully clear."
 - `Decision` — `ANSWER` / `FETCH` / `GAP`
 
 ### Grounding rules
@@ -248,6 +254,8 @@ Any of the following makes the run invalid:
 - bare source-file extraction is used instead of `file#symbol` or a precise local `file:line`
 - a test file is read before the production owner path is anchored
 - `rg` is used only to reconfirm a fact already established by structured extraction, AST search, or LSP
+- using `file:line` on a listener or registration line when the needed fact is inside the callback body
+- using `rg` or broader AST/text search after a stronger anchor already exposes the likely owner path, unless the previous anchored read was proven insufficient for the current `Missing`
 - a tool call is made after the answer boundary is already satisfied
 
 ## Call budget
@@ -293,4 +301,7 @@ A 6th call is allowed only if:
 - Never use bare source file paths in `mcp__probe__extract_code`.
 - Never use `file:line` when the line is likely to be an import, directive, comment, or trivial node.
 - If the target behavior belongs to an enclosing function, method, callback, or class, you MUST switch to `file#symbol`.
+- If the known line is a listener, registration, route-binding, or callback-registration call and the question is about what happens next, `file:line` is forbidden.
+- Treat anonymous callbacks passed to registrations as enclosing behavioral units, not local nodes.
+- If a `file:line` extraction returns only a registration shell such as `eventBus.on(`, `router.post(`, or `addEventListener(`, the next step must be an enclosing handler route, not another local line extraction.
 - If `extract_code` returned only imports, directives, comments, or a top-level file header, the next step must be `ANSWER` or `[gap]`, not a broader search.

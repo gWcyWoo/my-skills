@@ -14,6 +14,7 @@ Move only downward on the anchor ladder for the same `Missing`:
 `concept` -> `path/file` -> `file:line` -> `file#symbol` -> `semantic reference`
 
 Once a stronger anchor is available, do not move back to a weaker route unless that anchor was proven wrong.
+Once `file#symbol`, a known handler, or a known owner file exists for the current `Missing`, weaker routes may be used only to test one unresolved exact literal hypothesis inside that anchored scope. They must not be used to broadly scan adjacent fields, sibling concepts, or likely-related names.
 
 ## How to choose
 
@@ -122,6 +123,36 @@ A precise local node at a known `file:line`, not the enclosing function.
 
 ---
 
+## Scenario: registration callback body
+
+**Intent**  
+The needed behavior lives in an anonymous callback passed to a registration API, such as `eventBus.on(...)`, `on(...)`, `addEventListener(...)`, route registration, queue consumers, or similar callback-based hooks.
+
+**Preconditions**
+
+- `file` is known
+- the registration call, route-binding call, or event literal is known
+- the needed fact is the callback behavior, not the registration shell itself
+
+**Use**
+
+- `mcp__ast_grep__find_code pattern="<registration call with callback placeholder>"`
+- then switch to the enclosing behavioral unit when identifiable
+- prefer `file#symbol` when the callback is named or belongs to a named enclosing owner
+
+**Avoid**
+
+- `mcp__probe__extract_code files=["<file>:<line>"]` on the registration line when the answer depends on callback behavior
+- treating the registration shell itself as the behavioral unit
+
+**Notes**
+
+- The registration line is often only a shell such as `eventBus.on(` or `router.post(`.
+- If the callback is anonymous, treat it as an enclosing behavioral unit rather than a trivial local node.
+- If the enclosing owner becomes identifiable, prefer `file#symbol` over further local-node extraction.
+
+---
+
 ## Scenario: every caller / semantic reference of a known symbol
 
 **Intent**  
@@ -203,6 +234,9 @@ Test one narrow literal or declaration hypothesis locally.
 **Use**
 
 - `rg -n "<exact text>" <known-file-or-nearest-dir>`
+
+This route is only for testing one unresolved exact literal hypothesis.
+It must not be used to broadly inspect nearby concepts once a stronger anchor already exists.
 
 **Allowed on source only when**
 
