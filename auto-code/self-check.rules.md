@@ -1,13 +1,13 @@
 # Code Review Rules
 
-Review the implementation code against HLD contracts, the author's Implementation Checklist, and general code quality standards. Open `~/.agents/skills/my-explore/SKILL.md` first to load code navigation methodology, then use its tools to obtain evidence — do NOT use whole-file reads on source code files.
+Review the implementation code against HLD contracts, the author's Implementation Checklist, and general code quality standards. Open `~/.agents/skills/my-explore-0/SKILL.md` first to load code navigation methodology, then use its tools to obtain evidence — do NOT use whole-file reads on source code files.
 
 ## Inputs
 
 - `understand.md` — Acceptance Criteria, Affected Files
 - `hld.md` — Interfaces, Function Signatures, Module Boundaries, Module Interaction Flow
 - `{procedure_dir}/audit/code-checklist.md` — the author's Implementation Checklist (Step 1c) and traceability tables (Step 2c/2d), extracted from the code agent's output by the main session before invoking self-check
-- Source code files (accessed via `my-explore` tools only — do NOT use whole-file reads)
+- Source code files (accessed via `my-explore-0` only — do NOT use whole-file reads)
 
 ## Part 1: HLD Contract Fidelity (P0 — Blocker)
 

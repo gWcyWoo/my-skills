@@ -15,7 +15,7 @@ Restructure existing code to comply with project coding standards. The current c
 
 ## When NOT to Use
 
-- New behavior or features are needed — use `understand` first
+- New behavior or features are needed — use `understand-0` first
 - Code has bugs — fix bugs first, then refactor separately
 
 ## Inputs
@@ -44,7 +44,7 @@ FILES TO REFACTOR:
 {files}
 
 INSTRUCTIONS:
-1. Open `~/.agents/skills/my-explore/SKILL.md` and follow it to load code navigation methodology.
+1. Open `~/.agents/skills/my-explore-0/SKILL.md` and follow it to load code navigation methodology.
 2. Run the Verification Gate (code/SKILL.md Step 2e) BEFORE making any changes. Record the results as the baseline. This tells you which tests pass and which fail before your refactor.
 3. Read `/Users/Woo/.agents/skills/auto-code/SKILL.md`. Skip Step 0 and Step 0b (do NOT dispatch another subagent or invoke review). Follow Steps 1, 1b, and 1c only:
    - Step 1: Load Project Standards — determine file types from the files to refactor, load matching shared-rules.

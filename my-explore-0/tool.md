@@ -283,8 +283,9 @@ Bootstrap from domain keywords when no usable anchor exists yet.
 **Limits**
 
 - bootstrap only
-- at most two attempts per query
-- stop immediately once a concrete file, symbol, literal, or path anchor surfaces
+- at most one `mcp__probe__search_code` call per query
+- the moment it returns a usable `file:line`, `file`, or `file#symbol` anchor, stop searching and switch immediately to `mcp__probe__extract_code` or another anchored route
+- never use `mcp__probe__search_code` again in that same reasoning chain
 
 **Avoid**
 

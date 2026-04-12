@@ -15,7 +15,7 @@ Do NOT read `requirement.md` — the understand and HLD outputs are your sole in
 
 ## Code Navigation
 
-The `my-explore` skill (loaded at session start) is your sole navigation methodology. Follow it exactly.
+The `my-explore-0` skill (loaded at session start) is your sole navigation methodology. Follow it exactly.
 
 ## Skip Conditions
 

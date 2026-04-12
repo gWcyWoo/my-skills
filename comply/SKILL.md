@@ -22,7 +22,7 @@ You may ONLY:
 
 You MUST NOT:
 - Read any project source code, config, or test file other than `package.json`.
-- Invoke `my-explore`, `mcp__probe__*`, `mcp__ast_grep__*`, `mcp__language_server__*`, or `rg` on project code.
+- Invoke `my-explore-0`, `mcp__probe__*`, `mcp__ast_grep__*`, `mcp__language_server__*`, or `rg` on project code.
 - Write, edit, or create any file.
 - Run shell commands unrelated to reading the allowed files.
 - Dispatch any subagent or skill.

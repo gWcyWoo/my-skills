@@ -1,6 +1,6 @@
 ---
 name: review
-description: External review helper for artifact-producing workflows such as `understand`, `auto-testcase`, and `auto-code`. Dispatches one reviewer through `my-subagent`, fixes any repairable defects directly, and returns control only with final review status.
+description: External review helper for artifact-producing workflows such as `understand-0`, `auto-testcase`, and `auto-code`. Dispatches one reviewer through `my-subagent`, fixes any repairable defects directly, and returns control only with final review status.
 ---
 
 # External Review

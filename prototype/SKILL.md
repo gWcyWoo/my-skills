@@ -77,7 +77,7 @@ Summarize the component tree to the user in plain language (do NOT show the raw 
 
 This step determines WHERE in the project the page will live. The user may not know the project's directory structure, so the skill must guide them.
 
-1. Open `~/.agents/skills/my-explore/SKILL.md` to examine the project's existing route structure (scan `src/app/`, `pages/`, or equivalent).
+1. Open `~/.agents/skills/my-explore-0/SKILL.md` to examine the project's existing route structure (scan `src/app/`, `pages/`, or equivalent).
 2. Analyze the design content to infer the page type (list page, detail page, form, dashboard, etc.).
 3. Suggest a module path in plain language:
 
@@ -284,8 +284,8 @@ Wait for user selection. Do NOT proceed without a selection.
 
 - **Next** → End this skill. Return control to the main conversation.
 - **Refactor** → Open `~/.agents/skills/refactor/SKILL.md`, passing the prototype file path.
-- **Implement with review** → Open `~/.agents/skills/understand/SKILL.md`, passing the spec file path as `requirement_source`.
-- **Auto-implement** → Chain `~/.agents/skills/understand/SKILL.md` in `prepare-only` mode with the spec file path as `requirement_source`, then run `~/.agents/skills/auto-tdd/SKILL.md` only if `hld.md` exists in the resulting `procedure_dir`.
+- **Implement with review** → Open `~/.agents/skills/understand-0/SKILL.md`, passing the spec file path as `requirement_source`.
+- **Auto-implement** → Start with `~/.agents/skills/understand-0/SKILL.md` using the spec file path as `requirement_source`, then prepare the persisted artifacts required by `~/.agents/skills/auto-tdd/SKILL.md` before invoking it.
 
 ---
 

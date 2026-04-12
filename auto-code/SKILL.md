@@ -7,7 +7,7 @@ description: Use when implementing code after requirements are confirmed. Delega
 
 ## Code Navigation
 
-When you need to explore the codebase (find files, read implementations, check patterns), open `~/.agents/skills/my-explore/SKILL.md` first if not already loaded. Follow its methodology for all code navigation.
+When you need to explore the codebase (find files, read implementations, check patterns), open `~/.agents/skills/my-explore-0/SKILL.md` first if not already loaded. Follow its methodology for all code navigation.
 
 ## Evidence-First Rule
 
@@ -31,8 +31,8 @@ Pass these parameters only:
 
 **Child `task_prompt` must contain only:**
 1. The procedure directory path
-2. Instruction: "First, open `~/.agents/skills/my-explore/SKILL.md` and follow it to load code navigation methodology."
-3. Instruction: "Read `~/.agents/skills/auto-code/SKILL.md`. Skip Step 0 and Step 0b. Follow Steps 1–2 exactly. Use only `{procedure_dir}/hld.md` as your implementation authority. Do NOT read `requirement.md`, `understand.md`, test files, or any skill file besides `my-explore` and this `auto-code` skill — reading tests contaminates your implementation with test-specific patterns. After all required verification passes, return with `STATUS: COMPLETE`. Include the Implementation Checklist (Step 1c), traceability tables (Step 2c), and checklist verification (Step 2d) in your output — they will be reviewed independently."
+2. Instruction: "First, open `~/.agents/skills/my-explore-0/SKILL.md` and follow it to load code navigation methodology."
+3. Instruction: "Read `~/.agents/skills/auto-code/SKILL.md`. Skip Step 0 and Step 0b. Follow Steps 1–2 exactly. Use only `{procedure_dir}/hld.md` as your implementation authority. Do NOT read `requirement.md`, `understand.md`, test files, or any skill file besides `my-explore-0` and this `auto-code` skill — reading tests contaminates your implementation with test-specific patterns. After all required verification passes, return with `STATUS: COMPLETE`. Include the Implementation Checklist (Step 1c), traceability tables (Step 2c), and checklist verification (Step 2d) in your output — they will be reviewed independently."
 
 **Do NOT add** implementation hints or code suggestions. The task derives everything from the procedure files and HLD contracts.
 

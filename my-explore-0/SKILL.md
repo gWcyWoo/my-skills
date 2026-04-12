@@ -10,7 +10,7 @@ Code exploration specialist returning file:line-precise summaries.
 ## Operating mode
 
 - Think before every tool call, but keep that reasoning internal by default.
-- Choose tools from current evidence and `~/.agents/skills/my-explore/tool.md`, not from fixed habit or one preferred tool family.
+- Choose tools from current evidence and `~/.agents/skills/my-explore-0/tool.md`, not from fixed habit or one preferred tool family.
 - Use the fewest calls possible. A tool call that only increases confidence without changing the answer boundary is forbidden.
 - Stop as soon as the user's question is answerable at the requested boundary.
 
@@ -51,7 +51,7 @@ On the first invocation of this skill per session:
         - direct file read for config, docs, and logs
     - If a tool family is not exposed in the session, or has already failed an availability check for this query, omit it instead of pretending it is available.
     - Priority when multiple tools could solve the same `Missing`: `LSP > ast-grep > Grep > mcp__probe__search_code`
-3. Read the non-source file `~/.agents/skills/my-explore/tool.md` and cache its routing rules for the rest of the query.
+3. Read the non-source file `~/.agents/skills/my-explore-0/tool.md` and cache its routing rules for the rest of the query.
 4. If any language-server call reports that the server is unavailable, mark LSP unavailable for the rest of this query and stop choosing LSP routes unless availability clearly changes.
 
 ## Hard efficiency invariants
@@ -59,6 +59,8 @@ On the first invocation of this skill per session:
 - Each query may have only one active `Missing` at a time.
 - For the same `Missing`, tool scope may only stay the same or get narrower as stronger anchors appear.
 - Once a stronger anchor is available (`path` -> `file` -> `line` -> `symbol`), broader search is forbidden for that same `Missing` unless the anchor was proven wrong.
+- `mcp__probe__search_code` is an entry tool only. Once it returns a usable `file:line`, `file`, or `file#symbol` anchor, the next source-code call for that same `Missing` MUST switch to `mcp__probe__extract_code` or another anchored tool from `tool.md`.
+- `mcp__probe__search_code` may be used at most once per query. A second `search_code` call in the same reasoning chain is an error, not a fallback.
 - After `file#symbol` is known, repo-wide search is forbidden for that same `Missing`.
 - After a structured source read (`mcp__probe__extract_code`, AST search, or LSP) establishes a fact, `rg` MUST NOT be used to reconfirm that same fact.
 - If two or more exact `file#symbol` targets are already known and all are required to close the current `Missing`, they MUST be fetched in one batched `mcp__probe__extract_code` call unless batching has already failed due to size or tool limits.
@@ -70,6 +72,8 @@ For one active `Missing`, you may use at most:
 - 1 bootstrap search when no stable anchor exists yet
 - 1 anchored structured read to inspect the most likely owner
 - 1 closing follow-up call if it directly resolves producer/consumer/handoff uncertainty
+
+If the bootstrap search is `mcp__probe__search_code`, it consumes the full bootstrap budget for the query.
 
 If the `Missing` is still unresolved after this budget, answer with `[gap]`.
 
@@ -117,14 +121,14 @@ Internally derive:
 
 - `Candidate capabilities`
 - `Chosen capability and concrete tool`
-- `Matched scenario from ~/.agents/skills/my-explore/tool.md`
+- `Matched scenario from ~/.agents/skills/my-explore-0/tool.md`
 - `Why shortest`
 - `Rejected alternative`, if one exists
 
 ### Tool-selection rules
 
 - Do not default to a specific tool family.
-- Consult `~/.agents/skills/my-explore/tool.md` before every tool call and choose the narrowest scenario whose preconditions are already satisfied.
+- Consult `~/.agents/skills/my-explore-0/tool.md` before every tool call and choose the narrowest scenario whose preconditions are already satisfied.
 - Rank candidates by this dominance order:
     1. closes the current `Missing` in fewer calls
     2. uses the strongest existing anchor (`file`, `symbol`, `line`, `literal`, `ID`, or exact path)

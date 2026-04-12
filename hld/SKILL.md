@@ -1,6 +1,6 @@
 ---
 name: hld
-description: Invoked by the `understand` skill after requirements analysis is complete. Produces design contracts for integration tests and code implementation.
+description: Invoked after `understand-0` when requirements analysis is complete and a formal design contract is needed. Produces design contracts for integration tests and code implementation.
 ---
 
 # High-Level Design (HLD)
