@@ -26,7 +26,7 @@ If gaps are discovered during design, document them in Design Decisions with the
 
 Before any design work, load the project's binding architecture rules. The HLD skill now only consults the explicit architecture/DDD contracts and the project's CLAUDE guidance, even if additional shared rules exist.
 
-1. Read `/Users/Woo/.code/shared-rules/frontend/architecture.md` **and** `/Users/Woo/.code/shared-rules/backend/ddd.md` regardless of the project type or affected files. These are the only shared-rule files HLD is permitted to load.
+1. Read `~/.code/shared-rules/frontend/architecture.md` **and** `~/.code/shared-rules/backend/ddd.md` regardless of the project type or affected files. These are the only shared-rule files HLD is permitted to load.
 2. Read the project's `CLAUDE.md` (or equivalent root guidance file) from the repository root. If the file is missing, note "CLAUDE: missing" and proceed; if present, treat its guidance as binding.
 
 Each loaded rule becomes a hard constraint for Step 2. If a drafted design violates any constraint, fix the design and document the compliant alternative in the Design Decisions section.
