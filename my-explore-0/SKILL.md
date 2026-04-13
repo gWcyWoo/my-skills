@@ -48,7 +48,9 @@ Default max: 5 points.
 
 Before calling any tool, check: remaining points ≥ tool cost. If not, pick a cheaper tool or STOP.
 
-**MUST Print** `[N/5]` after each call. When 0, **MUST STOP**, **MUST reason as deeply as possible from current evidence, estimate how many more points are needed**, and **state** that to the user together with the specific remaining gaps. User decides.
+**MUST Print** `[N/5]` after each call, followed by one sentence (≤100 tokens): based on goal and current evidence, what should we do next?
+
+When 0, **MUST STOP**, **MUST reason as deeply as possible from current evidence, estimate how many more points are needed**, and **state** that to the user together with the specific remaining gaps. User decides.
 </budget>
 
 <NEVER>
