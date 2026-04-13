@@ -42,7 +42,7 @@ Budget is charged per underlying tool call, not per assistant update.
 If one assistant action triggers multiple tool calls, charge each underlying tool call separately.
 If `multi_tool_use.parallel` contains 2 tool uses, charge 2 points.
 
-**MUST Print `[N/5]`** after each call. Then, based on the goal and current evidence, reason carefully about what should happen next before any further tool call. After that, print one sentence within 100 tokens stating the next step.
+**MUST Print `[N/5]`** after each call. Then, based on the goal and current evidence, reason carefully about what should happen next before any further tool call. After that, print two short sentences within 150 tokens total: first, what the current evidence already shows; second, what we should do next by what we reason.
 
 After every tool result, recompute and print the exact remaining budget.
 If budget accounting is uncertain, STOP and state the ambiguity before making any further tool call.
