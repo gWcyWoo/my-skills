@@ -25,12 +25,12 @@ You are writing test cases for the requirement in {procedure_dir}/hld.md. Work i
 
 2. Read {procedure_dir}/hld.md — sole design authority. Do NOT read requirement.md or understand.md.
 
-3. Read general test rules: /Users/Woo/.claude/skills/auto-testcase/general.md
+3. Read general test rules: ~/.claude/skills/auto-testcase/general.md
 
 4. Determine test types by analyzing the HLD:
-   - integration (multiple modules interact) → read /Users/Woo/.claude/skills/auto-testcase/integration.md
-   - e2e (changes affect a web page) → read /Users/Woo/.claude/skills/auto-testcase/e2e.md
-   - unit supplement (single-module ACs not covered by integration/e2e) → read /Users/Woo/.claude/skills/auto-testcase/unit.md
+   - integration (multiple modules interact) → read ~/.claude/skills/auto-testcase/integration.md
+   - e2e (changes affect a web page) → read ~/.claude/skills/auto-testcase/e2e.md
+   - unit supplement (single-module ACs not covered by integration/e2e) → read ~/.claude/skills/auto-testcase/unit.md
 
 5. Write test code per type, following each type file's rules. Load applicable test standards:
    - All projects: ~/.code/shared-rules/test.md
