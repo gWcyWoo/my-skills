@@ -28,7 +28,6 @@ First invocation per session — run these three calls to load tool schemas (mec
 | file + multiple symbols | `mcp__probe__extract_code` | `files=["f#a","f#b","g#c"]` |
 | symbol name, find callers | `mcp__language_server__get_symbol_references` | symbol location |
 | file path pattern | `rg --files` | pattern |
-| exact string or regex | `rg -n` | pattern, path |
 | AST structural pattern | `mcp__ast_grep__find_code` | pattern |
 | no file, no symbol (≤1 call) | `mcp__probe__search_code` | query (2-3 keywords), path |
 
@@ -48,7 +47,7 @@ Default max: 5 points.
 
 Before calling any tool, check: remaining points ≥ tool cost. If not, pick a cheaper tool or STOP.
 
-**MUST Print `[N/5]`** after each call, print one sentence within 100 tokens answering: based on the goal and current evidence, what should we do next?
+**MUST Print `[N/5]`** after each call. Then, based on the goal and current evidence, reason carefully about what should happen next before any further tool call. After that, print one sentence within 100 tokens stating the next step what you reason.
 
 **When 0, MUST STOP**, **MUST reason as deeply as possible from current evidence, estimate how many more points are needed**, and **state** that to the user together with the specific remaining gaps. User decides.
 </budget>
