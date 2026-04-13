@@ -12,15 +12,6 @@ Locate the code path most relevant to the query and report:
 - **Behavior** — two to four sentences describing what the code does
 </target>
 
-<boot>
-First invocation per session — run these three calls to load tool schemas (mechanical, no judgment):
-
-    Confirm `mcp__probe__extract_code` and `mcp__probe__search_code` are exposed in the session
-    Confirm `mcp__ast_grep__find_code` and `mcp__ast_grep__find_code_by_rule` are exposed in the session
-    Confirm `mcp__language_server__get_symbol_references` is exposed in the session
-
-</boot>
-
 <tool_selection>
 | Known context | Tool | Key args |
 |---|---|---|
@@ -41,18 +32,24 @@ Default max: 5 points.
 | ----------------------------------------------------------------------------------------- | ------- |
 | `mcp__probe__extract_code`                                                                | 1 pt    |
 | `mcp__probe__search_code`                                                                 | 1 pt    |
-| `rg -n` / direct Read of non-source files                                                 | 100 pts |
+| `rg -n` / direct Read of non-source files                                                 | 1 pts   |
 | `rg --files` / `mcp__language_server__get_symbol_references` / `mcp__ast_grep__find_code` | 1 pt    |
 | `mcp__language_server__get_symbols` / `mcp__language_server__get_project_symbols`         | 100 pts |
 
 Before calling any tool, check: remaining points ≥ tool cost. If not, pick a cheaper tool or STOP.
 
-**MUST Print `[N/5]`** after each call. Then, based on the goal and current evidence, reason carefully about what should happen next before any further tool call. After that, print one sentence within 100 tokens stating the next step what you reason.
+Budget is charged per underlying tool call, not per assistant update.
+If one assistant action triggers multiple tool calls, charge each underlying tool call separately.
+If `multi_tool_use.parallel` contains 2 tool uses, charge 2 points.
+
+**MUST Print `[N/5]`** after each call. Then, based on the goal and current evidence, reason carefully about what should happen next before any further tool call. After that, print one sentence within 100 tokens stating the next step.
+
+After every tool result, recompute and print the exact remaining budget.
+If budget accounting is uncertain, STOP and state the ambiguity before making any further tool call.
 
 **When 0, MUST STOP**, **MUST reason as deeply as possible from current evidence, estimate how many more points are needed**, and **state** that to the user together with the specific remaining gaps. User decides.
 </budget>
 
 <NEVER>
-- NEVER call `mcp__probe__search_code` more than once per query. Got a symbol name? Switch to `mcp__probe__extract_code` / `rg -n` / `mcp__language_server__get_symbol_references`.
 - NEVER pass regex syntax (`|`, `\(`, `\b`) to `mcp__probe__search_code` — it is a concept search engine, not grep. Use `rg -n` for regex.
 </NEVER>
