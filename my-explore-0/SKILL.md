@@ -36,7 +36,7 @@ Priority: extract_code > findReferences > ast-grep > Grep > search_code
 </tool_selection>
 
 <budget>
-Default max: 5 points.
+Default max: 6 points.
 
 | Tool                             | Cost    |
 | -------------------------------- | ------- |
@@ -48,7 +48,7 @@ Default max: 5 points.
 
 Before calling any tool, check: remaining points ≥ tool cost. If not, pick a cheaper tool or STOP.
 
-**MUST Print `[N/5]`** after each call. Then, based on the goal and current evidence, reason carefully about what should happen next before any further tool call. After that, print one sentence within 100 tokens stating the next step what you reason.
+**MUST Print `[N/5]`** after each call. Then, based on the goal and current evidence, **MUST** reason deeply about what should happen next before any further tool call. After that, print two short sentences within 150 tokens total: first, what the current evidence already shows; second, what we should do next by what we reason.
 
 When 0, **MUST STOP**, **MUST reason as deeply as possible from current evidence, estimate how many more points are needed**, and **state** that to the user together with the specific remaining gaps. User decides.
 </budget>
