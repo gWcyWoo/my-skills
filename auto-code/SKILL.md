@@ -55,8 +55,8 @@ Let `my-subagent` own observability, liveness, resume mechanics, and child-lifec
 
 ### Step 0b: External Review
 
-Invoke `/Users/Woo/.agents/skills/review/SKILL.md` once with:
-- `rules_path`: `/Users/Woo/.agents/skills/auto-code/self-check.rules.md`
+Invoke `~/.agents/skills/review/SKILL.md` once with:
+- `rules_path`: `~/.agents/skills/auto-code/self-check.rules.md`
 - `files`: `{procedure_dir}/hld.md`, `{procedure_dir}/audit/code-checklist.md`, `{procedure_dir}/audit/code-self-check.md`, plus the new/modified implementation files
 - `output_path`: `{procedure_dir}/audit/code-review.md`
 
@@ -218,8 +218,8 @@ Every item MUST be ✅. Any ❌ is a blocker — fix the code before declaring i
 
 ### 2e. Internal Self-Check (MANDATORY)
 
-Run `/Users/Woo/.agents/skills/self-check/SKILL.md` with the following parameters:
-- `rules_path`: `/Users/Woo/.agents/skills/auto-code/self-check.rules.md`
+Run `~/.agents/skills/self-check/SKILL.md` with the following parameters:
+- `rules_path`: `~/.agents/skills/auto-code/self-check.rules.md`
 - `files`: `{procedure_dir}/hld.md`, `{procedure_dir}/audit/code-checklist.md`, plus every implementation artifact produced under `{procedure_dir}/output` (e.g., the files modified/created by the delegated child)
 - `output_path`: `{procedure_dir}/audit/code-self-check.md`
 

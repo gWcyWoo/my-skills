@@ -43,8 +43,8 @@ When no argument is given, analyze the `understand` output and HLD to recommend 
    | **e2e** | **Any change that affects a web page** — layout, components, interactions, data display, styling, or user flows. This includes single-page UI changes with no navigation. | Change is purely backend/API with no web page impact (e.g., server-only logic, CLI tool, database migration) |
 
 3. For each recommended type, **immediately load** the corresponding rules file and identify test directions (from the type file's methodology):
-   - `integration` → Read `/Users/Woo/.agents/skills/auto-testcase/integration.md`, identify directions from HLD module boundaries
-   - `e2e` → Read `/Users/Woo/.agents/skills/auto-testcase/e2e.md`, identify directions from user flows
+   - `integration` → Read `~/.agents/skills/auto-testcase/integration.md`, identify directions from HLD module boundaries
+   - `e2e` → Read `~/.agents/skills/auto-testcase/e2e.md`, identify directions from user flows
 
 4. **Return recommendation + directions together with `STATUS: NEEDS_CONFIRMATION`** (single STOP gate, not two):
 
@@ -119,7 +119,7 @@ Write the test plan to `{procedure_dir}/testcase/plan.md`.
 
 After integration/e2e test plans are confirmed, check if any ACs were marked as **"unit test scope"** during the AC Gap Check in Step 1. If yes:
 
-1. Read `/Users/Woo/.agents/skills/auto-testcase/unit.md` to load unit test rules.
+1. Read `~/.agents/skills/auto-testcase/unit.md` to load unit test rules.
 2. For each unit-scope AC, design test cases following the unit test rules.
 3. Output the unit test plan under a `## Supplementary Unit Test Plan` heading.
 4. No additional user confirmation needed for the unit plan.
@@ -153,7 +153,7 @@ The **confirmed test plan** (from Step 1) is the sole input for writing test cod
 **Do NOT run tests.** The `tdd` workflow handles test execution.
 
 After test code is written and lint-clean, invoke the `self-check` skill using the Skill tool for each test type produced, passing:
-- **integration**: `rules_path`: `/Users/Woo/.agents/skills/auto-testcase/self-check.rules.md`, `files`: `{procedure_dir}/hld.md, [test files]`, `output_path`: `{procedure_dir}/audit/testcase-self-check-record.md`
-- **e2e**: `rules_path`: `/Users/Woo/.agents/skills/auto-testcase/self-check-e2e.rules.md`, `files`: `{procedure_dir}/hld.md, [test files]`, `output_path`: `{procedure_dir}/audit/testcase-e2e-self-check-record.md`
+- **integration**: `rules_path`: `~/.agents/skills/auto-testcase/self-check.rules.md`, `files`: `{procedure_dir}/hld.md, [test files]`, `output_path`: `{procedure_dir}/audit/testcase-self-check-record.md`
+- **e2e**: `rules_path`: `~/.agents/skills/auto-testcase/self-check-e2e.rules.md`, `files`: `{procedure_dir}/hld.md, [test files]`, `output_path`: `{procedure_dir}/audit/testcase-e2e-self-check-record.md`
 
 After self-check completes, return with `STATUS: COMPLETE`.

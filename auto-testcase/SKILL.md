@@ -19,7 +19,7 @@ The caller must provide:
 Launch an Agent subagent (general-purpose) with `name: "testcase-agent"` and this prompt:
 1. The procedure directory path
 2. Instruction: "First, invoke the `my-explore-0` skill using the Skill tool to load code navigation methodology."
-3. Instruction: "Read `/Users/Woo/.agents/skills/auto-testcase/subagent-instructions.md` and follow it exactly. Do NOT invoke any skills via the Skill tool other than `my-explore-0` — you are already executing the testcase workflow by reading subagent-instructions.md directly. **SKIP ALL STOP GATES** — do NOT return STATUS: NEEDS_CONFIRMATION at any point. Auto-accept all recommendations, directions, and test plans. Run straight through from Step 0 to Step 2 (write tests + self-check) and return STATUS: COMPLETE."
+3. Instruction: "Read `~/.agents/skills/auto-testcase/subagent-instructions.md` and follow it exactly. Do NOT invoke any skills via the Skill tool other than `my-explore-0` — you are already executing the testcase workflow by reading subagent-instructions.md directly. **SKIP ALL STOP GATES** — do NOT return STATUS: NEEDS_CONFIRMATION at any point. Auto-accept all recommendations, directions, and test plans. Run straight through from Step 0 to Step 2 (write tests + self-check) and return STATUS: COMPLETE."
 
 **Do NOT add** implementation hints, test code suggestions, or any context beyond the procedure directory path.
 
@@ -37,8 +37,8 @@ For **each test type** produced by the subagent, invoke the `review` skill with 
 
 | Test Type | Rules File | Output Path |
 |-----------|-----------|-------------|
-| integration | `/Users/Woo/.agents/skills/auto-testcase/self-check.rules.md` | `{procedure_dir}/audit/testcase-self-check.md` |
-| e2e | `/Users/Woo/.agents/skills/auto-testcase/self-check-e2e.rules.md` | `{procedure_dir}/audit/testcase-e2e-self-check.md` |
+| integration | `~/.agents/skills/auto-testcase/self-check.rules.md` | `{procedure_dir}/audit/testcase-self-check.md` |
+| e2e | `~/.agents/skills/auto-testcase/self-check-e2e.rules.md` | `{procedure_dir}/audit/testcase-e2e-self-check.md` |
 
 Invoke the `review` skill **using the Skill tool** for each applicable type, passing:
 - `rules_path`: the rules file for this test type (from table above)

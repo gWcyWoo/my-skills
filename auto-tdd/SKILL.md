@@ -43,15 +43,15 @@ Launch **both** child agents in parallel. Each is self-contained - writes code, 
    2. Read {procedure_dir}/hld.md for design contracts.
 
    3. Select and load project standards. Check package.json and file extensions to determine which apply:
-      - TypeScript (.ts/.tsx): /Users/Woo/.agents/shared-rules/common/typescript.md
-      - Any frontend (.vue/.tsx/.jsx): /Users/Woo/.agents/shared-rules/frontend/architecture.md
-      - Vue (vue in dependencies): /Users/Woo/.agents/shared-rules/frontend/vue3.md
-      - React (react in dependencies): /Users/Woo/.agents/shared-rules/frontend/reactjs.md
-      - Next.js (next in dependencies): /Users/Woo/.agents/shared-rules/frontend/nextjs.md
-      - Next.js fullstack (next + database operations): /Users/Woo/.agents/shared-rules/frontend/nextjs-fullstack.md
-      - Any backend (non-frontend .ts/.js): /Users/Woo/.agents/shared-rules/backend/ddd.md
-      - Express (express in dependencies): /Users/Woo/.agents/shared-rules/backend/express.md
-      - MongoDB (mongoose/mongodb in dependencies): /Users/Woo/.agents/shared-rules/backend/mongodb.md
+      - TypeScript (.ts/.tsx): ~/.agents/shared-rules/common/typescript.md
+      - Any frontend (.vue/.tsx/.jsx): ~/.agents/shared-rules/frontend/architecture.md
+      - Vue (vue in dependencies): ~/.agents/shared-rules/frontend/vue3.md
+      - React (react in dependencies): ~/.agents/shared-rules/frontend/reactjs.md
+      - Next.js (next in dependencies): ~/.agents/shared-rules/frontend/nextjs.md
+      - Next.js fullstack (next + database operations): ~/.agents/shared-rules/frontend/nextjs-fullstack.md
+      - Any backend (non-frontend .ts/.js): ~/.agents/shared-rules/backend/ddd.md
+      - Express (express in dependencies): ~/.agents/shared-rules/backend/express.md
+      - MongoDB (mongoose/mongodb in dependencies): ~/.agents/shared-rules/backend/mongodb.md
 
    4. Write implementation code following the HLD interfaces and module boundaries.
 
