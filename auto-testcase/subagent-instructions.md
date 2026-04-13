@@ -140,9 +140,9 @@ The **confirmed test plan** (from Step 1) is the sole input for writing test cod
 
    | Condition | File to Read |
    |---|---|
-   | Any project | `/Users/Woo/.code/shared-rules/test.md` |
-   | Vue (`vue` in dependencies) | `/Users/Woo/.code/shared-rules/vuejs.test.md` |
-   | TypeScript (`.ts`/`.tsx` files) | `/Users/Woo/.code/shared-rules/typescript.test.md` |
+   | Any project | `~/.code/shared-rules/test.md` |
+   | Vue (`vue` in dependencies) | `~/.code/shared-rules/vuejs.test.md` |
+   | TypeScript (`.ts`/`.tsx` files) | `~/.code/shared-rules/typescript.test.md` |
 
 2. Write tests following the **Writing Rules** in each loaded type file.
    - **HLD gap detection**: If test code requires a type not defined in the HLD, flag it as an HLD gap.

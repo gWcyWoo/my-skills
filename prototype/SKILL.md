@@ -97,7 +97,7 @@ Behind the scenes, this maps to a framework-specific file path (e.g., `pages/com
 
 ### Step 1.4: Generate Static Page
 
-1. Load the project's frontend shared rules from `/Users/Woo/.code/shared-rules/frontend/` based on the detected framework (Next.js, Vue, React, etc.).
+1. Load the project's frontend shared rules from `~/.code/shared-rules/frontend/` based on the detected framework (Next.js, Vue, React, etc.).
 2. Generate the page using:
    - The d2spec component tree markdown as the visual reference (layout, sizing, colors, typography, hierarchy)
    - The project's tech stack and conventions from shared rules

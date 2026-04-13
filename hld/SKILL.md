@@ -30,8 +30,8 @@ Before any design work, load the project's architecture and convention rules. Th
 
 | Condition | File to Read |
 |---|---|
-| Any frontend (`.vue`/`.tsx`/`.jsx` files) | `/Users/Woo/.code/shared-rules/frontend/architecture.md` |
-| Any backend (non-frontend `.ts`/`.js` files) | `/Users/Woo/.code/shared-rules/backend/ddd.md` |
+| Any frontend (`.vue`/`.tsx`/`.jsx` files) | `~/.code/shared-rules/frontend/architecture.md` |
+| Any backend (non-frontend `.ts`/`.js` files) | `~/.code/shared-rules/backend/ddd.md` |
 
 **0b. Load project design constraints:** Read the project's CLAUDE.md **in the repository root** using the `Read` tool. This is the project-specific CLAUDE.md, not the global `~/.claude/CLAUDE.md`. If no project CLAUDE.md exists in the repository root, output "Step 0b N/A" and proceed.
 

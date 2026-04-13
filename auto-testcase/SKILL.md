@@ -33,9 +33,9 @@ You are writing test cases for the requirement in {procedure_dir}/hld.md. Work i
    - unit supplement (single-module ACs not covered by integration/e2e) → read /Users/Woo/.claude/skills/auto-testcase/unit.md
 
 5. Write test code per type, following each type file's rules. Load applicable test standards:
-   - All projects: /Users/Woo/.code/shared-rules/test.md
-   - Vue (vue in dependencies): /Users/Woo/.code/shared-rules/vuejs.test.md
-   - TypeScript (.ts/.tsx): /Users/Woo/.code/shared-rules/typescript.test.md
+   - All projects: ~/.code/shared-rules/test.md
+   - Vue (vue in dependencies): ~/.code/shared-rules/vuejs.test.md
+   - TypeScript (.ts/.tsx): ~/.code/shared-rules/typescript.test.md
 
 6. Run `lint 2>/dev/null`. Fix until zero errors.
 
