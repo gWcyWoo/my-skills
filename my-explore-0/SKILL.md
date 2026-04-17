@@ -26,7 +26,8 @@ First invocation per session — run these three calls to load tool schemas (mec
 |---|---|---|
 | file + symbol name | extract_code | files=["file#symbol"] |
 | file + multiple symbols | extract_code | files=["f#a","f#b","g#c"] |
-| symbol name, find callers | LSP findReferences | symbol, in |
+| file:line:col known, find callers | LSP findReferences | operation, filePath, line, character |
+| only have symbol name, want callers | seed first (search_code / ast-grep / extract_code → file:line:col), then LSP findReferences | two-step |
 | file path pattern | Glob | pattern |
 | exact string or regex | Grep | pattern, path |
 | AST structural pattern | ast-grep find_code | pattern |
@@ -38,17 +39,18 @@ Priority: extract_code > findReferences > ast-grep > Grep > search_code
 <budget>
 Default max: 6 points.
 
-| Tool                             | Cost    |
-| -------------------------------- | ------- |
-| extract_code                     | 1 pt    |
-| search_code                      | 1 pt    |
-| Glob / findReferences / ast-grep | 1 pt    |
-| Grep / Read                      | 100 pts |
-| LSP documentSymbol / workspace\* | 100 pts |
+| Tool                             | Cost   |
+| -------------------------------- | ------ |
+| extract_code                     | 1 pt   |
+| search_code                      | 1 pt   |
+| Glob / findReferences / ast-grep | 1 pt   |
+| Grep                             | 100 pt |
+| Read                             | 100 pt |
+| LSP documentSymbol / workspace\* | 100 pt |
 
 Before calling any tool, check: remaining points ≥ tool cost. If not, pick a cheaper tool or STOP.
 
-**MUST Print `[N/5]`** after each call. Then, based on the goal and current evidence, **MUST** reason deeply about what should happen next before any further tool call. After that, print two short sentences within 150 tokens total: first, what the current evidence already shows; second, what we should do next by what we reason.
+**MUST Print `[N/6]`** after each call. Then, based on the goal and current evidence, **MUST** reason deeply about what should happen next before any further tool call. After that, print a concise reasoning summary and next-step plan in no more than 150 tokens. If another call is needed, the plan MUST name the proper next tool: the lowest-token, in-budget tool that can explain the current gap clearly enough to move the exploration forward. This note must guide your reasoning in the next turn.
 
 When 0, **MUST STOP**, **MUST reason as deeply as possible from current evidence, estimate how many more points are needed**, and **state** that to the user together with the specific remaining gaps. User decides.
 </budget>
