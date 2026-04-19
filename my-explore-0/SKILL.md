@@ -37,25 +37,25 @@ Priority: extract_code > findReferences > ast-grep > Grep > search_code
 </tool_selection>
 
 <budget>
-Default max: 6 points.
+Default max: 5 points.
 
-| Tool                             | Cost   |
-| -------------------------------- | ------ |
-| extract_code                     | 1 pt   |
-| search_code                      | 1 pt   |
-| Glob / findReferences / ast-grep | 1 pt   |
-| Grep                             | 100 pt |
-| Read                             | 100 pt |
-| LSP documentSymbol / workspace\* | 100 pt |
+| Tool                             | Cost     |
+| -------------------------------- | -------- |
+| extract_code                     | 1 pt     |
+| search_code                      | 1 pt     |
+| Glob / findReferences / ast-grep | 1 pt     |
+| Grep                             | 100 pt   |
+| Read                             | 10000 pt |
+| LSP documentSymbol / workspace\* | 100 pt   |
 
 Before calling any tool, check: remaining points ≥ tool cost. If not, pick a cheaper tool or STOP.
 
-**MUST Print `[N/6]`** after each call. Then, based on the goal and current evidence, **MUST** reason deeply about what should happen next before any further tool call. After that, print a concise reasoning summary and next-step plan in no more than 150 tokens. If another call is needed, the plan MUST name the proper next tool: the lowest-token, in-budget tool that can explain the current gap clearly enough to move the exploration forward. This note must guide your reasoning in the next turn.
+**MUST Print `[N/5]`** after each call. Then, based on the goal and current evidence, **MUST** reason deeply about what should happen next before any further tool call. After that, print a concise reasoning summary and next-step plan in no more than 150 tokens. If another call is needed, the plan MUST name the proper next tool: an in-budget tool. This note must guide your reasoning in the next turn.
 
-When 0, **MUST STOP**, **MUST reason as deeply as possible from current evidence, estimate how many more points are needed**, and **state** that to the user together with the specific remaining gaps. User decides.
+When 0, **MUST STOP and apply to user more budgets**, **MUST reason as deeply as possible from current evidence, estimate how many more points are needed**, and **state** that to the user together with the specific remaining gaps. User decides.
 </budget>
 
 <NEVER>
-- NEVER call `search_code` more than once per query. Got a symbol name? Switch to `extract_code` / `Grep` / `findReferences`.
+- NEVER call `search_code`|`Grep` more than once per query. Got a symbol name? Switch to `extract_code` / `findReferences`.
 - NEVER pass regex syntax (`|`, `\(`, `\b`) to `search_code` — it is a concept search engine, not grep. Use `Grep` for regex.
 </NEVER>
