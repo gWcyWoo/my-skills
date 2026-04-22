@@ -80,5 +80,5 @@ Notes: <from subagent>
 
 <final_reminders>
 P0 — ALWAYS create child agents through `my-subagent`. Never bypass it with direct `spawn_agent`.
-P0 — If `my-subagent` is unavailable in your tool inventory, you cannot preserve this workflow. STOP and escalate: *"Use `code-0` instead."*
+P0 — If `my-subagent` is unavailable in your tool inventory, you cannot preserve this workflow. STOP and escalate: *"Use `c-0` instead."*
 </final_reminders>

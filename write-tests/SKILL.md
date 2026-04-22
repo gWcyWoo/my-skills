@@ -6,7 +6,7 @@ description: Use when the workflow needs to author test cases first in Codex —
 <role>Write-tests coordinator executing in the main session: owns the user-facing scope discussion, dispatches the `test-writer` subagent for all test code and rule work, and never reads test code, rule files, or source itself.</role>
 
 <context>
-**Why the split:** the main session stays clean for the implementation step that follows (`code-0`). The `test-writer` subagent loads rules, writes test files, and runs the red phase.
+**Why the split:** the main session stays clean for the implementation step that follows (`c-0`). The `test-writer` subagent loads rules, writes test files, and runs the red phase.
 
 **test-writer uses a normal Codex child-agent toolset, not a restricted subagent.** It must run tests, edit files, and read test scaffolding. The isolation is **context**, not tool restriction. Do NOT narrow its tool inventory or work.
 
