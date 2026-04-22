@@ -30,7 +30,7 @@ This is the default workflow for any code change that does not require a formal 
    - If **no** → advance directly to Step 3.
 3. **Step 3 — Implement & review.** Two sequential sub-steps:
    - **3a. Load coding standards.** Invoke the `comply` skill, passing the task context (what is being implemented based on `u-0`'s output, which files are in scope, which test files exist from Step 2 if applicable). `comply` dispatches a rule-loader subagent and returns a compact rules extract scoped to this specific task. Keep the extract in main-session memory for Step 3b. **If `comply` fails to return a valid rules extract** — subagent error (e.g. API 529), empty result, missing rule files, or non-actionable output — STOP Step 3 immediately with `Status: blocked`, `Reason: rules-unavailable`, and surface the root cause to the user (e.g., *"comply subagent returned 529 Overloaded — try again in a few minutes"*). Do NOT proceed to 3b without rules: `code` would just block again and obscure the real failure.
-   - **3b. Delegate implementation.** Invoke the `code` skill (NOT `code-0`) with the full input bundle: `REQUIREMENT_SUMMARY` (the confirmed understanding from Step 1), `FILES_IN_SCOPE` (the files named by `u-0`), `RULES` (the rules extract from Step 3a), and `TEST_FILES` (the red test file paths from Step 2 if `write-tests` was invoked — omit this field entirely if Step 2 was skipped). `code` will dispatch the `implementer` subagent to do the actual code writing. Wait for `code` to return `Status: ready-for-verify` before advancing to Step 4. If `code` returns `Status: blocked`, surface the blocker to the user and STOP.
+   - **3b. Delegate implementation.** Invoke the `code` skill (NOT `c-0`) with the full input bundle: `REQUIREMENT_SUMMARY` (the confirmed understanding from Step 1), `FILES_IN_SCOPE` (the files named by `u-0`), `RULES` (the rules extract from Step 3a), and `TEST_FILES` (the red test file paths from Step 2 if `write-tests` was invoked — omit this field entirely if Step 2 was skipped). `code` will dispatch the `implementer` subagent to do the actual code writing. Wait for `code` to return `Status: ready-for-verify` before advancing to Step 4. If `code` returns `Status: blocked`, surface the blocker to the user and STOP.
 4. **Step 4 — Verify & done.** Read `~/.claude/skills/tdd/verify.md` and follow its instructions to completion (lint + test run + done check).
 </instructions>
 
@@ -60,7 +60,7 @@ ANTI-PATTERN A: Inlining `u-0` ("I already understand it, let me just implement"
 ANTI-PATTERN B: Combining Step 2 and Step 3 into a single "write tests then implement" pass. They are sequential and each has its own STOP points.
 ANTI-PATTERN C: Skipping Step 4 verify because "the tests passed during implementation." Step 4 is the official lint+test+done gate.
 ANTI-PATTERN E: Skipping Step 3a (comply) and invoking `code` without `RULES`. `code` will STOP and return an error — it will NOT fall back to invoking `comply` itself. Always load rules in Step 3a first.
-ANTI-PATTERN F: Invoking `code-0` (main-session variant) instead of `code` (subagent variant) in Step 3b. `code-0` is an explicit fallback for when the user wants inline diffs; the standard `tdd` flow uses `code` for clean main-session isolation.
+ANTI-PATTERN F: Invoking `c-0` (main-session variant) instead of `code` (subagent variant) in Step 3b. `c-0` is an explicit fallback for when the user wants inline diffs; the standard `tdd` flow uses `code` for clean main-session isolation.
 </example>
 </examples>
 
@@ -89,7 +89,7 @@ Stop the moment those hold. Do not loop back to add features or refactors not in
 P0 — Steps are SEQUENTIAL. Each step must complete before the next starts. "Proceed" advances by one step, not to the end. Step 3 itself has two sequential sub-steps: 3a (`comply`) MUST run before 3b (`code`).
 P0 — Every step that says "Invoke skill" MUST actually invoke the skill via the Skill tool. Do not inline, summarize, or skip skill invocations.
 P0 — NEVER claim tests passed without actually running them. Step 4 verify.md is the canonical run.
-P0 — Step 3b MUST call `code` (subagent-dispatching variant), NOT `code-0` (main-session variant). `code-0` is an explicit escape hatch for when the user specifically wants inline diffs; the standard `tdd` flow uses `code` for clean main-session isolation. If `code` fails due to subagent dispatch unavailability, you may fall back to `code-0` and surface the degradation to the user.
+P0 — Step 3b MUST call `code` (subagent-dispatching variant), NOT `c-0` (main-session variant). `c-0` is an explicit escape hatch for when the user specifically wants inline diffs; the standard `tdd` flow uses `code` for clean main-session isolation. If `code` fails due to subagent dispatch unavailability, you may fall back to `c-0` and surface the degradation to the user.
 P0 — `code` requires pre-loaded rules via the `RULES` input. NEVER skip Step 3a and invoke `code` without rules — it will block. Step 3a is not optional.
 P1 — Do not expand scope unilaterally. If you discover something out of scope during Step 3, STOP and ask the user.
 P1 — If `write-tests` returns `Status: aborted` (per its `<output_format>`), do not proceed to Step 3 — surface the blocker to the user and STOP.

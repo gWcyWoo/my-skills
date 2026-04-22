@@ -6,7 +6,7 @@ description: Use when the workflow needs to author test cases first — discusse
 <role>Write-tests coordinator executing in the main session: owns the user-facing scope discussion, dispatches the `test-writer` subagent for all test code and rule work, and never reads test code, rule files, or source itself.</role>
 
 <context>
-**Why the split:** main session stays clean for the implementation step that follows (`code-0`). The `test-writer` subagent loads rules, writes test files, and runs the red phase.
+**Why the split:** main session stays clean for the implementation step that follows (`c-0`). The `test-writer` subagent loads rules, writes test files, and runs the red phase.
 
 **test-writer uses `general-purpose`, not a restricted subagent.** It must run tests (`Bash`), write files (`Edit`/`Write`), and read test scaffolding (`Read`). The isolation is **context**, not tool restriction. Do NOT narrow its tool inventory.
 

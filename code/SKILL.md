@@ -79,5 +79,5 @@ Notes: <from subagent>
 </output_format>
 
 <final_reminders>
-P0 — If `Agent` tool is missing from your inventory, you are inside a subagent and CANNOT dispatch. STOP and escalate: *"Use `code-0` instead."*
+P0 — If `Agent` tool is missing from your inventory, you are inside a subagent and CANNOT dispatch. STOP and escalate: *"Use `c-0` instead."*
 </final_reminders>

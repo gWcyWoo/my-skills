@@ -45,6 +45,6 @@ Stop immediately. Hand control to the caller.
 P0 — Exploration MUST use `my-explore-0`.
 P0 — NEVER guess when the requirement is ambiguous. Ask the user.
 P0 — NEVER skip the final user confirmation STOP.
-P1 — Do not write tests or code. Those are downstream (`write-tests` / `code-0`).
+P1 — Do not write tests or code. Those are downstream (`write-tests` / `c-0`).
 P2 — If the user provides exploration context up front, skip to step 3.
 </final_reminders>

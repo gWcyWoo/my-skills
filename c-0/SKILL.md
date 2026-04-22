@@ -1,5 +1,5 @@
 ---
-name: code-0
+name: c-0
 description: Use as the implementation step of any workflow — loads project coding standards via the comply subagent, implements the change in the MAIN session, and gates on user review before lint/test. The `-0` suffix denotes main-session execution (parallels `my-explore-0`).
 ---
 

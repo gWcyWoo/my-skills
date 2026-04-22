@@ -5,7 +5,7 @@ description: Invoked by the `u-0` skill after requirements analysis is complete.
 
 # High-Level Design (HLD)
 
-Produces a design contract that `testcase integration` and `code-0` consume directly. Interfaces become API contracts, module boundaries become mock boundaries, interaction flows become integration test cases.
+Produces a design contract that `testcase integration` and `c-0` consume directly. Interfaces become API contracts, module boundaries become mock boundaries, interaction flows become integration test cases.
 
 ## Inputs
 
@@ -163,4 +163,4 @@ After writing `hld.md`, return to the caller (the analysis flow in `subagent-ins
 
 This HLD serves as direct input for:
 - **`testcase integration`**: Module Boundaries → mock boundary identification. Interaction Flow rows → integration test cases. AC ID → traceability.
-- **`code-0`**: Interfaces + Signatures → implementation contracts. Module Boundaries → file/module structure. Interaction Flow → orchestration logic.
+- **`c-0`**: Interfaces + Signatures → implementation contracts. Module Boundaries → file/module structure. Interaction Flow → orchestration logic.

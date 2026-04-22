@@ -42,7 +42,7 @@ Launch **both** subagents in parallel. Each is self-contained — writes code, g
 
    2. Read {procedure_dir}/hld.md for design contracts.
 
-   3. Invoke the `code-0` skill using the Skill tool. Follow its instructions to load coding standards and implement.
+   3. Invoke the `c-0` skill using the Skill tool. Follow its instructions to load coding standards and implement.
 
    4. Run `lint 2>/dev/null`. Fix until zero errors.
 
