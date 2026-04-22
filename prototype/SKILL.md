@@ -284,8 +284,8 @@ Wait for user selection. Do NOT proceed without a selection.
 
 - **Next** → End this skill. Return control to the main conversation.
 - **Refactor** → Open `~/.agents/skills/refactor/SKILL.md`, passing the prototype file path.
-- **Implement with review** → Open `~/.agents/skills/understand-0/SKILL.md`, passing the spec file path as `requirement_source`.
-- **Auto-implement** → Start with `~/.agents/skills/understand-0/SKILL.md` using the spec file path as `requirement_source`, then prepare the persisted artifacts required by `~/.agents/skills/auto-tdd/SKILL.md` before invoking it.
+- **Implement with review** → Open `~/.agents/skills/u-0/SKILL.md`, passing the spec file path as `requirement_source`.
+- **Auto-implement** → Start with `~/.agents/skills/u-0/SKILL.md` using the spec file path as `requirement_source`, then prepare the persisted artifacts required by `~/.agents/skills/auto-tdd/SKILL.md` before invoking it.
 
 ---
 

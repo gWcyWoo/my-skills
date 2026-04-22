@@ -1,5 +1,5 @@
 ---
-name: understand-0
+name: u-0
 description: Use as the lightweight understanding step (no formal HLD, MAIN-session execution) — explores code via `my-explore-0`, identifies the gap between requirement and current state, discusses with the user until both sides are clear, then confirms the result.
 ---
 

@@ -115,7 +115,7 @@ For non-file calls (`search_code`, `get_symbol_definitions`, `wc -l`), use:
 Rules enforced by the tags:
   - `[OPEN]` with unknown Ltotal → next tool MUST be `wc -l`.
   - `[missing-in-complete]` → named blacklist applies; do NOT verify with any other tool.
-  - All plan entries resolved (each is `[COMPLETE]`, `[missing-in-complete]`, or satisfied) → output the final `<output_format>` block from the understand-0 skill (Feature/change or Bug fix), then `done — stopping`. Do NOT truncate.
+  - All plan entries resolved (each is `[COMPLETE]`, `[missing-in-complete]`, or satisfied) → output the final `<output_format>` block from the u-0 skill (Feature/change or Bug fix), then `done — stopping`. Do NOT truncate.
 
 These are output requirements, not internal thinking. A multi-line or verbose inter-call narration is itself a rule violation — collapse to the single line above.
 </OUTPUT_FORMAT>

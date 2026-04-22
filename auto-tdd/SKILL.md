@@ -14,7 +14,7 @@ The procedure directory must contain:
 - `understand.md` - requirements analysis
 - `hld.md` - high-level design contracts
 
-If any of these files are missing, stop and display the error. Do NOT invoke `understand-0` or create these files here - they must be produced before invoking this skill.
+If any of these files are missing, stop and display the error. Do NOT invoke `u-0` or create these files here - they must be produced before invoking this skill.
 
 ## Pipeline
 
@@ -150,10 +150,10 @@ Each `##` heading is the requirement name. The content under it is the requireme
 
 ### Execution
 
-The main session acts as a **dispatcher** - it runs `understand-0` for each requirement, then delegates the auto-tdd pipeline to a child agent.
+The main session acts as a **dispatcher** - it runs `u-0` for each requirement, then delegates the auto-tdd pipeline to a child agent.
 
 For each requirement:
-1. Invoke `understand-0` skill, passing the requirement name and description.
+1. Invoke `u-0` skill, passing the requirement name and description.
    - Bypass user-selection gates and proceed automatically.
    - Do NOT bypass critical ambiguity STOPs - fail this requirement if critical ambiguity is encountered.
 2. Dispatch a child agent with the procedure directory path and instruction to execute auto-tdd.
