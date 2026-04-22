@@ -1,6 +1,6 @@
 ---
 name: hld
-description: Invoked by the `understand-0` skill after requirements analysis is complete. Produces design contracts for integration tests and code implementation.
+description: Invoked by the `u-0` skill after requirements analysis is complete. Produces design contracts for integration tests and code implementation.
 ---
 
 # High-Level Design (HLD)
@@ -12,7 +12,7 @@ Produces a design contract that `testcase integration` and `code-0` consume dire
 1. **Procedure directory path** — the directory containing `understand.md`
 2. **Code context from analysis phase** — code navigation results (via `Skill(my-explore-0)`) are already available from the preceding analysis. Use them directly for design work (e.g., extracting reused module interfaces).
 
-Read `{procedure_dir}/understand-0.md` to get the requirements analysis (Task Type, Analysis, Affected Files, Acceptance Criteria).
+Read `{procedure_dir}/u-0.md` to get the requirements analysis (Task Type, Analysis, Affected Files, Acceptance Criteria).
 
 ## Scope Constraint
 

@@ -15,7 +15,7 @@ Restructure existing code to comply with project coding standards. The current c
 
 ## When NOT to Use
 
-- New behavior or features are needed — use `understand-0` skill instead
+- New behavior or features are needed — use `u-0` skill instead
 - Code has bugs — fix bugs first, then refactor separately
 
 ## Inputs

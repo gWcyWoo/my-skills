@@ -284,8 +284,8 @@ Wait for user selection. Do NOT proceed without a selection.
 
 - **Next** → End this skill. Return control to the main conversation.
 - **Refactor** → Invoke the `refactor` skill **using the Skill tool**, passing the prototype file path.
-- **Implement with review** → Invoke the `understand-0` skill **using the Skill tool**, passing the spec file path as the requirement source.
-- **Auto-implement** → Invoke the `understand-0` skill **using the Skill tool**, passing the spec file path as the requirement source. After it completes, invoke the `auto-tdd` skill with the procedure directory path.
+- **Implement with review** → Invoke the `u-0` skill **using the Skill tool**, passing the spec file path as the requirement source.
+- **Auto-implement** → Invoke the `u-0` skill **using the Skill tool**, passing the spec file path as the requirement source. After it completes, invoke the `auto-tdd` skill with the procedure directory path.
 
 ---
 

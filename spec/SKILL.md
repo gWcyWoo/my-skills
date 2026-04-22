@@ -139,19 +139,19 @@ Present the completed (or updated) spec to the user:
 > 1. **Request changes** — tell me what to adjust, and we'll update the spec
 > 2. **Discuss next requirement** — add another feature/bugfix to this spec
 > 3. **Proceed to implementation**:
->    - **understand-0** — run lightweight requirement analysis, then choose next step
->    - **auto-tdd** — fully automated pipeline (auto-testcase + auto-code parallel → verify, zero intervention; requires understand-0 first)
+>    - **u-0** — run lightweight requirement analysis, then choose next step
+>    - **auto-tdd** — fully automated pipeline (auto-testcase + auto-code parallel → verify, zero intervention; requires u-0 first)
 
 Wait for user selection:
 
 - User requests changes → go back to Step 1 with the feedback, update the spec
 - User wants to discuss next requirement → go back to Step 5 (Incremental Update) since the spec is already loaded
-- User selects `understand-0` → create procedure directory (Step 4), then invoke the `understand-0` skill
-- User selects `auto-tdd` → create procedure directory (Step 4), then invoke the `understand-0` skill; after it completes, invoke the `auto-tdd` skill with the procedure directory path
+- User selects `u-0` → create procedure directory (Step 4), then invoke the `u-0` skill
+- User selects `auto-tdd` → create procedure directory (Step 4), then invoke the `u-0` skill; after it completes, invoke the `auto-tdd` skill with the procedure directory path
 
 ### Step 4: Create Procedure Directory
 
-Before invoking understand-0 or auto-tdd:
+Before invoking u-0 or auto-tdd:
 
 1. Generate a short name (≤20 chars, kebab-case) from the changelog entry description
 2. Create directory: `{spec_dir}/procedure/{YYYY-MM-DD}-{name}/`

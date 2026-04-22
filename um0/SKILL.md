@@ -1,5 +1,5 @@
 ---
-name: understand-method-0
+name: um0
 description: Deep understanding of a single method/function — purpose & signature, implementation walkthrough, and call sites with input provenance. Runs in the MAIN session; does not dispatch a subagent.
 ---
 

@@ -31,7 +31,7 @@ If the caller passed an explicit test type argument, use those types directly. L
 
 ### No argument provided — Auto-recommend from context
 
-When no argument is given, analyze the `understand-0` output and HLD to recommend test types:
+When no argument is given, analyze the `u-0` output and HLD to recommend test types:
 
 1. **Review context**: Read the Requirements Analysis (Acceptance Criteria, Affected Files) and HLD (Module Boundaries, Interaction Flow, Interfaces).
 
