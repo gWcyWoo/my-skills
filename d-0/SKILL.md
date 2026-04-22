@@ -1,5 +1,5 @@
 ---
-name: discuss-0
+name: d-0
 description: Use when the user wants to discuss a problem, explore ideas, or clarify intent before committing to a specific workflow — iteratively uncovers real intent through conversation and code exploration via my-explore-0.
 ---
 
