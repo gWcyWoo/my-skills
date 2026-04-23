@@ -5,7 +5,9 @@ description: Load relevant coding standards via subagent. Analyzes diff + full c
 
 # Load Coding Standards
 
-Dispatch as a subagent with `mode: "bypassPermissions"` and `model: "sonnet"`:
+Use the `Agent` tool with `subagent_type: "coder"` in the foreground.
+
+Use this as the child task prompt:
 
 ---
 
@@ -68,4 +70,3 @@ Markdown, rules grouped by priority then source file:
 
 Nothing else. No code, no file writes, no commentary.
 </output_format>
-

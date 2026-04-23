@@ -1,5 +1,5 @@
 ---
-name: um0
+name: um-0
 description: Deep understanding of a single method/function — purpose & signature, implementation walkthrough, and call sites with input provenance. Runs in the MAIN session; does not dispatch a subagent.
 ---
 
@@ -38,7 +38,7 @@ If > 5 callers, group by scenario, show the 3–5 most important, mention the to
 </output_format>
 
 <final_reminders>
-P0 — ALL code exploration MUST use `my-explore-0`. No direct Read/Grep/LSP/probe on source.
+P0 — ALL code exploration MUST use `my-explore-0`. No direct `Read`, `Grep`, `Shell`, or `Glob` on source.
 P0 — Stop when all three output sections are filled with file:line precision.
 P1 — Trace input provenance ONE hop only unless the user explicitly asks for more.
 </final_reminders>

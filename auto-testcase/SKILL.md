@@ -1,11 +1,11 @@
 ---
 name: auto-testcase
-description: Claude writes test cases in a subagent, then Codex adversarial-reviews. Self-contained — writes, gets reviewed, fixes, and returns lint-clean test code.
+description: Use when writing test cases. Dispatches subagent to auto-recommend test types, design test plan, and write test code. Runs straight through with no user gates.
 ---
 
-# Auto-Testcase
+# Testcase Orchestration
 
-Claude subagent writes test cases from the HLD, then Codex adversarial-reviews the test code. The subagent fixes review issues and returns lint-clean test code. Self-contained pipeline.
+Dispatches a testcase subagent that runs straight through (no STOP gates, no user confirmation). Isolates test design from the main session.
 
 ## Parameters
 
@@ -16,42 +16,39 @@ The caller must provide:
 
 ### Step 1: Dispatch Subagent
 
-Launch an Agent subagent (general-purpose) with `name: "testcase-agent"` and the following prompt:
+Launch an Agent subagent (general-purpose) with `name: "testcase-agent"` and this prompt:
+1. The procedure directory path
+2. Instruction: "First, invoke the `my-explore-0` skill using the Skill tool to load code navigation methodology."
+3. Instruction: "Read `~/.agents/skills/auto-testcase/subagent-instructions.md` and follow it exactly. Do NOT invoke any skills via the Skill tool other than `my-explore-0` — you are already executing the testcase workflow by reading subagent-instructions.md directly. **SKIP ALL STOP GATES** — do NOT return STATUS: NEEDS_CONFIRMATION at any point. Auto-accept all recommendations, directions, and test plans. Run straight through from Step 0 to Step 2 (write tests + self-check) and return STATUS: COMPLETE."
 
-```
-You are writing test cases for the requirement in {procedure_dir}/hld.md. Work independently from start to finish.
+**Do NOT add** implementation hints, test code suggestions, or any context beyond the procedure directory path.
 
-1. Invoke the `my-explore-0` skill using the Skill tool to load code navigation methodology.
+### Metrics Recording
 
-2. Read {procedure_dir}/hld.md — sole design authority. Do NOT read requirement.md or understand.md.
-
-3. Read general test rules: ~/.claude/skills/auto-testcase/general.md
-
-4. Determine test types by analyzing the HLD:
-   - integration (multiple modules interact) → read ~/.claude/skills/auto-testcase/integration.md
-   - e2e (changes affect a web page) → read ~/.claude/skills/auto-testcase/e2e.md
-   - unit supplement (single-module ACs not covered by integration/e2e) → read ~/.claude/skills/auto-testcase/unit.md
-
-5. Write test code per type, following each type file's rules. Load applicable test standards:
-   - All projects: ~/.code/shared-rules/test.md
-   - Vue (vue in dependencies): ~/.code/shared-rules/vuejs.test.md
-   - TypeScript (.ts/.tsx): ~/.code/shared-rules/typescript.test.md
-
-6. Run `lint 2>/dev/null`. Fix until zero errors.
-
-7. Run /codex:adversarial-review --wait on the test files you wrote. Fix any issues found, re-lint. Repeat up to 2 times if issues persist.
-
-8. Return a summary: test files created, test count per type, review status.
-
-Code reading boundaries (TDD discipline):
-- Source of truth: HLD interfaces, function signatures, module boundaries
-- Allowed to read: type/interface definition files (schema.ts, types.ts, .d.ts), existing test files (for patterns only), project config
-- FORBIDDEN: files containing function bodies or business logic
-
-SKIP ALL STOP GATES — do NOT return STATUS: NEEDS_CONFIRMATION. Auto-accept all recommendations and run straight through.
-```
+After the Agent dispatch returns, extract the `<usage>` block (total_tokens, tool_uses, duration_ms) and append a row to `{procedure_dir}/metrics.md`. Create the file with header on first write; append rows on subsequent writes.
 
 ### Step 2: Handle Result
 
-- **Success** → return STATUS: COMPLETE to the caller.
-- **Failure** → display the failure details to the user.
+The subagent runs straight through (no STOP gates) and returns STATUS: COMPLETE with all test files written and lint-clean. Proceed to Step 3 (Review).
+
+### Step 3: Independent Review
+
+For **each test type** produced by the subagent, invoke the `review` skill with the corresponding rules file:
+
+| Test Type | Rules File | Output Path |
+|-----------|-----------|-------------|
+| integration | `~/.agents/skills/auto-testcase/self-check.rules.md` | `{procedure_dir}/audit/testcase-self-check.md` |
+| e2e | `~/.agents/skills/auto-testcase/self-check-e2e.rules.md` | `{procedure_dir}/audit/testcase-e2e-self-check.md` |
+
+Invoke the `review` skill **using the Skill tool** for each applicable type, passing:
+- `rules_path`: the rules file for this test type (from table above)
+- `files`: `{procedure_dir}/hld.md`, and the test files for this type
+- `output_path`: the output path for this test type (from table above)
+
+**Handle result:**
+
+#### STATUS: PASS
+All tables clean. Return to the caller with STATUS: COMPLETE.
+
+#### STATUS: ISSUES_FOUND
+The reviewer found issues it could not fix (requires architectural change). Present the unfixable issues to the user for escalation.

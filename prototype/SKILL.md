@@ -77,7 +77,7 @@ Summarize the component tree to the user in plain language (do NOT show the raw 
 
 This step determines WHERE in the project the page will live. The user may not know the project's directory structure, so the skill must guide them.
 
-1. Invoke `my-explore-0` skill to examine the project's existing route structure (scan `src/app/`, `pages/`, or equivalent).
+1. Open `~/.agents/skills/my-explore-0/SKILL.md` to examine the project's existing route structure (scan `src/app/`, `pages/`, or equivalent).
 2. Analyze the design content to infer the page type (list page, detail page, form, dashboard, etc.).
 3. Suggest a module path in plain language:
 
@@ -97,7 +97,7 @@ Behind the scenes, this maps to a framework-specific file path (e.g., `pages/com
 
 ### Step 1.4: Generate Static Page
 
-1. Load the project's frontend shared rules from `~/.code/shared-rules/frontend/` based on the detected framework (Next.js, Vue, React, etc.).
+1. Load the project's frontend shared rules from `~/.agents/shared-rules/frontend/` based on the detected framework (Next.js, Vue, React, etc.).
 2. Generate the page using:
    - The d2spec component tree markdown as the visual reference (layout, sizing, colors, typography, hierarchy)
    - The project's tech stack and conventions from shared rules
@@ -283,9 +283,9 @@ Wait for user selection. Do NOT proceed without a selection.
 ### Step 3.2: Dispatch
 
 - **Next** → End this skill. Return control to the main conversation.
-- **Refactor** → Invoke the `refactor` skill **using the Skill tool**, passing the prototype file path.
-- **Implement with review** → Invoke the `u-0` skill **using the Skill tool**, passing the spec file path as the requirement source.
-- **Auto-implement** → Invoke the `u-0` skill **using the Skill tool**, passing the spec file path as the requirement source. After it completes, invoke the `auto-tdd` skill with the procedure directory path.
+- **Refactor** → Open `~/.agents/skills/refactor/SKILL.md`, passing the prototype file path.
+- **Implement with review** → Open `~/.agents/skills/u-0/SKILL.md`, passing the spec file path as `requirement_source`.
+- **Auto-implement** → Start with `~/.agents/skills/u-0/SKILL.md` using the spec file path as `requirement_source`, then prepare the persisted artifacts required by `~/.agents/skills/auto-tdd/SKILL.md` before invoking it.
 
 ---
 

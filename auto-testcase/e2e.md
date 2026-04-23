@@ -11,7 +11,7 @@ End-to-end user flows: full page interactions, navigation, and API round-trips t
 ## 2. Input Discovery
 
 - **With HLD**: Use HLD-defined page routes, user flow descriptions, and UI layout contracts. The HLD is the sole contract. You may read type/interface definition files (e.g., `schema.ts`, `types.ts`) even if listed in Affected Files — they define contracts. You MUST NOT read files that contain function bodies or business logic. See SKILL.md "Code Reading Boundaries" for the full rule.
-- **Without HLD**: Invoke `Skill(my-explore-0)` to load code navigation methodology, then use it on files from `u-0` → Affected Files. Identify page routes, navigation flows, form actions, layout components. These define the test targets.
+- **Without HLD**: Use `codegraph_node(includeCode: true)` and `LSP documentSymbol` on files from `understand` → Affected Files. Identify page routes, navigation flows, form actions, layout components. These define the test targets.
 
 ---
 
@@ -20,11 +20,11 @@ End-to-end user flows: full page interactions, navigation, and API round-trips t
 AI must not generate generic "Happy Path" tests. Every E2E test must target a human-defined **Direction** — a high-risk "broken" scenario.
 
 **How to obtain Direction:**
-1. Check if the user provided Direction in the `u-0` output or conversation context. If found, use those directly.
-2. If no Direction is found, **analyze and recommend** based on HLD and `u-0` output, then STOP:
+1. Check if the user provided Direction in the `understand` output or conversation context. If found, use those directly.
+2. If no Direction is found, **analyze and recommend** based on HLD and `understand` output, then STOP:
 
    **Analysis process:**
-   a. Read the page routes, user flows, and UI layout contracts from HLD (or Affected Files from `u-0` if no HLD).
+   a. Read the page routes, user flows, and UI layout contracts from HLD (or Affected Files from `understand` if no HLD).
    b. For each user-facing flow / page, identify the specific risk category:
       - **Physical Conflict** — layout overlap, z-index issues, viewport overflow
       - **State Desync** — race conditions during navigation, hydration mismatch, stale data after route change
@@ -59,7 +59,7 @@ AI must not generate generic "Happy Path" tests. Every E2E test must target a hu
 E2E test cases are **defined by the user**. AI does NOT auto-generate E2E tests — it translates user-specified Directions into concrete test cases.
 
 - **Direction Coverage** (primary): Every user-provided Direction MUST have at least one test targeting it. Only these are included in the test plan by default.
-- **AC Gap Check**: After mapping Directions to test cases, check if any AC ID from `u-0` remains uncovered. For each uncovered AC, apply a **Scope Filter**:
+- **AC Gap Check**: After mapping Directions to test cases, check if any AC ID from `understand` remains uncovered. For each uncovered AC, apply a **Scope Filter**:
 
   - **User-facing flow** (spans pages, navigation, visible interaction) → valid E2E test candidate. List in E2E gap.
   - **Internal logic** (validation rules, data transforms, single-module behavior with no UI impact) → **unit test scope**. Collect separately for unit test supplementation.
@@ -115,12 +115,13 @@ Use the highest-priority locator that uniquely identifies the element. Only fall
 | 2 | **Label** | `getByLabel('Email address')` | Form elements with associated `<label>` |
 | 3 | **Text** | `getByText('Save changes')` | Visible text is stable and unique on page |
 | 4 | **Placeholder** | `getByPlaceholder('Search...')` | Input with placeholder, no label available |
-| 5 (last resort) | **Alt / Title** | `getByAltText('User avatar')` | Images or elements with alt/title attributes |
+| 5 | **Alt / Title** | `getByAltText('User avatar')` | Images or elements with alt/title attributes |
+| 6 (last resort) | **data-testid** | `getByTestId('task-list-item')` | No accessible attribute can uniquely identify the element |
 
 **Rules:**
-- **FORBIDDEN**: `data-testid`, `testID`, or any locator that requires modifying source code to support tests. E2E tests must work with the application as-is.
+- Do NOT use `data-testid` if any of priorities 1-5 can identify the element. Justify every `data-testid` usage in a comment explaining why higher-priority locators are not viable.
 - Do NOT use CSS class selectors (`.btn-primary`) or structural selectors (`div > span:nth-child(2)`) — these are fragile and break on style/layout changes.
-- For i18n projects where visible text changes by locale, prefer Role + Name (priority 1) over Text (priority 3).
+- For i18n projects where visible text changes by locale, prefer Role + Name (priority 1) or data-testid (priority 6) over Text (priority 3).
 
 ### 6.2 Physical Assertion Rules
 
@@ -135,7 +136,7 @@ Use the highest-priority locator that uniquely identifies the element. Only fall
 ## 7. Traceability
 
 Every test case MUST map to:
-- An **AC ID** from `u-0` output
+- An **AC ID** from `understand` output
 - A specific **Direction** (from §3)
 
 ---
@@ -169,6 +170,6 @@ Every test case MUST map to:
 - One `it()` or `test()` block per plan row. Every row, zero omissions.
 - Any test not in the plan MUST be removed or justified as a new plan row.
 - Write test code only — zero implementation code.
-- Every element locator MUST follow §6.1 Locator Priority. `data-testid` is forbidden.
+- Every element locator MUST follow §6.1 Locator Priority. Justify any `data-testid` usage.
 - Every assertion MUST follow §6.2 Physical Assertion Rules.
 - **FORBIDDEN**: `page.waitForURL(pattern, { waitUntil: 'commit' })` when the test asserts page content after navigation. ALWAYS use the default `waitUntil: 'load'`.
