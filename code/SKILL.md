@@ -18,16 +18,17 @@ description: Implementation via isolated `implementer` subagent. Loads coding st
 
 3. Call the `Agent` tool with these exact parameters:
     - `subagent_type: "general-purpose"`
-    - `name: "implementer"` (named handle for follow-up via `SendMessage`)
+    - `name: "implementer"` (logging/identification only — NOT a reliable address handle)
     - `model: "opus"`
     - `prompt`: the template defined in the `## Subagent prompt template` section below, with `{{...}}` placeholders substituted from the input bundle. Change no other text in the template.
+3a. **Capture the agent ID immediately.** The `Agent()` call returns an agent ID (a hex string like `a94fca458cf6452e6`). Save it as `<implementer_agent_id>` BEFORE doing anything else with the response. Name routing fails the moment the subagent goes idle (after its first response) — the harness rejects `to: "implementer"` with `"No agent named 'implementer' is currently addressable. Spawn a new one or use the agent ID."` ID routing keeps working ("resumed from transcript"). Use the ID for EVERY subsequent `SendMessage`.
 
 **Phase 3 — Review the subagent summary (main session).**
 
 4. When the subagent returns, present its structured summary to the user **verbatim**. Then ask: _"Implementation complete. Would you like to review the diffs in your IDE before running lint and tests?"_
 5. **STOP** and wait for the user.
     - **"no"** / **"proceed"** / **"继续"** / **"skip"** / **"ok"** → return `Status: ready-for-verify` with the relayed summary.
-    - **"yes"** or specific change requests → `SendMessage(to: "implementer", message: "<feedback verbatim>")`, wait for new summary, loop back to step 4.
+    - **"yes"** or specific change requests → `SendMessage(to: "<implementer_agent_id>", message: "<feedback verbatim>")`, wait for new summary, loop back to step 4. Do NOT address by name; do NOT spawn a new subagent.
       </instructions>
 
 ## Subagent prompt template
@@ -79,5 +80,6 @@ Notes: <from subagent>
 </output_format>
 
 <final_reminders>
+P0 — Address the subagent by ID, NEVER by name. Capture `<implementer_agent_id>` at step 3a immediately after `Agent()` returns and use it in every `SendMessage`. Name routing fails after the agent goes idle; only ID resumes from transcript with full context.
 P0 — If `Agent` tool is missing from your inventory, you are inside a subagent and CANNOT dispatch. STOP and escalate: *"Use `c-0` instead."*
 </final_reminders>

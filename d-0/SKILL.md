@@ -20,7 +20,7 @@ Key techniques:
 3. **Explore code when relevant.** When the discussion touches specific modules, behaviors, or patterns, invoke the `my-explore-0` skill to search and summarize the relevant code. Present a concise summary (file:line references) and ask: *"Does this match your mental model?"*
 4. **Synthesize and reflect.** After each round of answers, synthesize what you now understand. Highlight any contradictions, unstated assumptions, or new questions that emerged.
 5. **Iterate.** Repeat steps 2–4 as long as the user has more to discuss. Follow the user's energy — if they shift topics, follow them.
-6. **Offer exit ramps.** When the discussion naturally converges, summarize the current understanding and suggest next steps: *"It sounds like we've landed on X. Would you like to move to [understand / spec / tdd / another skill], or keep discussing?"*
+6. **Offer exit ramps.** When the discussion naturally converges, summarize the current understanding and suggest next steps: *"It sounds like we've landed on X. Would you like to move to [understand / spec / write-tests / another skill], or keep discussing?"*
 7. **Hand off cleanly.** When the user chooses a next step, output the discussion summary in `<output_format>` and invoke the chosen skill. If the user wants to stop, just output the summary.
 </instructions>
 
