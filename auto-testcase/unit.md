@@ -1,124 +1,255 @@
-# Unit Test Rules (L7 Logic-Locked Edition)
+# Unit Testcase Planning Protocol — Attention Optimized
 
-## 1. Scope
+## 0. Prime Directive
 
-Isolated **Pure Logic**: hooks (calculation parts), utils, reducers, and data transformers. Unit tests are **Logic Provers**, not UI mimics. If a test needs to verify layout or component interaction, promote it to Integration or E2E.
+Unit tests prove **pure logic only**.
 
-### Invocation Modes
+A unit case is valid only if it asserts one of:
 
-Unit tests can be invoked in two modes:
-
-- **Supplementary mode** (default): Triggered automatically by Step 1b in SKILL.md after integration/e2e plans identify ACs as "unit test scope". Only covers the ACs forwarded from the AC Gap Check — not all ACs.
-- **Explicit mode**: User explicitly requests `/testcase unit`. Covers all ACs per §5 Coverage rules.
-
----
-
-## 2. Input Discovery
-
-- **With HLD**: Use HLD-defined function signatures and interfaces as the source of truth. The HLD is the sole contract. You may read type/interface definition files (e.g., `schema.ts`, `types.ts`) even if listed in Affected Files — they define contracts. You MUST NOT read files that contain function bodies or business logic (e.g., `parser.ts`, `api.ts`, `handler.ts`). See SKILL.md "Code Reading Boundaries" for the full rule. Do not invent APIs.
-- **Without HLD**: Use `codegraph_node(includeCode: true)` and `LSP hover` on symbols from `understand` → Affected Files. Extract actual function signatures, return types, parameters. These become the API contracts.
-- **Direction**: In supplementary mode, no Direction is needed — the AC itself defines the scope. In explicit mode, Direction is optional; if the user provided one, focus on edge cases and failure modes it specifies.
-
----
-
-## 3. The "1-Mock" Iron Rule (N ≤ 1)
-
-> **Principle**: Test complexity is a physical pointer to code coupling.
-
-- Every unit test MUST have a total mock/stub count ≤ 1.
-- **REFACTOR Trigger**: If a test requires ≥ 2 mocks, **STOP**. Do not write the test. Explain that the code requires **Logic Decryption**: moving pure logic (algorithms, state transitions) from coupled files to pure `.logic.ts` or `utils.ts` files.
-- **Zero-Mock Goal**: Logic files (utils/reducers) should ideally require 0 mocks.
-- **Setup Complexity**: If a test requires > 3 dependencies or cross-layer mocking, flag as REFACTOR_REQUIRED. Do not write the test.
-
----
-
-## 4. Assertion Integrity (No Hollow Tests)
-
-> **Principle**: Assert outcomes (State), not process (Calls).
-
-- **Prohibited as primary assertion**: `toHaveBeenCalled()`, `toHaveBeenCalledWith()`. These prove nothing about functionality.
-- **Required**: Assert **State Transformation** or **Return Values**.
-  - Correct: `expect(result).toEqual(expectedState)`
-  - Incorrect: `expect(mockFn).toHaveBeenCalled()`
-- **No `any` casting**: Strict TypeScript types in tests. Do not use `any` to bypass API contracts.
-- **FORBIDDEN — Mirror Tests**: Every test MUST assert the code's response to a specific input condition (error code, invalid input, boundary value, exception). If no such condition is being tested, delete the test case.
-- **RULE — Branch-Free Pure Mapper**: A function with zero conditional branches and no error paths MUST have exactly ONE test case: one fully populated fixture covering all input fields + one `toEqual` asserting the complete expected output. Splitting field mappings across multiple `it()` blocks is FORBIDDEN — it is over-engineering with no additional coverage benefit.
-
----
-
-## 5. Coverage
-
-### Flow Filtering by Output Category (MANDATORY — applies to all modes)
-
-Before generating unit test cases, check each HLD Flow's `Output Category` column:
-
-| Output Category | Unit testable? | Reason |
-|---|---|---|
-| `State Change` | ✅ Yes | Internal state mutation → assertable via `expect(state).toEqual(...)` |
-| `Side Effect` | ❌ Skip | No internal state to assert → only `toHaveBeenCalled()` possible → §4 violation. These flows are integration/e2e scope. |
-| `Mixed` | ✅ Yes (state part only) | Assert the state mutation; ignore the external delegation part |
-
-This filtering MUST happen **at generation time** (while evaluating each Flow), not as a post-generation review. If a Flow is `Side Effect`, do not generate a test case for it — do not generate and then remove.
-
-### Supplementary mode (default)
-
-Only cover ACs forwarded from integration/e2e AC Gap Check as **"unit test scope"**. Do NOT re-cover ACs already handled by integration/e2e tests.
-
-For each forwarded AC, AI auto-generates test cases using the techniques below.
-
-### Explicit mode (`/testcase unit`)
-
-Every AC ID from `understand` output MUST appear in the test plan. No gaps. However, if all Flows under an AC are `Side Effect`, that AC has no unit-testable content — annotate as `"covered by integration/e2e"` instead of forcing a hollow test.
-
-### Test case generation techniques (both modes)
-
-Unit tests are **auto-generated by AI** from HLD contracts (when HLD exists) or source code analysis (when no HLD). AI proactively derives test cases from function signatures, error conditions, and edge cases. The user does not need to enumerate every test — AI discovers them.
-
-- **AC Coverage**: One or more tests per in-scope Acceptance Criterion.
-- **Path Coverage**: Every success path and error handling path. When HLD exists, AI derives paths from HLD-defined function contracts and error conditions. When no HLD exists, AI analyzes source code branches.
-- **Equivalence Partitioning**: AI selects ONE representative value per equivalence class. No redundant tests for the same logic branch.
-- **Boundary Value Analysis**: AI automatically generates tests at, just below, and just above boundaries:
-  - `null` / `undefined` / empty strings / empty arrays / malformed data structures
-  - Max/Min limits, exactly at limit, limit ± 1
-  - Dependency failures: how the logic behaves when its one allowed dependency fails (e.g., rejected promise)
-
----
-
-## 6. Traceability
-
-Every test case MUST map to:
-- An **AC ID** from `understand` output
-- A concrete **artifact** (function signature from HLD or source code). Do NOT invent APIs that do not exist.
-
----
-
-## 7. Test File Location
-
-`__tests__/unit/[feature]/[name].test.ts`
-
----
-
-## 8. Test Plan Output Format
-
+```text
+return value | next state | validation result | thrown error | domain decision | pure transformation
 ```
-## Test Plan
 
-**Requirement Summary:** [1-3 sentences]
+Everything else moves out.
+
+---
+
+## 1. Mode
+
+```text
+Supplementary mode: classify and plan only forwarded unit-scope gaps.
+Explicit mode: classify every AC; only unit-testable AC fragments get unit cases.
+```
+
+---
+
+## 2. Decision Tree
+
+For each in-scope AC or behavior, decide in this order:
+
+```text
+1. Pure logical outcome?
+   no -> not unit scope.
+
+2. Requires module collaboration, DB, API, UI, routing, framework lifecycle, or real I/O?
+   yes -> integration/api/e2e-owned.
+
+3. Callable pure artifact exists?
+   no -> refactor-required.
+
+4. Needs more than 1 mock or more than 3 setup dependencies?
+   yes -> refactor-required.
+
+5. Expected outcome can be derived from AC/HLD/schema/business rule?
+   no -> insufficient contract; do not invent.
+
+6. Plan the smallest case set.
+```
+
+---
+
+## 3. Classification
+
+| Classification      | Meaning                               | Action             |
+| ------------------- | ------------------------------------- | ------------------ |
+| `unit-testable`     | Pure logic, no real I/O               | Plan unit cases    |
+| `integration-owned` | Module/service/store/DB collaboration | Move out           |
+| `api-owned`         | HTTP/API contract                     | Move out           |
+| `e2e-owned`         | Real UI/user journey                  | Move out           |
+| `refactor-required` | Pure logic is coupled or uncallable   | Propose extraction |
+| `not-testable`      | No meaningful logical outcome         | Skip               |
+
+A skipped AC is not a gap when it has an owner.
+
+---
+
+## 4. Minimum Evidence
+
+Before planning a unit case, know only:
+
+```text
+artifact signature
+input/output types
+logic rule
+expected outcome source
+mock count
+```
+
+Stop exploring once these are known.
+
+When HLD exists:
+
+```text
+Use HLD signatures, types, rules, states, errors.
+Do not read implementation bodies unless HLD explicitly allows it.
+```
+
+When HLD does not exist:
+
+```text
+Use exported/public contracts only.
+Do not plan private implementation tests.
+```
+
+Never invent APIs, states, errors, types, or domain values.
+
+---
+
+## 5. Valid Artifacts
+
+Good:
+
+```text
+pure function
+reducer
+validator
+mapper
+state machine
+permission rule
+calculation
+domain decision
+normalizer
+```
+
+Bad:
+
+```text
+component interaction
+API handler
+DB/network call
+routing
+framework lifecycle
+service orchestration
+hook effect lifecycle
+```
+
+A function calling a pure helper can still be unit scope.
+
+---
+
+## 6. Case Selection
+
+Generate the smallest useful set.
+
+Include only:
+
+```text
+representative valid case
+distinct business rule
+distinct validation error
+meaningful state transition
+forbidden transition
+boundary that changes behavior
+observable error path
+invariant
+```
+
+Exclude always:
+
+```text
+duplicate equivalence class
+branch with same outcome
+private helper behavior
+internal variable
+dependency-call assertion
+type-impossible input
+```
+
+Case budget:
+
+```text
+branch-free mapper: exactly 1
+simple logic: 1-3
+validator: 2-6
+state machine/reducer: 3-8
+complex rule: 4-10
+```
+
+More than 10 cases for one artifact means split or refactor.
+
+---
+
+## 7. Boundary and Expected Value Rules
+
+Boundary tests only when the boundary changes behavior.
+
+Do not test `null`, `undefined`, `{}` for strictly typed internal functions.
+
+Malformed input tests only when input type allows:
+
+```text
+unknown | nullable | optional | external payload | runtime validation input
+```
+
+No `any` or `as any`.
+
+Expected values must come from:
+
+```text
+AC | HLD | schema/type contract | business rule | precondition
+```
+
+Never from implementation body.
+
+Never mirror implementation logic to compute expected output.
+
+---
+
+## 8. Required Output
+
+```md
+## Unit Test Plan
+
 **Test Type:** unit
-**Test file:** `__tests__/unit/[feature]/[name].test.ts`
+**Strategy:** pure logic only
+**Mode:** Supplementary | Explicit
 **API Source:** HLD | Source Code
+**Test File:** `__tests__/unit/[feature]/[name].test.ts`
 
-| # | Test Name | Covers (AC ID) | Artifact | Mock Count | Setup Complexity |
-|---|---|---|---|---|---|
-| 1 | [Imperative Action] | AC-XX | `functionName` | 0 or 1 | Low |
+### Test Cases
+
+| #   | Priority | Test Name | AC  | Artifact | Logic Rule | Input Class | Expected Outcome | Mock Count |
+| --- | -------- | --------- | --- | -------- | ---------- | ----------- | ---------------- | ---------: |
+
+### Non-Unit Items
+
+| AC  | Classification | Reason | Owner |
+| --- | -------------- | ------ | ----- |
+
+### Refactor-Required Items
+
+| AC  | Current Coupling | Extract To | Suggested Signature | Cases Unlocked |
+| --- | ---------------- | ---------- | ------------------- | -------------- |
+```
+
+Write `None.` for empty sections.
+
+---
+
+## 9. Reject Plan If
+
+Reject the plan if any row:
+
+```text
+lacks artifact
+lacks logic rule
+lacks concrete expected outcome
+has mock count > 1
+tests dependency call only
+uses impossible typed input
+tests private implementation
+duplicates an equivalent case
+belongs to integration/API/E2E
 ```
 
 ---
 
-## 9. Writing Rules
+## 10. Final Rule
 
-- One `it()` block per plan row. Every row, zero omissions.
-- Any `it()` not in the plan MUST be removed or justified as a new plan row.
-- Any function/method call not defined in HLD or source code is a failure. If a function exists in HLD but its return type or parameter type is missing, follow the HLD gap detection rule in testcase SKILL.md Step 2 — flag it, do NOT invent the type.
-- Write test code only — zero implementation code.
-- Every assertion MUST follow §4 Assertion Integrity rules.
+```text
+Unit = pure logic.
+Integration = collaboration.
+API = HTTP contract.
+E2E = real user journey.
+Coupled logic = refactor first.
+```

@@ -70,3 +70,9 @@ Markdown, rules grouped by priority then source file:
 
 Nothing else. No code, no file writes, no commentary.
 </output_format>
+
+## Parent Follow-Up
+
+After the RULE EXTRACTOR returns the filtered and ranked rules, the parent workflow must recommend `self-check` as the next verification step. The recommendation should direct the implementer to use the selected rules to check the changed code, record findings, and fix any violations before completion.
+
+Do not ask the RULE EXTRACTOR child agent to run `self-check`; its strict boundaries remain read-only and rules-only.
