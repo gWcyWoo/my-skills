@@ -1,120 +1,133 @@
-# Unit Test Planning Rules — Attention-Optimized
+# Unit Testcase Planning Protocol — Attention Optimized
 
-## 0. Purpose
+## 0. Prime Directive
 
-Unit test plans prove **pure logic** with the fewest stable cases.
+Unit tests prove **pure logic only**.
 
-They do **not** prove full feature behavior, module collaboration, API contracts, or user journeys.
+A unit case is valid only if it asserts one of:
+
+```text
+return value | next state | validation result | thrown error | domain decision | pure transformation
+```
+
+Everything else moves out.
 
 ---
 
-## 1. Hard Boundary
-
-A unit case is valid only if it verifies one of:
+## 1. Mode
 
 ```text
-return value
-next state
-validation result
-thrown error
-domain decision
-pure transformation
+Supplementary mode: classify and plan only forwarded unit-scope gaps.
+Explicit mode: classify every AC; only unit-testable AC fragments get unit cases.
 ```
-
-Do **not** create unit cases for:
-
-```text
-UI interaction
-component collaboration
-API wiring
-DB/network I/O
-message publishing
-routing
-framework lifecycle
-service orchestration
-```
-
-If the only useful assertion is `dependency was called`, it is **not** a unit test.
 
 ---
 
-## 2. Required Planning Protocol
+## 2. Decision Tree
 
-For each in-scope AC or behavior, do this in order:
+For each in-scope AC or behavior, decide in this order:
 
 ```text
-1. Classify it.
-2. If unit-testable, name the pure artifact.
-3. Extract one logic rule.
-4. Select the minimum case set.
-5. Define input class and exact expected outcome.
-6. Move non-unit items out.
-7. Mark coupled logic as refactor-required.
+1. Pure logical outcome?
+   no -> not unit scope.
+
+2. Requires module collaboration, DB, API, UI, routing, framework lifecycle, or real I/O?
+   yes -> integration/api/e2e-owned.
+
+3. Callable pure artifact exists?
+   no -> refactor-required.
+
+4. Needs more than 1 mock or more than 3 setup dependencies?
+   yes -> refactor-required.
+
+5. Expected outcome can be derived from AC/HLD/schema/business rule?
+   no -> insufficient contract; do not invent.
+
+6. Plan the smallest case set.
 ```
 
-Use these exact classifications:
+---
+
+## 3. Classification
 
 | Classification | Meaning | Action |
 |---|---|---|
 | `unit-testable` | Pure logic, no real I/O | Plan unit cases |
-| `integration-owned` | Requires module/service/store/DB collaboration | Move out |
-| `api-owned` | Requires HTTP/API contract | Move out |
-| `e2e-owned` | Requires real UI/user journey | Move out |
-| `refactor-required` | Pure logic exists but is coupled | Propose extraction |
-| `not-testable` | No meaningful logic outcome | Skip |
+| `integration-owned` | Module/service/store/DB collaboration | Move out |
+| `api-owned` | HTTP/API contract | Move out |
+| `e2e-owned` | Real UI/user journey | Move out |
+| `refactor-required` | Pure logic is coupled or uncallable | Propose extraction |
+| `not-testable` | No meaningful logical outcome | Skip |
 
-Do **not** unit test every AC. Unit test only pure logic.
+A skipped AC is not a gap when it has an owner.
 
 ---
 
-## 3. Contract Source
+## 4. Minimum Evidence
 
-With HLD:
+Before planning a unit case, know only:
 
 ```text
-Use HLD signatures, types, states, rules, and errors.
+artifact signature
+input/output types
+logic rule
+expected outcome source
+mock count
+```
+
+Stop exploring once these are known.
+
+When HLD exists:
+
+```text
+Use HLD signatures, types, rules, states, errors.
 Do not read implementation bodies unless HLD explicitly allows it.
 ```
 
-Without HLD:
+When HLD does not exist:
 
 ```text
-Use exported/public functions and types only.
-Do not test private implementation details.
+Use exported/public contracts only.
+Do not plan private implementation tests.
 ```
 
-Never invent:
-
-```text
-APIs
-parameters
-return types
-states
-error codes
-domain values
-```
+Never invent APIs, states, errors, types, or domain values.
 
 ---
 
-## 4. Unit Gate
+## 5. Valid Artifacts
 
-A behavior enters the unit plan only if all are true:
+Good:
 
 ```text
-observable logic outcome
-no real I/O
-0 mocks preferred
-1 mock maximum
-not implementation-step testing
-stable under refactoring
-inputs valid under type contract
+pure function
+reducer
+validator
+mapper
+state machine
+permission rule
+calculation
+domain decision
+normalizer
 ```
 
-If any check fails, classify it outside unit scope or mark `refactor-required`.
+Bad:
+
+```text
+component interaction
+API handler
+DB/network call
+routing
+framework lifecycle
+service orchestration
+hook effect lifecycle
+```
+
+A function calling a pure helper can still be unit scope.
 
 ---
 
-## 5. Case Selection
+## 6. Case Selection
 
 Generate the smallest useful set.
 
@@ -131,14 +144,14 @@ observable error path
 invariant
 ```
 
-Exclude:
+Exclude always:
 
 ```text
 duplicate equivalence class
 branch with same outcome
 private helper behavior
 internal variable
-mock-call verification
+dependency-call assertion
 type-impossible input
 ```
 
@@ -146,73 +159,43 @@ Case budget:
 
 ```text
 branch-free mapper: exactly 1
-simple pure logic: 1-3
+simple logic: 1-3
 validator: 2-6
 state machine/reducer: 3-8
 complex rule: 4-10
 ```
 
-More than 10 cases for one artifact means split the artifact or mark `refactor-required`.
+More than 10 cases for one artifact means split or refactor.
 
 ---
 
-## 6. Boundary, Type, and Mapper Rules
+## 7. Boundary and Expected Value Rules
 
-Boundary tests are allowed only when the boundary changes behavior.
+Boundary tests only when the boundary changes behavior.
 
-Do **not** test `null`, `undefined`, `{}`, or malformed input for strictly typed internal functions.
+Do not test `null`, `undefined`, `{}` for strictly typed internal functions.
 
-Malformed input tests are allowed only when input type is:
+Malformed input tests only when input type allows:
 
 ```text
 unknown | nullable | optional | external payload | runtime validation input
 ```
 
-Do **not** use `any` or `as any`.
+No `any` or `as any`.
 
-Branch-free mapper rule:
+Expected values must come from:
 
 ```text
-exactly one fully populated input -> one complete expected output
+AC | HLD | schema/type contract | business rule | precondition
 ```
 
-Do **not** create one case per mapped field.
+Never from implementation body.
+
+Never mirror implementation logic to compute expected output.
 
 ---
 
-## 7. Expected Outcome Rule
-
-Every case must have one exact expected outcome.
-
-Allowed:
-
-```text
-exact value
-next state
-error code/message
-thrown error
-domain decision
-complete mapped object
-```
-
-Forbidden:
-
-```text
-dependency was called
-function exists
-branch entered
-variable assigned
-private method called
-component rendered
-```
-
-Expected values must come from AC/HLD/schema/business rule/preconditions, not implementation body.
-
-Do **not** mirror implementation logic to compute expected output.
-
----
-
-## 8. Output Format
+## 8. Required Output
 
 ```md
 ## Unit Test Plan
@@ -225,7 +208,7 @@ Do **not** mirror implementation logic to compute expected output.
 
 ### Test Cases
 
-| # | Priority | Test Name | AC | Logic Rule | Artifact | Input Class | Expected Outcome | Mock Count |
+| # | Priority | Test Name | AC | Artifact | Logic Rule | Input Class | Expected Outcome | Mock Count |
 |---|---|---|---|---|---|---|---|---:|
 
 ### Non-Unit Items
@@ -235,7 +218,7 @@ Do **not** mirror implementation logic to compute expected output.
 
 ### Refactor-Required Items
 
-| AC | Current Coupling | Extract Logic To | Suggested Signature | Tests Unlocked |
+| AC | Current Coupling | Extract To | Suggested Signature | Cases Unlocked |
 |---|---|---|---|---|
 ```
 
@@ -245,20 +228,18 @@ Write `None.` for empty sections.
 
 ## 9. Reject Plan If
 
-Reject the plan when any item is true:
+Reject the plan if any row:
 
 ```text
-AC is neither covered nor classified
-unit case has no concrete artifact
-unit case has no logic rule
-unit case has no exact expected outcome
-mock count > 1
-case only asserts dependency calls
-case uses impossible typed input
-case tests private implementation
-case duplicates an equivalent path
-non-unit concern remains in unit plan
-refactor item lacks extraction proposal
+lacks artifact
+lacks logic rule
+lacks concrete expected outcome
+has mock count > 1
+tests dependency call only
+uses impossible typed input
+tests private implementation
+duplicates an equivalent case
+belongs to integration/API/E2E
 ```
 
 ---
@@ -266,7 +247,9 @@ refactor item lacks extraction proposal
 ## 10. Final Rule
 
 ```text
-Unit tests prove pure logic.
-Everything else moves out.
-Coupled logic must be extracted before unit testing.
+Unit = pure logic.
+Integration = collaboration.
+API = HTTP contract.
+E2E = real user journey.
+Coupled logic = refactor first.
 ```

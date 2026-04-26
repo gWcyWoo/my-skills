@@ -1,6 +1,6 @@
 ---
 name: comply
-description: Load relevant coding standards via subagent. Analyzes diff + full code context to extract precisely applicable rules, ranked by relevance.
+description: Load relevant coding standards via subagent. Analyzes diff + full code context to extract precisely applicable rules, ranked by relevance, and recommends `self-check` as the next step to apply the rules to the changed code and fix violations.
 ---
 
 # Load Coding Standards
@@ -52,10 +52,12 @@ You MUST NOT:
    - **P2 — General**: rule applies to the file type but not to a specific pattern in the diff
 
    Keep output under 200 lines. If over, drop P2 first.
+
+7. **Recommend self-check.** After the ranked rules, append a `## Next Step` block telling the caller to invoke the `self-check` skill with these rules and the changed files, so the caller can verify the code against the rules and fix any violations. List the changed files (from step 1) so the caller knows the scope. Do NOT invoke `self-check` yourself — recommend only; the caller decides.
 </instructions>
 
 <output_format>
-Markdown, rules grouped by priority then source file:
+Markdown, rules grouped by priority then source file, followed by a `Next Step` block recommending `self-check`:
 
 ## P0 — Direct
 - [rule] (from `source-file.md`)
@@ -66,6 +68,11 @@ Markdown, rules grouped by priority then source file:
 ## P2 — General
 - [rule] (from `source-file.md`)
 
-Nothing else. No code, no file writes, no commentary.
+## Next Step
+Recommend the caller invoke the `self-check` skill to apply the rules above to the changed code and fix any violations.
+- Files in scope: `<comma-separated list of files from the diff>`
+- Rules to apply: the P0/P1/P2 rules above
+
+Nothing else. No code, no file writes, no commentary beyond this `Next Step` block.
 </output_format>
 

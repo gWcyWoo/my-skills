@@ -1,30 +1,144 @@
-# General Test Rules
+# General Test Writing Rules — Attention Optimized
 
-Rules that apply to ALL test types (unit, integration, e2e). Loaded before any test code is written.
+## 0. Scope
 
-## 1. No testID Dependency
+These rules apply **only when writing test code**.
 
-Test cases MUST NOT depend on `testID` props. Using `testID` in tests couples the test to implementation details and forces implementation code to add testIDs just to satisfy tests. Instead, use semantic queries (`getByText`, `getByRole`), rendered tree structure analysis, or style/prop inspection.
+They do not replace unit, integration, API, or E2E test planning rules.
 
-## 2. Verify Test Framework API Before Writing Tests
+Use them as a final writing gate after the test plan is approved.
 
-Before writing the first test in a project (or when encountering unfamiliar test failures), create a minimal debug test to verify:
+---
 
-- What `render()` returns (available methods and properties)
-- How `fireEvent` works (callable function vs object with named methods)
-- How the rendered tree is structured (mock wrapper layers, parent/child depth)
-- Whether manual prop calls (e.g., `onLayout`, `onScroll`) trigger state updates
+## 1. Selector Rule
 
-Do NOT assume APIs exist based on documentation or older version experience. The actual behavior depends on the specific combination of test library version, React version, and test environment.
+For UI-facing tests, prefer stable user-facing selectors:
 
-### Quick verification pattern
-
-```tsx
-it("verify render API", () => {
-  const result = render(<View><Text>Hi</Text></View>);
-  // Force-fail to inspect: expect(Object.keys(result).join(", ")).toBe("SHOW");
-  // Check tree depth: expect(screen.getByText("Hi").parent?.type).toBe("SHOW");
-});
+```text
+getByRole
+getByLabelText
+getByText
+getByPlaceholderText
+getByDisplayValue
 ```
 
-Run once, inspect output, then delete. This takes 30 seconds and prevents hours of debugging.
+Do not use test-only identifiers when a semantic selector exists:
+
+```text
+testID
+data-testid
+custom test-only hook
+```
+
+Allowed only when:
+
+```text
+no stable semantic selector exists
+the element has no user-facing semantic representation
+the platform lacks reliable role/label support
+the identifier already exists as a stable project convention
+```
+
+Never add test-only identifiers solely to satisfy tests.
+
+---
+
+## 2. Framework Probe Rule
+
+Do not create debug/probe tests by default.
+
+Create one temporary framework probe only when:
+
+```text
+test helper behavior is unknown
+render/fireEvent/userEvent behavior is unclear
+manual event behavior is unclear
+tree wrapper behavior blocks a correct test
+an unfamiliar test failure suggests framework API mismatch
+```
+
+Probe rules:
+
+```text
+one probe maximum
+delete before final output
+do not include in test plan
+do not keep tree-inspection assertions in real tests
+do not use it to discover business behavior
+```
+
+---
+
+## 3. Assertion Rule
+
+Prefer assertions on user-observable or contract-observable outcomes.
+
+Allowed:
+
+```text
+visible text/role/label/value
+returned result
+state visible through public consumer
+error message/code
+persisted or emitted contract
+external boundary arguments when boundary is mocked
+```
+
+Forbidden as primary assertions:
+
+```text
+props inspection
+private state inspection
+render-tree internals
+implementation-only class names
+test helper internals
+toHaveBeenCalled only
+```
+
+---
+
+## 4. Expected Value Rule
+
+Expected values must come from:
+
+```text
+AC
+HLD
+schema/type contract
+route/API contract
+business rule
+test preconditions
+```
+
+Never derive expected values from implementation bodies.
+
+Never weaken assertions to fit implementation.
+
+Use exact values when known.
+
+---
+
+## 5. Reject Test Code If
+
+Reject final test code if it:
+
+```text
+uses testID/data-testid while a semantic selector exists
+adds test-only identifiers to implementation
+keeps temporary debug probes
+asserts render-tree internals
+asserts props/private state
+depends on framework quirks instead of observable behavior
+uses fallback assertions for multiple possible implementations
+weakens expected values to make the implementation pass
+```
+
+---
+
+## 6. Final Rule
+
+```text
+Write tests against observable behavior and stable contracts.
+Do not write tests against implementation details or test-only hooks.
+Probe the framework only when blocked, then delete the probe.
+```

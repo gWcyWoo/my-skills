@@ -1,86 +1,102 @@
-# Integration Test Planning Rules — Attention-Optimized
+# Integration Testcase Planning Protocol — Attention Optimized
 
-## 0. Purpose
+## 0. Prime Directive
 
-Integration test plans prove **real internal module collaboration** with the fewest stable cases.
+Integration tests prove **real internal module collaboration**.
 
-They do **not** prove pure logic alone, HTTP contracts alone, or full E2E user journeys.
+A valid integration case proves:
+
+```text
+real modules collaborate | external boundary contract is correct | observable outcome is correct
+```
+
+Pure logic, HTTP-only contracts, and full user journeys move out.
 
 ---
 
-## 1. Hard Boundary
+## 1. Decision Tree
 
-An integration case is valid only if it verifies:
-
-```text
-real internal modules collaborate
-external boundary contract is correct
-observable outcome is correct
-state/error propagation is correct
-```
-
-Meaningful integration boundaries include:
+For each in-scope AC or behavior, decide in this order:
 
 ```text
-component -> child/hook/store
-container -> service -> mapper
-API handler -> service -> repository
-service -> adapter/client
-state update -> consumers
-producer -> consumer
+1. Meaningful collaboration across module/layer/state/contract boundary?
+   no -> unit/not-testable.
+
+2. Main risk is HTTP status/body/auth/header contract?
+   yes -> api-owned.
+
+3. Main risk is full browser/UI journey with real backend?
+   yes -> e2e-owned.
+
+4. Can internal modules run for real through a public trigger?
+   no -> refactor-required.
+
+5. Can only external boundaries be mocked/faked?
+   no -> refactor-required.
+
+6. Edge contracts and observable outcomes are known?
+   no -> insufficient contract; do not invent.
+
+7. Plan the smallest case set.
 ```
-
-Not integration scope:
-
-```text
-pure function -> pure helper
-branch-free passthrough with no contract risk
-single-module validation before collaboration
-static UI layout
-full browser journey with real backend
-```
-
-A function calling another file is **not** automatically integration scope.
 
 ---
 
-## 2. Required Planning Protocol
+## 2. Classification
 
-For each in-scope AC or behavior, do this in order:
+| Classification | Meaning | Action |
+|---|---|---|
+| `integration-testable` | Real internal modules must collaborate | Plan integration cases |
+| `unit-owned` | Pure logic only | Move out |
+| `api-owned` | HTTP/API contract | Move out |
+| `e2e-owned` | Real UI/user journey | Move out |
+| `refactor-required` | Requires mocking internals or private trigger | Propose boundary fix |
+| `not-testable` | No meaningful collaboration/contract | Skip |
 
-```text
-1. Classify it.
-2. If integration-testable, choose the test slice.
-3. Name real internal modules.
-4. Name mocked/faked external boundaries.
-5. Extract edge contracts.
-6. Select the minimum case set.
-7. Move unit/API/E2E items out.
-8. Mark untestable coupling as refactor-required.
-```
-
-Use these exact classifications:
-
-| Classification         | Meaning                                      | Action                 |
-| ---------------------- | -------------------------------------------- | ---------------------- |
-| `integration-testable` | Real internal modules/layers collaborate     | Plan integration cases |
-| `unit-owned`           | Pure logic only                              | Move to unit           |
-| `api-owned`            | HTTP/API contract is main risk               | Move to API            |
-| `e2e-owned`            | Full UI/user journey is main risk            | Move to E2E            |
-| `refactor-required`    | Requires mocking internals or private access | Propose boundary fix   |
-| `not-testable`         | No meaningful behavior/contract              | Skip                   |
-
-Do **not** integration test every AC. Test only collaboration risk.
+A skipped AC is not a gap when it has an owner.
 
 ---
 
-## 3. Test Slice Rule
+## 3. Minimum Evidence
 
-Every case must define:
+Before planning an integration case, know only:
 
 ```text
-Real Modules = internal modules that run for real
-Mocked Boundaries = external systems outside the slice
+test slice
+real modules
+mocked external boundaries
+edge contracts
+public trigger
+observable outcome
+```
+
+Stop exploring once these are known.
+
+When HLD exists:
+
+```text
+Use HLD module flow, interfaces, states, events, API/error contracts.
+Do not read implementation bodies unless HLD explicitly allows it.
+```
+
+When HLD does not exist:
+
+```text
+Use public components, service signatures, routes, types, imports/exports.
+Do not plan around private implementation details.
+```
+
+Never invent modules, routes, props, states, errors, or contract values.
+
+---
+
+## 4. Test Slice Rule
+
+For every case:
+
+```text
+Real Modules = internal modules that run for real.
+Mocked Boundaries = external systems outside the slice.
 ```
 
 Hard rules:
@@ -94,12 +110,7 @@ If internal mocking is required, mark refactor-required.
 External boundaries may include:
 
 ```text
-network
-third-party API
-system clock
-browser/native API
-payment/email provider
-parent callback
+network | third-party API | clock | browser/native API | payment/email provider | parent callback
 ```
 
 DB rule:
@@ -107,36 +118,6 @@ DB rule:
 ```text
 If persistence is the risk, include repository/DB in the slice.
 If persistence is not the risk, DB may be mocked/faked.
-```
-
----
-
-## 4. Contract Source
-
-With HLD:
-
-```text
-Use HLD module flow, interfaces, states, events, API/error contracts.
-Do not read implementation bodies unless HLD explicitly allows it.
-```
-
-Without HLD:
-
-```text
-Use public components, service signatures, routes, types, imports/exports.
-Do not plan around private implementation details.
-```
-
-Never invent:
-
-```text
-modules
-routes
-props
-parameters
-return types
-states
-error codes
 ```
 
 ---
@@ -157,23 +138,23 @@ event payload
 Rules:
 
 ```text
-expected contract comes from AC/HLD/types/routes/schema
-every edge contract is asserted in at least one case
+contract expected value comes from AC/HLD/types/routes/schema
+every edge contract appears in at least one case
 mocked boundary assertions include connecting value + action/method + payload/options
-dynamic values are asserted concretely
+dynamic values use concrete expected values
 ```
 
 ---
 
 ## 6. Direction Rule
 
-Each case must have one risk direction:
+Each case needs one direction:
 
 ```text
 [ModuleA -> ModuleB] Risk — specific failure mode
 ```
 
-Use risks such as:
+Risk vocabulary:
 
 ```text
 Contract Mismatch
@@ -188,7 +169,7 @@ Cache/Store Desync
 Event Payload Mismatch
 ```
 
-User directions have priority. If absent, derive from AC/HLD/source boundaries.
+User directions have priority. Otherwise derive directions from AC/HLD/source boundaries. Do not stop to ask unless workflow requires selection.
 
 ---
 
@@ -199,17 +180,17 @@ Generate the smallest useful set.
 Include only:
 
 ```text
-primary success path
+primary success collaboration
 distinct cross-module error path
 required edge contract
 state propagation to consumers
 toggle forward/reverse
 rollback after failure
-data transform across boundary
+data transformation across boundary
 conditional flow changing output
 ```
 
-Exclude:
+Exclude always:
 
 ```text
 pure logic branch
@@ -218,7 +199,7 @@ static layout only
 mock echo behavior
 private helper behavior
 implementation-only branch
-same behavior repeated for many API responses
+same behavior for many API responses
 ```
 
 Case budget:
@@ -231,23 +212,23 @@ API handler + service + repository: 2-6
 complex workflow: 4-10
 ```
 
-More than 10 cases for one slice means split the slice or mark `refactor-required`.
+More than 10 cases for one slice means split or refactor.
 
 ---
 
-## 8. Trigger and Outcome Rule
+## 8. Trigger and Outcome Rules
 
-Each case must specify:
+Each case must have:
 
 ```text
-Preconditions
-Trigger
-Expected Outcome
+preconditions
+trigger
+expected observable outcome
 ```
 
-The trigger must be the immediate cause of the asserted outcome.
+Trigger must be the immediate cause of the asserted outcome.
 
-Do **not** collapse:
+Do not collapse:
 
 ```text
 A -> B -> C -> D
@@ -287,46 +268,25 @@ Call assertions are allowed only for external boundary contract verification.
 
 ---
 
-## 9. Mock Echo and Expected Value Rule
+## 9. Mock Echo and Expected Value Rules
 
 Mocks drive behavior. They are not the result.
 
-Before accepting a case, ask:
+Reject a case when mocked input becomes expected output unchanged, unless it verifies an explicit passthrough contract.
+
+Expected values must come from:
 
 ```text
-What real collaboration, transform, route, render, persistence, or state change did the mock trigger?
+AC | HLD | schema/type contract | route contract | business rule | precondition
 ```
 
-If output equals mocked input unchanged:
+Never from implementation body.
 
-```text
-allow only explicit passthrough contract verification
-otherwise remove the case
-```
-
-Expected values must come from AC/HLD/schema/route/business rule/preconditions, not implementation body.
-
-For calculated values, include derivation.
+For calculated values, show the derivation.
 
 ---
 
-## 10. Refactor Trigger
-
-Mark `refactor-required` when:
-
-```text
-internal module must be mocked
-collaboration cannot be triggered publicly
-only possible assertion is a mock call
-test needs private state or render-tree inspection
-boundaries are too coupled to isolate external systems
-```
-
-Output current coupling, required boundary change, and tests unlocked.
-
----
-
-## 11. Output Format
+## 10. Required Output
 
 ```md
 ## Integration Test Plan
@@ -339,54 +299,54 @@ Output current coupling, required boundary change, and tests unlocked.
 ### Edge Contracts
 
 | Edge | Contract | Expected Value | Source |
-| ---- | -------- | -------------- | ------ |
+|---|---|---|---|
 
 ### Test Cases
 
-| #   | Priority | Test Name | Direction | AC  | Real Modules | Mocked Boundaries | Preconditions | Trigger | Contract Assertions | Expected Outcome |
-| --- | -------- | --------- | --------- | --- | ------------ | ----------------- | ------------- | ------- | ------------------- | ---------------- |
+| # | Priority | Test Name | Direction | AC | Real Modules | Mocked Boundaries | Preconditions | Trigger | Contract Assertions | Expected Outcome |
+|---|---|---|---|---|---|---|---|---|---|---|
 
 ### Non-Integration Items
 
-| AC  | Classification | Reason | Owner |
-| --- | -------------- | ------ | ----- |
+| AC | Classification | Reason | Owner |
+|---|---|---|---|
 
 ### Refactor-Required Items
 
-| AC  | Current Coupling | Required Change | Tests Unlocked |
-| --- | ---------------- | --------------- | -------------- |
+| AC | Current Coupling | Required Change | Cases Unlocked |
+|---|---|---|---|
 ```
 
 Write `None.` for empty sections.
 
 ---
 
-## 12. Reject Plan If
+## 11. Reject Plan If
 
-Reject the plan when any item is true:
+Reject the plan if any row:
 
 ```text
-AC is neither covered nor classified
-case does not test real internal collaboration
-real modules are unnamed
-mocked boundaries are unnamed
-internal module is mocked
-mocked boundary lacks exact contract assertion
-edge contract is not covered by any case
-case lacks preconditions, trigger, or outcome
-case only asserts toHaveBeenCalled
-case merely echoes mocked input
-unit/API/E2E concern remains in integration plan
-refactor item lacks boundary-fix proposal
-duplicate equivalent case exists
+does not test real collaboration
+mocks an internal module
+lacks real modules or mocked boundaries
+lacks trigger
+lacks observable outcome
+lacks required contract assertion
+only asserts toHaveBeenCalled
+echoes mocked input as expected output
+belongs to unit/API/E2E
+uses private state, props, or render-tree internals
+duplicates an equivalent case
 ```
 
 ---
 
-## 13. Final Rule
+## 12. Final Rule
 
 ```text
-Integration tests prove collaboration.
-Everything else moves out.
-Untestable coupling must be refactored first.
+Integration = collaboration.
+Unit = pure logic.
+API = HTTP contract.
+E2E = real user journey.
+Untestable coupling = refactor first.
 ```
