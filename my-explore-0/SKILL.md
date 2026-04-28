@@ -59,7 +59,7 @@ Default max: 5 points.
 
 Before calling any tool, check: remaining points ≥ tool cost. If not, pick a cheaper tool or STOP.
 
-**MUSH**: after each call. Then, based on the goal and current evidence, **MUST** reason deeply about what should happen next. After that, print a concise reasoning summary and next-step plan in no more than 150 tokens. If another call is needed, the plan MUST name the proper next tool: an in-budget tool. This note must guide your reasoning in the next turn.
+**MUST**: after each call. Then, based on the goal and current evidence, **MUST** reason deeply about what should happen next. After that, print a concise reasoning summary and next-step plan in no more than 150 tokens. If another call is needed, the plan MUST name the proper next tool: an in-budget tool. This note must guide your reasoning in the next turn.
 
 When 0, **MUST STOP and apply to user more budgets**, **MUST reason as deeply as possible from current evidence, estimate how many more points are needed**, and **state** that to the user together with the specific remaining gaps. User decides.
 </budget>
