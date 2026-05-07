@@ -158,7 +158,7 @@ Naming:
    Rule lookup procedure:
    - Read `~/.agents/skills/fc/development_rules.md` before `flutter-widget.md`.
    - Apply `DEV-*` rules first; cite relevant `DEV-*` IDs in the plan.
-   - For every component boundary, layout choice, size conversion, scroll decision, bottom persistent area, and asset choice, run a `DEV 检查`.
+   - For every component boundary, page scaffold slot, layout choice, size conversion, scroll decision, bottom persistent area, and asset choice, run a `DEV 检查`.
    - `DEV 检查` must list applicable `DEV-*` IDs and the compliance result, or `无直接适用规则`.
    - If `DEV 检查` finds a violation, reject that choice and record the compliant alternative.
    - If a violation is unavoidable or explicitly required, record `DEV 例外`: violated rule ID, why it must violate, risk, mitigation, and confirmation needed.
@@ -183,6 +183,7 @@ Naming:
    Layout design requirements:
    - Choose the overall page layout from the confirmed component tree.
    - Check the page root against `DEV-PAGE-SCAFFOLD`.
+   - Check top navigation/title/back/close/actions against `DEV-PAGE-APPBAR`.
    - Check scroll-body decisions against `DEV-PAGE-SCROLL-BODY`.
    - Check persistent bottom content against `DEV-BOTTOM-PERSISTENT`.
    - Prefer linear layout (`Row`/`Column`) before `Stack`/`Positioned`.
@@ -348,6 +349,7 @@ Naming:
 
 布局设计:
 1. `<PageComponent>` — `<Scaffold/SafeArea/LayoutBuilder/ScrollView/...>`（`DEV-*` 如适用；`FW-*` 仅在已读取精确规则时标注）
+   - Scaffold 槽位: appBar `<used | not-used | n/a>`，body `<used>`，bottomNavigationBar `<used | not-used | n/a>`
    - 整体布局: `<布局和理由>`
    - 子布局: `<子组件排列方式>`
    - 几何: 宽度 `<mode>`，高度 `<mode>`，策略 `<父子/兄弟约束策略>`
@@ -397,7 +399,7 @@ DEV 例外:
 - `flutter-widget.md` read only by exact `FW-*` ID when needed
 - reuse search completed
 - key widget decisions cite applicable `DEV-*`; cite `FW-*` only when read
-- every component/layout/size/asset decision has `DEV 检查`
+- every component/scaffold-slot/layout/size/asset decision has `DEV 检查`
 - any `DEV-*` violation is either rejected or recorded as `DEV 例外` with reason, risk, mitigation, and user confirmation requirement
 - generated code uses ASCII paths/identifiers/comments
 - reused project widgets unchanged

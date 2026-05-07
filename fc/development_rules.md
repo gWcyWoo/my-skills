@@ -16,6 +16,13 @@ These rules are project/developer rules for `fc`. They override `flutter-widget.
 - Put the main page content in `Scaffold.body`.
 - Do not generate design mock status-bar elements such as date/time, network signal, carrier, Wi-Fi, or battery indicators.
 
+## DEV-PAGE-APPBAR
+
+- If the design has a top navigation area with a page title, back button, close button, or top actions, prefer `Scaffold.appBar`.
+- Do not implement a normal page navigation bar as a body-local header only for coordinate fidelity.
+- Use a body-local custom header only when the spec shows custom overlap, transparent/immersive header, collapsing behavior, or visual structure that `AppBar` cannot express.
+- If not using `Scaffold.appBar` for a title/back navigation area, record `DEV 例外` with reason, risk, mitigation, and user confirmation.
+
 ## DEV-PAGE-SCROLL-BODY
 
 - Page body height is not fixed to the design artboard height.
