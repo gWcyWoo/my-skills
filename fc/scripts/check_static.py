@@ -4,7 +4,8 @@
 Reads:
   --raw-json <path>    Lanhu Figma JSON (sibling of spec.md, produced by `fd`).
   --code-dir <path>    Directory containing the generated .dart widget files.
-
+  --font-scale <n>     Optional divisor for raw design font sizes when code
+                       uses iOS pt / Flutter logical pixels.
 Compares declared Color/Text/AssetImage/fontSize/fontWeight literals in the
 .dart files against the design layers extracted from raw.json. Outputs a
 single line of JSON to stdout.
@@ -94,7 +95,11 @@ def load_artboard(raw):
     return {}
 
 
-def extract_design_layers(raw):
+def normalize_num(value):
+    return int(value) if isinstance(value, float) and value.is_integer() else value
+
+
+def extract_design_layers(raw, font_scale=1.0):
     """Return list of normalized design records: text / fill / asset."""
     artboard = load_artboard(raw)
     out = []
@@ -112,13 +117,16 @@ def extract_design_layers(raw):
             content = ts.get("content") or text.get("value") or ""
             color = color_dict_to_argb(ts.get("color"))
             size = font.get("size")
+            font_size = None
+            if isinstance(size, (int, float)):
+                font_size = normalize_num(size / font_scale)
             weight = font.get("fontWeight")
             rec = dict(base)
             rec.update({
                 "kind": "text",
                 "content": content,
                 "color": color,
-                "font_size": int(size) if isinstance(size, (int, float)) else None,
+                "font_size": font_size,
                 "font_weight": int(weight) if isinstance(weight, (int, float)) else None,
             })
             out.append(rec)
@@ -335,7 +343,12 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--raw-json", required=True)
     ap.add_argument("--code-dir", required=True)
+    ap.add_argument("--font-scale", type=float, default=1.0,
+                    help="Divide raw design font sizes by this scale before matching code literals")
     args = ap.parse_args()
+    if args.font_scale <= 0:
+        print(json.dumps({"error": "--font-scale must be > 0"}), flush=True)
+        sys.exit(2)
 
     raw_path = Path(args.raw_json)
     code_dir = Path(args.code_dir)
@@ -352,7 +365,7 @@ def main():
         print(json.dumps({"error": f"raw.json parse error: {e}"}), flush=True)
         sys.exit(2)
 
-    design = extract_design_layers(raw)
+    design = extract_design_layers(raw, args.font_scale)
 
     files = sorted(
         str(p) for p in code_dir.rglob("*.dart")

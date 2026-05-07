@@ -23,6 +23,8 @@ Required files:
 - P0: After `solutions.md` is written and peer-reviewed, halt for user confirmation. Do not implement before the user confirms.
 - P0: The user chooses ownership at the gate. If unspecified, default to Claude implements and Codex reviews.
 - P0: Append order is canonical; timestamps are advisory only.
+- P0: Implementation/review liveness. After user ownership is confirmed, C3 must stay inside the implementation-review loop until both sides have explicitly converged on completion in `conversations.md`. A reviewer turn with `Changes requested` is not a stopping point; immediately wait for the implementer’s next complete turn. An implementer turn with “fixed” or “done” is not a stopping point; review it and reply in the transcript. Do not send a final user-facing answer while the peer owes a follow-up or while unresolved review findings remain.
+- P0: User-facing completion requires transcript completion. Codex may only final-answer the user after a complete inbound/outbound transcript sequence shows either `No blocking issues` from the reviewer and implementer acknowledgement, or an equivalent explicit mutual completion statement. If the latest transcript turn is `Changes requested`, `starting implementation`, `implementation done`, `please review`, or any other non-terminal state, continue waiting/reviewing instead of ending the turn.
 
 ## I/O
 
@@ -73,4 +75,17 @@ After user confirmation, follow the selected ownership. If unspecified, Claude i
 
 Implementation-ready turns must include changed files, test/lint/type-check commands and results, and exact blockers. Review against `solutions.md`, not a new interpretation.
 
-If review finds issues, reply `Changes requested`; the implementer fixes and reruns checks. If none remain, reply `No blocking issues`. Complete only when both sides agree no blocking issues remain.
+If review finds issues, reply `Changes requested`; the implementer fixes and reruns checks. After appending `Changes requested`, immediately invoke `wait_for_turn.py` and stay quiet until the implementer posts the next complete turn. Do not summarize to the user, stop the turn, or wait for the user to tell you Claude has updated.
+
+For each implementer follow-up, review the changed implementation against `solutions.md` and the unresolved findings. Then append exactly one review state:
+- `Changes requested` with remaining blocking issues.
+- `No blocking issues` when the implementation satisfies `solutions.md`.
+
+If none remain, reply `No blocking issues` and wait for the implementer to acknowledge completion or otherwise converge in `conversations.md`. Complete only when both sides agree no blocking issues remain. The implementation-review loop is terminal only after transcript convergence, not after a single review message.
+
+### Reviewer Loop Guardrails
+
+- After any outbound `Changes requested`, the next C3 action is `wait_for_turn.py`.
+- After any inbound implementer `implementation done`, `fixed`, `please review`, or equivalent, the next C3 action is review, not a user-facing summary.
+- A user message such as “Claude updated”, “review again”, or “continue” is only a wake signal. If Codex is already the reviewer, Codex should have been waiting; handle the inbound transcript batch and continue the loop.
+- Do not leave a `wait_for_turn.py` session running if the user redirects the task. Stop or abandon the wait before changing workflows.

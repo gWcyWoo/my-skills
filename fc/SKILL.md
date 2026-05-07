@@ -1,292 +1,410 @@
 ---
 name: fc
-description: Use when implementing Flutter UI from a Lanhu-derived spec.md. Triggers on "fc", "flutter 实现", "蓝湖→Flutter". Caller passes the absolute spec.md path; the output and common widget directories are detected from the Flutter project structure.
+description: Use when implementing Flutter UI from a Lanhu-derived spec.md path or directory. Triggers on "fc", "flutter 实现", "蓝湖→Flutter".
 ---
 
 <role>
-Flutter UI implementer in the MAIN session. Converts one Lanhu `spec.md` into responsive Flutter widget files compliant with `flutter-widget.md`. Never invents layout the spec does not support. Never claims `flutter analyze` passed without running it. Never substitutes placeholders for missing image slices. Never writes a layout or component without a rationale comment in idiomatic technical English. Never re-implements a widget the project already has — searches the codebase via the `my-explore-0` skill first and reuses what fits. Never implements isolated absolute coordinates or dimensions from a layer bbox without first calculating them against the design artboard, parent container, and sibling relationships.
+Convert one Lanhu-derived `spec.md` into responsive Flutter UI code. Produce a visual hierarchy, component plan, and layout plan; get user confirmation before writing Dart code.
 </role>
 
 <context>
-**`~/.code/shared-rules/frontend/flutter-widget.md`** — 337 lines. Never read in full.
-1. `rg -n "^#" ~/.code/shared-rules/frontend/flutter-widget.md` to enumerate sections.
-2. Read only the matching section with Codex's available targeted file-read tool or `rg -n -C`.
+Rule files:
+- `~/.agents/skills/fc/development_rules.md`
+- `~/.code/shared-rules/frontend/flutter-widget.md`
 
-Section map:
-- `#1` 布局 — Column / Row / Stack / Expanded / Flexible / Wrap / Container / Padding / Center / Align / Positioned / SizedBox / ConstrainedBox / AspectRatio / LayoutBuilder.
-- `#2` 滚动与集合 — SingleChildScrollView / ListView(.builder/.separated) / GridView / PageView / CustomScrollView / Sliver*.
-- `#3` 页面骨架 — Scaffold / SafeArea / AppBar / Drawer / BottomNavigationBar / NavigationBar / TabBar / FAB / BottomSheet / SnackBar.
-- `#4` 展示 — Text / RichText / SelectableText / Image / Icon / Card / ListTile / Divider / Chip.
-- `#5` 输入与表单.
-- `#6` 交互与按钮.
-- `#7` 异步、状态与 Builder.
-- `#8` 动画.
-- `#10` 决策树 — 10.1 布局 / 10.2 表单 / 10.3 异步 / 10.4 交互 / 10.5 动画.
-- `#11` 反模式 — must not violate.
+Use `development_rules.md` as higher-priority project guidance. If it conflicts with `flutter-widget.md`, `development_rules.md` wins.
 
-**`raw.json`** — sibling of spec.md. Consulted ONLY to resolve a step-4 ambiguity. Schema: `{design_name, design_id, version_id, lanhu_url, figma_json: {meta, assets, artboard: {layers: [...]}}}`. Always queried via `~/.agents/skills/fc/scripts/inspect_layers.py` — never bulk-read, never inline `jq`/`grep`/Python.
+Use `flutter-widget.md` as an external decision guide, not as inline context.
 
-**Layer-query helper — `~/.agents/skills/fc/scripts/inspect_layers.py`**:
-- Invocation: `python3 ~/.agents/skills/fc/scripts/inspect_layers.py --raw-json <path> [--ids ID,ID,…] [--type textLayer|shapeLayer|groupLayer|artboard] [--name-contains SUBSTR]`.
-- Output (one line of compact JSON to stdout): list of normalized records `{id, type, name, path, parent_id, frame:{x,y,w,h}, visible, text_content, font:{size,weight,family}, text_color, fill_color, asset}`. Fields irrelevant to the layer type are omitted.
-- Handles both raw.json schemas (`figma_json.artboard` and stripped `artboard`).
-- Newlines inside `text_content` are preserved verbatim (matches what the Dart literal must decode to after escape-decoding).
-- Exit codes: `0` ok / `2` input error.
+Do not read it fully. Do not load broad rule families. First discover only headings/rule IDs:
 
-**Visual-hierarchy rules** (applied to spec.md's flat layer list):
-- Same x-range, vertical stacking, uniform vertical gap → siblings in `Column`.
-- Same y-range, horizontal arrangement, uniform horizontal gap → siblings in `Row`.
-- Identical fill / border / radius repeating across N layers with identical inner layout → N siblings reusing one extracted widget; outer container chosen per `#10.1`.
-- Bounding-box overlap → child of `Stack` with `Positioned`.
-- A single background block enclosing several layers → those layers share one parent `Container` / `Card` with matching decoration.
-- Pattern repeating ≥3 times → one widget file + `.map` over data. No paste-copy.
+```bash
+rg -n "^#{1,3} .*\\[FW-" ~/.code/shared-rules/frontend/flutter-widget.md
+```
 
-**Responsive geometry rules** (mandatory implementation contract from `fd`):
-- Treat the design artboard width/height as the base coordinate system. Convert design px to runtime values through the available parent constraints, not through independent per-widget scaling.
-- Before assigning any width/height/offset, calculate the node against its parent bbox/insets and sibling group: parent `left/top/right/bottom`, sibling gap, shared axis, shared alignment, equal-size relationships, overlap, and aspect ratio.
-- Classify every meaningful node's width and height separately as `fixed`, `proportional`, `stretch`, `content`, or `aspect-ratio` before writing code. The classification must come from parent-child and sibling evidence in `spec.md`; use `inspect_layers.py` only when the spec is ambiguous.
-- Prefer Flutter constraint widgets (`LayoutBuilder`, `Expanded`, `Flexible`, `Spacer`, `AspectRatio`, `FractionallySizedBox`, `Align`, `Padding`, `ConstrainedBox`) when they express the parent/sibling relationship. Use raw `Positioned(left/top/width/height)` only for genuine overlap, decorative artwork, or explicitly fixed artboard-relative elements.
-- Group-level calculation is authoritative. For a component group, implement the container/row/column/grid sizing first, then calculate children inside that group. Do not let children scale independently from their own bboxes.
-- Preserve image/icon aspect ratio unless the parent/sibling geometry explicitly proves stretch. Do not distort slices to satisfy a raw bbox.
-- If individual bboxes conflict with parent/sibling geometry, STOP and resolve the ambiguity through `inspect_layers.py`; do not choose hard-coded absolute values by default.
+Then read only exact individual rule IDs needed for unresolved design decisions:
 
-**Project-layout detection** — `<root>` = nearest ancestor of spec.md (or cwd) that contains `pubspec.yaml`. `<design_name>` = basename of spec.md's parent directory or the design name recorded in spec.md. `<feature_slug>` = semantic English ASCII `lower_snake_case` name derived from `<design_name>`.
+- Read `development_rules.md` first. If a `DEV-*` rule resolves the decision, do not query `flutter-widget.md` for the same decision.
+- One `flutter-widget.md` query must contain exactly one `FW-*` ID.
+- Use exact ID lookup only, for example:
+  `rg -n -A 20 -B 2 "\\[FW-LAYOUT-COLUMN\\]" ~/.code/shared-rules/frontend/flutter-widget.md`
+- Do not use alternation, prefix, wildcard, heading-number, or family queries such as `FW-LAYOUT-*`, `FW-ANTI-*`, `FW-LAYOUT-COLUMN|FW-LAYOUT-ROW`, `#10`, or `#11`.
+- During plan review, read at most 5 individual `FW-*` rules total. Implementation may read additional exact IDs only for new blockers.
+- Cite `FW-*` only for exact rules actually read.
 
-**Flutter code naming policy**:
-- `lanhu/specs/<design_name>/` may keep the original design name, including Chinese. Generated Flutter code paths under `<root>/lib/` must never use Chinese or any non-ASCII path segment.
-- Derive `<feature_slug>` as concise semantic English, `lower_snake_case`, `[a-z0-9_]+` only. Examples: `信息列表页-有信息状态` → `information_list_with_status`; `信息列表页-无信息状态` → `information_list_empty_state`.
-- Do NOT use raw Chinese, spaces, hyphens, punctuation, pinyin, or mixed-language names for directories, Dart filenames, widget filenames, class names, imports, or part names.
-- Dart files use `lower_snake_case.dart`; Dart classes use ASCII `UpperCamelCase`; private members use ASCII `_lowerCamelCase`.
-- If semantic translation is ambiguous, derive `screen_<image_id8>` from the Lanhu `image_id` in spec.md instead of using the Chinese name. Surface the fallback in output. If no `image_id` is available, STOP and ask for an English feature slug.
+Each component, layout, size, and asset decision must be checked against `development_rules.md` before plan review. Record applicable `DEV-*` IDs or `无直接适用规则`. If a decision would violate a `DEV-*` rule, reject it and choose a compliant alternative. If no compliant alternative exists or the spec/user explicitly requires the violation, keep it only as a `DEV 例外` and record the violated rule, violation reason, risk, mitigation, and required user confirmation. Cite `FW-*` only when an exact `FW-*` rule was read.
 
-Page-layer convention (FIRST existing match under `<root>/lib/`):
-- `lib/pages/` → `<root>/lib/pages/<feature_slug>/`.
-- `lib/features/` → `<root>/lib/features/<feature_slug>/presentation/`.
-- `lib/screens/` → `<root>/lib/screens/<feature_slug>/`.
-- `lib/views/` → `<root>/lib/views/<feature_slug>/`.
+Raw layer inspection:
+- `raw.json` is sibling of `spec.md`
+- Use only to resolve ambiguities from `spec.md`
+- Never bulk-read `raw.json`
+- Never use inline Python, jq, grep, cat, sed against raw.json
 
-Common-widget convention (FIRST existing match under `<root>/lib/`):
-- `lib/widgets/` → `<root>/lib/widgets/`.
-- `lib/components/` → `<root>/lib/components/`.
-- `lib/shared/widgets/` → `<root>/lib/shared/widgets/`.
-- `lib/common/widgets/` → `<root>/lib/common/widgets/`.
-- None exist → default `<root>/lib/widgets/` (created on first reusable write; surfaced to user in step 2g).
+Allowed raw query:
 
-**Reuse policy** — for every non-leaf node in the hierarchy tree, classify the implementation source:
-- **Reused** — an existing project widget under `<root>/lib/` (located via `my-explore-0` in step 7) whose signature and visual semantics match the node. Import and call. Do NOT re-implement.
-- **New common** — a generic primitive (button / input row / list item / card head / status badge / divider with brand) NOT yet in the project, expected to recur on ≥2 pages. Write to `{{COMMON_DIR}}`.
-- **New feature** — coupled to this page's business semantics (page-specific footer, page-specific form-row with bespoke validation). Write to `{{OUTPUT_DIR}}`.
-- **Default when uncertain** — feature dir. Promotion to common dir requires the user OK in a later run; never auto-promote.
+```bash
+python3 ~/.agents/skills/fc/scripts/inspect_layers.py --raw-json <path> [--ids ID,ID] [--type textLayer|shapeLayer|groupLayer|artboard] [--name-contains SUBSTR]
+```
 
-**Comment policy** — every layout widget (Column / Row / Stack / Wrap / Flex / Expanded / Flexible / Padding / Center / Align / Positioned / Container-as-layout) and every non-layout component (Text / Image / Icon / Button / Field / Card / ListTile / etc.) carries a one- or two-line leading `// …` comment in idiomatic technical English stating WHY this widget was chosen and WHY it is optimal versus the next-best alternative, citing the `flutter-widget.md` section. For reused project widgets, the comment additionally cites the source `file:line` and explains why reuse beats a fresh local widget. No Chinese characters. No filler ("// this is a column"). The comment must add information the widget name does not.
+Static check:
 
-**Lanhu MCP** — `mcp__lanhu__lanhu_get_design_slices`. Used ONLY to fetch a slice referenced by spec.md but absent from disk. Design URL lives in spec.md's header (`图：…` or `lanhu_url:`). Save to `<spec_dir>/assets/`.
+```bash
+python3 ~/.agents/skills/fc/scripts/check_static.py --raw-json <spec_dir>/raw.json --code-dir {{OUTPUT_DIR}} [--font-scale {{PT_SCALE}}]
+```
 
-**Static visual-correctness check — `~/.agents/skills/fc/scripts/check_static.py`**:
-- Invocation: `python3 ~/.agents/skills/fc/scripts/check_static.py --raw-json <spec_dir>/raw.json --code-dir {{OUTPUT_DIR}}`.
-- Input: `raw.json` (design ground truth) + every `.dart` file under `{{OUTPUT_DIR}}` (excluding `test/`).
-- Output (one line of JSON to stdout): `{"expected","matched","mismatches":[{layer_id,kind,expected,actual,file,line}],"unmatched_design":[...],"unmatched_code":[...]}`. `kind` ∈ `color | text | font_size | font_weight | asset`.
-- Exit codes: `0` = clean (matched == expected, no mismatches, no unmatched_design); `1` = check failed; `2` = input error.
-- Coverage (Tier 1): declared literals only — `Color(0x…)`, `Color.fromARGB(…)`, `Text("…")`, `AssetImage("…")`, `fontSize: <num>`, `fontWeight: FontWeight.w<n>|bold|normal`. Bbox / runtime layout out of scope.
-- Theme references (`theme.colorScheme.primary`, `Colors.red[500]`) are intentionally NOT recognized — the comment policy + `spec values verbatim` rule means every visible value must be a literal.
-- The check covers code in `{{OUTPUT_DIR}}` only. Reused widgets under `<root>/lib/` are NOT re-scanned — the call site's `child:` / decoration overrides are what gets verified for the current page.
+Project root:
+- nearest ancestor of spec.md or cwd containing `pubspec.yaml`
+
+Page output convention, first existing:
+1. `lib/pages/<feature_slug>/`
+2. `lib/features/<feature_slug>/presentation/`
+3. `lib/screens/<feature_slug>/`
+4. `lib/views/<feature_slug>/`
+
+Common widget convention, first existing:
+1. `lib/widgets/`
+2. `lib/components/`
+3. `lib/shared/widgets/`
+4. `lib/common/widgets/`
+5. default `lib/widgets/`, created only if writing common widgets
+
+Naming:
+- Generated paths under `lib/` must be ASCII only
+- Dart files: `lower_snake_case.dart`
+- Classes: ASCII `UpperCamelCase`
+- No Chinese paths, filenames, identifiers, imports, parts, or code comments
+- If Chinese design name cannot be semantically translated, use `screen_<image_id8>`
 </context>
 
-<instructions>
-1. **Resolve `{{SPEC_PATH}}`.** Absolute path required. If only a directory is passed, append `/spec.md`. If the file is missing → STOP: `spec.md not found at <path>`.
-2. **Detect `{{OUTPUT_DIR}}` and `{{COMMON_DIR}}`.**
-   2a. Walk up from spec.md's directory and from cwd; the first directory containing `pubspec.yaml` is `<root>`. If none → STOP: `pubspec.yaml not found; cannot resolve Flutter project root`.
-   2b. `<design_name>` = basename of spec.md's parent directory unless spec.md records a more precise design name. Derive `<feature_slug>` per the Flutter code naming policy.
-   2c. Validate `<feature_slug>` against `^[a-z][a-z0-9_]*$`. If invalid, fix the slug before continuing; never create a `lib/` directory with raw Chinese or any non-ASCII segment.
-   2d. Pick the first existing page-layer convention per the `<context>` table; build `{{OUTPUT_DIR}}` with `<feature_slug>` accordingly.
-   2e. None of the four page conventions exist → STOP and ask: `lib/ has no pages|features|screens|views subdir; please supply the Flutter output directory (absolute ASCII path).`
-   2f. If the detected or user-supplied `{{OUTPUT_DIR}}` contains any non-ASCII path segment under `<root>/lib/` → STOP and ask for an English ASCII feature slug or output path.
-   2g. The detected `{{OUTPUT_DIR}}` already exists and contains `.dart` files → STOP and ask: `<path> is already populated; overwrite, append, or use a different path?`
-   2h. Pick the first existing common-widget convention per the `<context>` table; that is `{{COMMON_DIR}}`.
-   2i. None exist → set `{{COMMON_DIR}} = <root>/lib/widgets/` and surface it in tick output (`Common dir: defaulted <path> (will be created on first reusable widget)`). Do NOT mkdir yet — only when step 10 actually writes a reusable widget.
-3. **Read spec.md fully.** Capture design URL, design artboard width/height, layer counts, every layer's bbox / parent context / sibling context / responsive intent / color / font, and every image-asset path. Do not touch `raw.json` yet.
-4. **Derive the hierarchy tree and responsive geometry plan.** Apply `<context>` rules to produce `Page → Section → Item → Atom`, naming the candidate widget per node. For every non-root node, record `(parent, sibling_group, width_mode, height_mode, runtime_formula_or_constraint, aspect_ratio_if_any)`. Record every layer pair whose relationship or responsive mode cannot be decided from spec.md alone — these are the step-5 ambiguities. Think thoroughly before writing any code.
-5. **Resolve ambiguities via `inspect_layers.py`.** For each step-4 ambiguity, run `python3 ~/.agents/skills/fc/scripts/inspect_layers.py --raw-json <spec_dir>/raw.json` with `--ids` / `--type` / `--name-contains` to fetch the missing field (parent_id, frame, fill, text content + font + color). One query per ambiguity. NEVER write inline Python / `jq` / `grep` against raw.json — the helper handles the wrapper schema, the color normalization, and the text-content newline preservation; ad-hoc queries silently miss the `figma_json.artboard` nesting and produce false zeros.
-6. **Pick widgets per `flutter-widget.md` and the responsive geometry plan.**
-   6a. Run `rg -n "^#" ~/.code/shared-rules/frontend/flutter-widget.md` once; cache section line numbers.
-   6b. Read only the section relevant to each non-leaf decision using a targeted file-read tool or `rg -n -C`.
-   6c. Record `(node, sdk_widget, section#, width_mode, height_mode, why-optimal)` for each non-leaf node. This is the step-7 reuse-search input.
-   6d. If a node can be expressed by parent constraints and sibling relationships, prefer responsive Flutter constraints over raw design-px offsets. Raw absolute positioning requires an explicit `Stack`/overlap/decorative rationale.
-7. **Search the project for reusable widgets via `my-explore-0`.**
-   7a. Build ONE batched query naming every candidate role from step 6 (e.g. `primary button`, `phone input row`, `password input row with show toggle`, `centered footer link`). For each, supply the SDK widget chosen in step 6, the visual-semantics summary from spec.md, and the required responsive width/height modes.
-   7b. Use the `my-explore-0` skill in the MAIN session: announce `Using my-explore-0 to search reusable Flutter widgets.` and follow `~/.agents/skills/my-explore-0/SKILL.md`. Do NOT create a child agent for this search; the `-0` suffix denotes MAIN-session skill execution. Pass the batched query; ask for `file:line` of every matching `class … extends StatelessWidget|StatefulWidget` under `<root>/lib/`, with constructor signature.
-   7c. For each step-6 node, classify the source per the `<context>` Reuse policy: **reused** | **new-common** | **new-feature**. Reuse only if (signature compatible) AND (visual semantics match the spec). Cosmetic mismatch on a reused widget → wrap with overrides at the call site (color, padding); do NOT modify the reused widget itself (changes leak to other pages — see P0).
-   7d. Record `(node, source, target_file)` for the `Reuse` slot. The target_file for `reused` is the existing path; for `new-common` it is `{{COMMON_DIR}}/<widget_slug>.dart`; for `new-feature` it is `{{OUTPUT_DIR}}/<widget_slug>.dart`. Every `<widget_slug>` must be ASCII `lower_snake_case`.
-8. **Pause for user review of the implementation plan.** Before creating any directory or writing any Dart file, emit `<plan_review_format>` and ask: `我已根据 spec.md 抽象出视觉层次、组件拆分和 Flutter 布局方案。请审核：是否有布局或组件拆分建议？确认后我再开始实现代码。`
-   8a. The plan must include visual hierarchy, responsive geometry modes, Flutter SDK/layout choices with `flutter-widget.md` section citations, reuse classification, proposed ASCII paths/files, and open ambiguities.
-   8b. If the user suggests changes, revise the plan and ask for confirmation again. Do not write code until the user explicitly confirms the plan.
-   8c. If the user confirms, record `Plan review: accepted` or `Plan review: accepted-after-changes` and continue.
-9. **Resolve missing slices.**
-   9a. List every image-asset path in spec.md whose file does not exist on disk.
-   9b. For each, call `mcp__lanhu__lanhu_get_design_slices` with the design URL from spec.md; save into `<spec_dir>/assets/`.
-   9c. MCP unavailable or returns nothing → STOP with `Status: blocked` and the missing-asset list. No placeholder substitution.
-10. **Write responsive widgets with rationale comments from the confirmed plan.** Create new files with Codex's file-editing tools (`apply_patch` for manual edits). The page entry-point goes under `{{OUTPUT_DIR}}`; new reusable primitives go under `{{COMMON_DIR}}` (mkdir on first such write); reused widgets are imported, not re-implemented. `const` where children are compile-time constant. Apply spec colors / sizes / radii verbatim — no rounding, but derive runtime layout from the artboard, parent constraints, and sibling relationships.
-   10a. Every layout widget gets a leading `// …` comment in technical English: WHY this layout, WHY optimal vs the next-best alternative, citing `(#section)`, and which responsive geometry relation it implements (parent inset, sibling gap, stretch, proportional width, content size, or aspect ratio).
-   10b. Every non-layout component gets the same kind of comment. For reused widgets, additionally cite the source `file:line` and state why reuse beats a fresh local widget while satisfying the responsive width/height modes.
-   10c. No Chinese characters in any comment. No filler. One or two lines per comment. Comment must state a tradeoff the widget name itself does not convey.
-   10d. Use `LayoutBuilder` or equivalent parent-constraint access whenever a value depends on the runtime container width/height. Do not compute responsive values from `MediaQuery` alone when the widget is nested inside a narrower parent.
-   10e. Do not encode independent `left/top/width/height` constants for siblings that share an axis, gap, inset, or proportional rule. Encode the shared relationship once at the parent/group level.
-   10f. Before creating any file or directory under `<root>/lib/`, verify the full relative path is ASCII-only and every new Dart filename is `lower_snake_case.dart`. If not, fix the slug before writing. Do not `mkdir` Chinese feature paths.
-   10g. Do not implement anything outside the confirmed plan. If implementation reveals a layout/component decision that was not in the plan, STOP and return to step 8 with a revised plan.
-11. **Run `flutter analyze {{OUTPUT_DIR}} {{COMMON_DIR}}`** from the project root (include `{{COMMON_DIR}}` only if step 10 wrote a new file there). Self-fix capped at 3 iterations. Do not advance until exit 0. If `flutter` is not on PATH → report `Verify: skipped: flutter not on PATH` and continue to step 12. Never fabricate the result.
-12. **Run static visual-correctness check (verify-and-fix loop).**
-    12a. Invoke `python3 ~/.agents/skills/fc/scripts/check_static.py --raw-json <spec_dir>/raw.json --code-dir {{OUTPUT_DIR}}`. Parse the one-line JSON.
-    12b. Exit 0 → record `Check: matched/expected, exit 0` and proceed to step 13.
-    12c. Exit 1 → for each entry in `mismatches`, edit the `.dart` at `file:line` to set the literal to `expected` (color → `Color(0x…)`, font_weight → `FontWeight.w<n>`, font_size → numeric, etc.). Fix the .dart, NEVER edit raw.json or spec.md. If the mismatched literal lives inside a reused widget at `<root>/lib/...`, do NOT edit the reused widget — wrap the call site with an override (e.g. `color:` argument, `Theme(...)`); the page must adapt to the shared widget, not vice versa.
-    12d. For each entry in `unmatched_design`: locate the missing layer's intended position from the hierarchy tree (step 4) and add the corresponding widget. If the layer is genuinely decorative and ignorable, the user must explicitly mark it in spec.md as `# 视觉忽略: <layer_id>` — without that mark, treat it as a real defect.
-    12e. After all edits, re-run `flutter analyze` (to catch syntax errors introduced by the edit), then re-run `check_static.py`. Loop 12c–12e up to 5 iterations total.
-    12f. Still failing after 5 iterations → STOP with `Status: blocked` and surface the residual mismatches/unmatched_design list in the output. Do NOT continue to step 13.
-    12g. Exit 2 → input error (raw.json unreadable / no .dart files). STOP with `Status: blocked` and the script's `error` field.
-13. **Pause for final implementation review.** Emit `<output_format>`, then ask: `实现完成。请在 IDE 查看 diff 后确认是否进入下一阶段。` Wait for user.
-</instructions>
+<hard_rules>
+- Do not write Dart or create `lib/` directories before user confirms the plan
+- Do not full-read `flutter-widget.md`
+- Do not bulk-read `raw.json`
+- Do not modify reused project widgets
+- Do not edit `spec.md` or `raw.json`
+- Do not touch pubspec, theme, router, or dependencies without explicit user approval
+- Do not implement outside the confirmed plan
+- Do not use Chinese in generated code comments
+- Do not create non-ASCII paths or identifiers under `lib/`
+- Do not use raw absolute `Positioned(left/top/width/height)` unless overlap/decorative/fixed-artboard evidence exists
+- Do not implement `SingleChildScrollView + Column + large dynamic children`
+- Do not put `Expanded` outside `Row` / `Column` / `Flex`
+- Do not put `Expanded` in scroll-direction `Column` under `SingleChildScrollView`
+- Do not distort image/icon/slice aspect ratio unless explicit stretch evidence exists
+</hard_rules>
 
-<input>
-- {{SPEC_PATH}}: absolute path to a `spec.md` produced by the `fd` skill.
-- {{OUTPUT_DIR}}: derived in step 2 from `<root>/lib/<page-convention>/<feature_slug>/`. Caller does not supply unless step 2e/2f/2g prompts.
-- {{COMMON_DIR}}: derived in step 2 from `<root>/lib/<common-convention>/`. Defaults to `<root>/lib/widgets/` if no convention exists.
-</input>
+<workflow>
+1. Resolve `{{SPEC_PATH}}`
+   - If input is a directory, append `/spec.md`
+   - If missing, stop: `spec.md not found at <path>`
 
-<examples>
-<example>
-INPUT:
-  SPEC_PATH = /repo/lanhu/specs/login_page/spec.md
+2. Detect project root, output dir, common dir
+   - Find nearest `pubspec.yaml`
+   - Derive English ASCII `<feature_slug>`
+   - Pick page/common dirs by convention
+   - If page convention missing, ask for absolute ASCII output dir
+   - If output dir already contains Dart files, ask: overwrite, append, or different path
 
-ACTIONS:
-- `pubspec.yaml` at `/repo`; `lib/pages/` exists → OUTPUT_DIR = `/repo/lib/pages/login_page/`. `lib/widgets/` exists → COMMON_DIR = `/repo/lib/widgets/`.
-- spec.md: 4 layers at x=24..328, 16px vertical gap; one logo asset (slice on disk).
-- Tree: Scaffold > SafeArea > Padding(24) > Column(spacing=16, crossAxis=stretch) > {Image, PhoneInputRow(Row), PasswordRow(Row), FilledButton, Center>TextButton}.
-- `my-explore-0` reports: `lib/widgets/primary_button.dart:14 PrimaryButton({required Widget child, VoidCallback? onPressed})` — matches "primary CTA button" semantics. PhoneInputRow / PasswordRow not found.
-- Sources: PrimaryButton → reused; PhoneInputRow → new-feature; PasswordRow → new-feature; logo Image / TextButton link → SDK inline.
-- Sample comments in `login_page.dart`:
-    // Scaffold: provides Material page skeleton with appBar/body/bottomSheet slots; (#3) — preferred over a bare Container because the design relies on Material insets and SnackBar surfaces.
-    // SafeArea: insets content past the notch and gesture nav; (#3) — required for full-bleed login content on modern Android/iOS.
-    // Padding(EdgeInsets.all(24)): applies the 24px outer gutter from spec; (#1, #11.4) — preferred over Container(padding:) since no decoration is needed.
-    // Column(crossAxisAlignment: stretch): four siblings share x-range and stack with uniform 16px gap; (#1, #10.1) — Row would mismatch vertical layout, Wrap would lose ordering, ListView would over-engineer a fixed-count form.
-    // Image.asset: ships the brand logo with the app bundle; (#4) — Image.network would add startup latency for a static asset.
-    // PrimaryButton (lib/widgets/primary_button.dart:14): reused project CTA — matches the spec's primary button shape and brand fill; preferred over a fresh FilledButton to keep cross-page consistency.
+3. Read `spec.md` fully
 
-OUTPUT:
-Status:        ready-for-verify
-Output dir:    detected /repo/lib/pages/login_page/
-Common dir:    detected /repo/lib/widgets/
-Files written: lib/pages/login_page/{login_page.dart, phone_input_row.dart, password_row.dart}
-Reuse:         reused 1 (PrimaryButton @ lib/widgets/primary_button.dart:14); new-feature 2 (PhoneInputRow, PasswordRow); new-common 0
-Hierarchy:     Scaffold > SafeArea > Padding > Column > {Image, PhoneInputRow, PasswordRow, PrimaryButton, Center>TextButton}
-Rules applied: #1, #3, #4, #5, #6, #11.4
-Slices:        none missing
-Verify:        flutter analyze → 0
-Check:         12/12, exit 0 (1 self-fix iter: btn font_weight w500 → w600 at login_page.dart:42)
-Review:        (not requested yet)
-</example>
+   Capture:
+   - design URL
+   - design name
+   - image_id
+   - artboard width/height
+   - layer list
+   - bbox
+   - text
+   - font size/weight
+   - colors
+   - radius/border
+   - asset paths
 
-<example label="BAD — do not do this">
-Skip step 4. Guess hierarchy from layer names. Nested `SingleChildScrollView + Column` with `Expanded` children — `#11.1 + #11.3` violation that `flutter analyze` does not catch.
-</example>
+   Do not touch `raw.json` yet
 
-<example label="BAD — do not do this">
-Slice missing, MCP unavailable. Substitute `Container(width: 80, height: 80, color: Colors.grey)` to keep `flutter analyze` green. P0 violation. Correct: STOP with `Slices: blocked: [<list>]`.
-</example>
+4. Derive visual hierarchy from `spec.md` before component or layout design
 
-<example label="BAD — do not do this">
-// 这是一个 Column，因为子组件需要垂直排列
-Comment is in Chinese AND merely restates the widget name without rationale or section citation. Correct shape:
-// Column(crossAxisAlignment: stretch): siblings share x-range and stack with uniform 16px gap; (#1, #10.1) — Wrap would lose ordering, ListView would over-engineer a fixed-count form.
-</example>
+   Produce:
 
-<example label="BAD — do not do this">
-`check_static.py` reports `mismatches: [{layer_id: t1, kind: color, expected: 0xFFFF5722, actual: 0xFFFF6633, file: login_page.dart, line: 42}]`. Agent edits `raw.json` to change the design color to `#FF6633` so the next check passes. P0 violation — design is the source of truth. Correct: edit `login_page.dart:42` to set the color to `Color(0xFFFF5722)`.
-</example>
+   ```text
+   Page → Section → Item → Atom
+   ```
 
-<example label="BAD — do not do this">
-Skip step 7. Re-implement `PrimaryButton` locally as `LoginButton` with the same shape because "it's faster than searching". Project now has two buttons that drift over time. Correct: invoke `my-explore-0`, find the existing `PrimaryButton`, import + call.
-</example>
+   For each meaningful visual node record:
+   - semantic role
+   - visual priority
+   - parent
+   - sibling group
+   - axis
+   - gap
+   - overlap evidence
+   - repeated-pattern evidence
+   - enclosing-background evidence
+   - design-size evidence from `spec.md`
+   - preliminary constraint hint: `fixed | content | stretch | proportional | aspect-ratio`
+   - unresolved ambiguities
 
-<example label="BAD — do not do this">
-`check_static.py` reports a color mismatch on a `PrimaryButton` instance. The `PrimaryButton` widget has a default fill that does not match this page's spec. Agent edits `lib/widgets/primary_button.dart` to change the default fill so the page passes — silently breaking every other page using `PrimaryButton`. P0 violation. Correct: leave the reused widget untouched; pass `color:` (or wrap with `Theme(...)`) at the call site so only this page sees the override.
-</example>
-</examples>
+5. Resolve only necessary ambiguities with `inspect_layers.py`
+   - Batch IDs from the same ambiguity group
+   - Do not inspect unrelated raw layers
+
+6. Design strictly in this order:
+   1. Use the visual hierarchy from step 4 as the source of truth.
+   2. Design component responsibilities and boundaries from the visual hierarchy.
+   3. Design Flutter layout from the component tree.
+   4. Validate geometry through parent/child and sibling constraints together.
+   5. Reject anti-patterns and record unresolved ambiguities.
+
+   Rule lookup procedure:
+   - Read `~/.agents/skills/fc/development_rules.md` before `flutter-widget.md`.
+   - Apply `DEV-*` rules first; cite relevant `DEV-*` IDs in the plan.
+   - For every component boundary, layout choice, size conversion, scroll decision, bottom persistent area, and asset choice, run a `DEV 检查`.
+   - `DEV 检查` must list applicable `DEV-*` IDs and the compliance result, or `无直接适用规则`.
+   - If `DEV 检查` finds a violation, reject that choice and record the compliant alternative.
+   - If a violation is unavoidable or explicitly required, record `DEV 例外`: violated rule ID, why it must violate, risk, mitigation, and confirmation needed.
+   - Start with heading/rule discovery only:
+     `rg -n "^#{1,3} .*\\[FW-" ~/.code/shared-rules/frontend/flutter-widget.md`
+   - Before reading any `FW-*` rule, name the single unresolved design decision.
+   - Read one exact `FW-*` ID per command:
+     `rg -n -A 20 -B 2 "\\[FW-EXACT-ID\\]" ~/.code/shared-rules/frontend/flutter-widget.md`
+   - Do not query multiple IDs, wildcard families, prefixes, section numbers, or headings to pull whole sections.
+   - Do not read `#0`, `#10`, `#11`, or `#13` by default.
+   - During plan review, stop after at most 5 exact `FW-*` rule reads.
+   - If `development_rules.md` already covers the decision, skip `flutter-widget.md` for that decision.
+
+   Component design requirements:
+   - Map each component to one or more visual hierarchy nodes.
+   - Define the component responsibility before choosing Flutter layout widgets.
+   - Choose `reused`, `new-common`, `page-local`, or `sdk-inline` as a provisional source; step 7 finalizes it after reuse search.
+   - Similar/repeated elements used only inside this page stay `page-local` in the same Dart file.
+   - Check each component boundary against `DEV-COMPONENT-PAGE-LOCAL` and `DEV-COMPONENT-COMMON`.
+   - Record the layout constraints the component requires or exposes, but do not implement yet.
+
+   Layout design requirements:
+   - Choose the overall page layout from the confirmed component tree.
+   - Check the page root against `DEV-PAGE-SCAFFOLD`.
+   - Check scroll-body decisions against `DEV-PAGE-SCROLL-BODY`.
+   - Check persistent bottom content against `DEV-BOTTOM-PERSISTENT`.
+   - Prefer linear layout (`Row`/`Column`) before `Stack`/`Positioned`.
+   - Check each `Row`/`Column`/`Stack`/`Positioned` choice against `DEV-LAYOUT-LINEAR-FIRST` and `DEV-LAYOUT-STACK-ADAPTIVE`.
+   - For each component, design parent layout, child layout, and sibling spacing together.
+   - Record width mode: `fixed | content | stretch | proportional | aspect-ratio`.
+   - Record height mode: `fixed | content | stretch | proportional | aspect-ratio`.
+   - Record runtime constraint strategy for responsive/adaptive behavior.
+   - Use design artboard size only as the conversion baseline, not as a fixed screen size.
+   - Check width/height and artboard use against `DEV-RESPONSIVE-PAGE`.
+   - Check text, spacing, radius, border, icon, image, and explicit visual sizes against `DEV-UNITS-IOS-PT`.
+   - Check background image, icon, and logo asset choices against `DEV-ASSETS-WEBP-2X`.
+
+   For each non-leaf component create a compact decision:
+   - node name
+   - responsibility
+   - spec evidence
+   - mapped visual hierarchy node
+   - component source
+   - `DEV 检查`
+   - `DEV 例外` when applicable
+   - geometry mode
+   - chosen widget/layout
+   - cited `DEV-*` rule when applicable
+   - cited exact `FW-*` rule when read
+   - rejected nearest alternative
+   - anti-pattern risk and mitigation
+   - reuse-search role
+
+7. Search project reuse with `my-explore-0`
+
+   Announce:
+   `Using my-explore-0 to search reusable Flutter widgets.`
+
+   Search `<root>/lib/` for all candidate roles in one batched query
+
+   Request:
+   - file:line
+   - class name
+   - constructor signature
+   - visual semantics
+   - import path
+
+   Classify each non-leaf node:
+   - `reused`
+   - `new-common`
+   - `page-local`
+   - `sdk-inline`
+
+   Reuse only if signature and visual semantics match
+
+   Classification rules:
+   - `page-local`: similar/repeated elements used only inside this page; extract as private widgets/classes in the page Dart file, not separate files.
+   - `new-common`: same functional component is used widely in the project or clearly expected across pages; create one common widget file after plan confirmation.
+   - If uncertain, choose `page-local`.
+
+8. Emit plan review and stop
+   - Do not write files
+   - Ask the user to review visual hierarchy, component boundaries, and layout
+
+9. After explicit confirmation, resolve missing slices
+   - List asset paths missing on disk
+   - Fetch only referenced missing slices through Lanhu MCP
+   - Save to `<spec_dir>/assets/`
+   - If unavailable, stop with `Status: blocked`
+
+10. Write Dart files
+
+   10a. Scope:
+   - `{{OUTPUT_DIR}}`
+   - `{{COMMON_DIR}}`
+
+   10b. Add file header:
+
+   ```dart
+   // Generated by fc from Lanhu spec.
+   ```
+
+   10c. Use `const` where possible
+
+   10d. Use file-local constants for repeated visual literals
+
+   10e. Preserve static-check-visible literals
+
+   10f. Use parent/group constraints instead of independent bbox scaling
+
+   10g. Add English `// fc:` comments only for:
+   - key layout decisions
+   - responsive decisions
+   - raw positioning
+   - reused widget calls
+   - anti-pattern avoidance
+
+   10h. If a new decision appears, stop and return to plan review
+
+11. Format and analyze
+
+   11a. Run `dart format` on files written by this run
+
+   11b. Run:
+
+   ```bash
+   flutter analyze {{OUTPUT_DIR}} {{COMMON_DIR}}
+   ```
+
+   from project root
+
+   11c. Include `{{COMMON_DIR}}` only if common files were written
+
+   11d. Self-fix analyze errors up to 3 iterations
+
+   11e. If tools missing, report skipped honestly
+
+12. Run static visual check
+
+   12a. Run `check_static.py`; if `DEV-UNITS-IOS-PT` applies, pass `--font-scale {{PT_SCALE}}`
+
+   12b. If mismatches, fix generated Dart literals only
+
+   12c. If reused widget mismatch, override at call site
+
+   12d. If unmatched design, add corresponding widget unless spec marks it ignored
+
+   12e. Loop up to 5 iterations
+
+   12f. If still failing, stop with `Status: blocked` and residual list
+</workflow>
 
 <plan_review_format>
-Status:        plan-review
-Output dir:    `detected <path>` | `asked-and-supplied <path>`
-Common dir:    `detected <path>` | `defaulted <path> (will be created on first reusable widget)`
-Names:         `design "<design_name>" → feature_slug "<feature_slug>"` | `fallback screen_<image_id8>`
-Visual tree:   one-line abstract visual hierarchy, e.g. `Page → AppBar → ContentList → StatusCard[]`
-Geometry:      design `<w>x<h>`; modes summary, e.g. `root stretch, hero aspect-ratio, cards proportional, list content`
-Layout plan:   parent/group layout choices with `flutter-widget.md` section numbers
-Components:    proposed components with source classification: `reused | new-common | new-feature | sdk-inline`
-Reuse:         `reused <n> (<name> @ <file:line>, …); new-common <n> (<names>); new-feature <n> (<names>)`
-Files planned: proposed ASCII `lower_snake_case.dart` paths only; no files written yet
-Ambiguities:   `none` | concise list requiring user decision
-Question:      `是否有布局或组件拆分建议？确认后我再开始实现代码。`
+状态:          plan-review
+
+输出目录:      `detected <path>` | `asked-and-supplied <path>`
+
+公共组件目录:  `detected <path>` | `defaulted <path>`
+
+命名:          `design "<design_name>" → feature_slug "<feature_slug>"` | `fallback screen_<image_id8>`
+
+设计尺寸:      `<width>x<height>`
+
+视觉层次:
+1. `<Page/Section/Item/Atom>` — `<语义角色>`
+   - 优先级: `<主要 | 次要 | 辅助>`
+   - 父级: `<父级或无>`
+   - 同级关系: `<轴向/间距/对齐>`
+   - 设计证据: `<spec.md 证据>`
+   - 约束提示: `<fixed | content | stretch | proportional | aspect-ratio>`
+
+组件设计:
+1. `<PageComponent>`
+   - 对应视觉层次: `<视觉节点>`
+   - 职责: `<页面职责>`
+   - 来源: `<page-local | reused | sdk-inline>`
+   - 对外约束: `<尺寸/滚动/交互约束>`
+   - DEV 检查: `<通过 DEV-* | 违反 DEV-*：原因/风险/缓解/需确认 | 无直接适用规则>`
+   - 子组件:
+     1.1 `<ChildComponent>`
+        - 对应视觉层次: `<视觉节点>`
+        - 职责: `<职责>`
+        - 来源: `<reused | new-common | page-local | sdk-inline>`
+        - 对外约束: `<约束>`
+        - DEV 检查: `<通过 DEV-* | 违反 DEV-*：原因/风险/缓解/需确认 | 无直接适用规则>`
+        - 子组件: `<子组件或无>`
+
+布局设计:
+1. `<PageComponent>` — `<Scaffold/SafeArea/LayoutBuilder/ScrollView/...>`（`DEV-*` 如适用；`FW-*` 仅在已读取精确规则时标注）
+   - 整体布局: `<布局和理由>`
+   - 子布局: `<子组件排列方式>`
+   - 几何: 宽度 `<mode>`，高度 `<mode>`，策略 `<父子/兄弟约束策略>`
+   - 组件选择: 选择 `<widget>`，不选 `<alternative>`，因为 `<evidence>`（`DEV-*` 如适用；`FW-*` 仅在已读取精确规则时标注）
+   - DEV 检查: `<通过 DEV-* | 违反 DEV-*：原因/风险/缓解/需确认 | 无直接适用规则>`
+   - 子布局:
+     1.1 `<ChildComponent>` — `<Column/Row/Stack/ListView/...>`（`DEV-*` 如适用；`FW-*` 仅在已读取精确规则时标注）
+        - 几何: `<inset/gap/stretch/content/proportional/aspect-ratio>`
+        - 组件选择: `<选择和理由>`（`DEV-*` 如适用；`FW-*` 仅在已读取精确规则时标注）
+        - DEV 检查: `<通过 DEV-* | 违反 DEV-*：原因/风险/缓解/需确认 | 无直接适用规则>`
+        - 子布局: `<子布局或无>`
+
+复用:
+- reused `<n>`: `<name> @ <file:line>`
+- new-common `<n>`: `<names>`
+- page-local `<n>`: `<names>`
+- sdk-inline `<n>`: `<roles>`
+
+已排除反模式:
+- `<node>` 排除 `<anti-pattern>`，因为 `<evidence>`；选择 `<alternative>`（`FW-*` 仅在已读取精确规则时标注）
+- `无`
+
+DEV 例外:
+- `无` | `<node>` 违反 `<DEV-*>`：原因 `<why>`；风险 `<risk>`；缓解 `<mitigation>`；需用户确认 `<yes>`
+
+计划文件:
+- `<ASCII lower_snake_case.dart paths>`
+- 尚未写入文件
+
+缺失切图:
+- `无` | `<asset 路径>`
+
+待确认问题:
+- `无` | `<简要列表>`
+
+问题:
+我已根据 spec.md 按“视觉层次 → 组件设计 → 布局设计”的顺序完成方案。请审核：视觉层次、组件边界或布局是否需要调整？确认后我再开始实现代码。
 </plan_review_format>
 
-<output_format>
-Status:        ready-for-verify | blocked
-Output dir:    `detected <path>` | `asked-and-supplied <path>`
-Common dir:    `detected <path>` | `defaulted <path> (will be created on first reusable widget)`
-Names:         `design "<design_name>" → feature_slug "<feature_slug>"` | `fallback screen_<image_id8>`
-Files written: <path>/<file>.dart → one-line description, one per line (group by output-dir / common-dir)
-Reuse:         `reused <n> (<name> @ <file:line>, …); new-common <n> (<names>); new-feature <n> (<names>)`
-Hierarchy:     one-line widget tree (root → leaves)
-Geometry:      design `<w>x<h>`; modes summary, e.g. `root stretch, hero aspect-ratio, cards proportional, list content`
-Rules applied: section numbers, e.g. `#1, #10.1, #11.4`
-Slices:        `none missing` | `<n> fetched: <paths>` | `blocked: <missing>`
-Plan review:   accepted | accepted-after-changes
-Verify:        `flutter analyze → 0` | `flutter analyze → N issues: <summary>` | `skipped: flutter not on PATH`
-Check:         `<matched>/<expected>, exit 0` | `blocked after <n> iters: <m> mismatches, <k> unmatched_design`
-Review:        accepted | accepted-after-changes | (not requested yet)
-</output_format>
-
 <success_criteria>
-Complete when ALL hold:
-- spec.md fully read; hierarchy tree produced.
-- Design artboard size captured; every non-root node has parent/sibling context and width/height mode recorded before code is written.
-- `{{OUTPUT_DIR}}` and `{{COMMON_DIR}}` resolved (auto-detected, defaulted, or user-supplied).
-- `{{OUTPUT_DIR}}`, every new directory, every Dart filename, and every Dart identifier created by this run is ASCII-only; feature and widget files use English `lower_snake_case`.
-- Step 7 reuse search invoked via `my-explore-0`; every non-leaf node classified as `reused | new-common | new-feature`.
-- Step 8 plan review emitted before any `lib/` directory creation or Dart write; user explicitly confirmed the visual hierarchy, component split, and Flutter layout plan.
-- Every non-leaf widget cites a `flutter-widget.md` section number.
-- Every layout widget AND every component carries an English `// …` rationale comment per step 10 with `(#section)` and responsive geometry rationale. Reused-widget comments additionally cite `file:line` of the reused source.
-- No isolated absolute `x/y/w/h` implementation exists unless justified by overlap, decorative artwork, or an explicitly fixed artboard-relative element.
-- Parent/group-level constraints encode shared sibling gaps, alignment, proportional sizing, stretch, content sizing, and aspect ratio before child dimensions are assigned.
-- No Chinese characters in any code comment.
-- No `#11` anti-pattern present in written code.
-- No reused widget under `<root>/lib/` was edited by this run (reused widgets stay untouched).
-- Every referenced slice exists on disk, OR run reported `Status: blocked` with the list.
-- `flutter analyze` exits 0, OR reported `skipped: flutter not on PATH`.
-- `check_static.py` exits 0 (matched == expected, no mismatches, no unmatched_design), OR run reported `Status: blocked` with the residual list after 5 iterations.
-- User asked for final implementation review (step 13).
-Stop the moment those hold. Do not run tests, edit pubspec, or touch theme / router unilaterally.
+- plan confirmed before code
+- output/common dirs resolved
+- spec fully read
+- visual hierarchy, component boundaries, and layout tree recorded in order
+- parent/child and sibling geometry modes recorded
+- `development_rules.md` read and higher-priority `DEV-*` rules applied
+- `flutter-widget.md` read only by exact `FW-*` ID when needed
+- reuse search completed
+- key widget decisions cite applicable `DEV-*`; cite `FW-*` only when read
+- every component/layout/size/asset decision has `DEV 检查`
+- any `DEV-*` violation is either rejected or recorded as `DEV 例外` with reason, risk, mitigation, and user confirmation requirement
+- generated code uses ASCII paths/identifiers/comments
+- reused project widgets unchanged
+- no unplanned files changed
+- no known anti-pattern present
+- referenced slices exist or blocked reported
+- `dart format` run or skipped with reason
+- `flutter analyze` passes or skipped with reason
+- `check_static.py` passes or blocked reported after allowed fixes
 </success_criteria>
-
-<final_reminders>
-P0 — Never fabricate `flutter analyze` results.
-P0 — Never substitute a placeholder for a missing slice. Fetch via `mcp__lanhu__lanhu_get_design_slices` or report `Status: blocked`.
-P0 — Never violate any `flutter-widget.md` `#11` anti-pattern.
-P0 — Never implement layer bbox coordinates or width/height as isolated absolute values. Runtime layout must be derived from design artboard size + parent constraints + sibling relationships. Raw `Positioned` constants are allowed only for proven overlap/decorative/fixed-artboard cases with an explicit comment.
-P0 — Never let child widgets scale independently from their own bboxes when they belong to a component group. Calculate the group first, then derive children from parent insets, sibling gaps, proportional/stretch/content modes, and aspect ratio.
-P0 — Never create Flutter implementation directories, Dart files, imports, class names, or identifiers using Chinese, pinyin, spaces, hyphens, punctuation, or any non-ASCII character. `lanhu/specs/<design_name>/` may be Chinese; `<root>/lib/...` must be semantic English ASCII.
-P0 — Never expand scope beyond `{{OUTPUT_DIR}}` ∪ `{{COMMON_DIR}}`. Pubspec / theme / router / new dependency requires explicit user OK.
-P0 — Never read `flutter-widget.md` or `raw.json` in full. Targeted reads only.
-P0 — All `raw.json` queries go through `~/.agents/skills/fc/scripts/inspect_layers.py`. NEVER write inline Python / `jq` / `grep` against raw.json — the wrapper schema is `figma_json.artboard`, and ad-hoc queries that read `raw["artboard"]` silently see zero layers and pass falsely.
-P0 — Every layout widget AND every component carries a leading `// …` comment in idiomatic technical English explaining WHY this widget and WHY it is optimal vs the next-best alternative, citing `(#section)`. Reused widgets additionally cite `file:line`. No Chinese characters in any code comment. No filler. Removing the comment must lose information.
-P0 — Step 2 detects `{{OUTPUT_DIR}}` and `{{COMMON_DIR}}` from the project; ask the user only when 2e (no page convention), 2f (non-ASCII path), or 2g (already populated) triggers. Do not invent a path.
-P0 — Step 7 reuse search via `my-explore-0` is mandatory for every non-leaf node. Re-implementing a project widget that already covers the role is forbidden — use `my-explore-0` first, classify every node as `reused | new-common | new-feature`. Do NOT use raw shell reads on source for this search; per project memory, code exploration goes through `my-explore-0`.
-P0 — Step 8 plan review is mandatory before code implementation. Do not create `{{OUTPUT_DIR}}`, create common widgets, or write/edit any Dart file until the user has reviewed the visual hierarchy, component split, Flutter layout plan, and explicitly confirmed.
-P0 — Never edit a reused widget under `<root>/lib/` to make this page's check pass. Cosmetic divergence is resolved by overriding at the call site (constructor args, `Theme(...)` wrap), not by mutating the shared source. Mutating shared widgets is a regression bomb for every other page that imports them.
-P0 — Never auto-promote an existing feature-specific widget into `{{COMMON_DIR}}`. That is a refactor, out of scope; surface the candidate to the user instead.
-P0 — When `check_static.py` reports a mismatch, fix the `.dart` at the reported `file:line` to match raw.json. NEVER edit raw.json or spec.md to make the check pass — that inverts the source of truth.
-P0 — Step 12 verify-and-fix is mandatory. Do not advance to step 13 (final implementation review) on a non-zero check exit unless 5 iterations have been exhausted and `Status: blocked` is reported.
-P1 — Step 4 precedes step 7. Step 6 (SDK widget pick) precedes step 7 (project reuse search). Step 7 precedes step 8 (plan review). Step 8 user confirmation precedes step 10 (write).
-P1 — Reuse-vs-new judgment defaults to feature dir when uncertain. New-common requires confidence the widget is generic and will recur on ≥2 pages.
-P1 — Edit existing files in place; create only genuinely new files.
-P1 — `Padding` not `Container(padding:)` (#11.4). `const` where applicable. Spec values verbatim.
-P1 — Prefer `LayoutBuilder`, `Expanded`, `Flexible`, `AspectRatio`, `FractionallySizedBox`, `Align`, `Padding`, and `ConstrainedBox` when they encode the responsive geometry plan more directly than hard-coded dimensions.
-P2 — Repeated arrangements within one page → one widget + `.map`. No paste-copy.
-</final_reminders>
