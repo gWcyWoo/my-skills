@@ -1,111 +1,93 @@
 ---
 name: fd
-description: Use when converting one or more Lanhu UI designs into frontend development specs, especially requests mentioning fd, 前端开发, 蓝湖设计稿, 批量解析设计稿, 设计稿转开发文档, lanhu/specs, or Chrome DevTools UI-data verification.
+description: Use when converting one Lanhu design URL containing image_id into project-local spec.md and assets for fc. Triggers on "fd", "前端开发", "蓝湖设计稿".
 ---
 
-# FD
+# fd
 
-Convert Lanhu UI designs into precise frontend development specs. The job ends with verified Markdown specs; do not implement frontend code in this skill.
+Convert exactly one Lanhu design URL into `lanhu/specs/<name>/spec.md`. Use `scripts/fetch.py` and `scripts/write.py`; read only their one-line JSON summaries in the main session. Do not read `raw.json`.
 
 ## Inputs
 
-Accept either:
+Required: one Lanhu URL containing `image_id` in its hash query, e.g.:
 
-- A Lanhu UI design URL. If it is an invite link, resolve it first with `lanhu_resolve_invite_link`.
-- An existing `lanhu/specs/*.md` file generated from Lanhu.
+    https://lanhuapp.com/web/#/item/project/board?pid=<pid>&image_id=<image_id>
 
-If neither is provided, ask the user for exactly one thing: `请提供蓝湖设计稿地址，或已生成的 lanhu/specs/*.md 路径。`
+Also accepted: `.../stage?tid=<tid>&pid=<pid>&image_id=<image_id>` with or without `versionId`.
 
-If a provided spec lacks the source design URL/name or lacks exact UI values, treat it as incomplete and ask for the Lanhu design URL before continuing.
+If no URL is provided, ask: `请提供蓝湖设计稿 URL（含 image_id）。`
 
-## Workflow
+If multiple URLs are provided, stop and ask for one URL or a separate batch driver.
 
-1. Locate the project root with `git rev-parse --show-toplevel`; if that fails, use the current working directory. Ensure `lanhu/specs/` exists.
-2. Select the design set. For a Lanhu UI project URL, call `lanhu_get_designs` first. If the user asks for all designs or batch parsing, select every design returned by Lanhu. If the URL or list clearly identifies one design, use it. If multiple designs are plausible and the user did not request all, ask the user for design names or indexes.
-3. Process the selected designs in a loop, one design at a time. For each design, extract it with `lanhu_get_ai_analyze_design_result(url, design_names=...)`. Use the returned HTML+CSS as the primary source of truth. Use the returned design image only as visual verification. Call `lanhu_get_design_slices` when icons, image assets, or slice metadata are missing or ambiguous.
-4. Write one Markdown file per design at `lanhu/specs/{safe-design-name}.md`. Keep Chinese design names when useful; replace path separators and unsafe filename characters with `-`.
-5. Verify each generated spec with Chrome DevTools before moving to the next design. If Chrome DevTools tooling is unavailable, stop and report that verification is blocked; do not claim the current or remaining specs are complete.
-6. Continue the loop until every selected design has a generated and verified spec, or until a blocking issue prevents safe verification.
-7. Final response must include only the batch summary: processed count, skipped or blocked designs, each spec path, and Chrome verification status for each design.
+## Pipeline
 
-## Spec Format
+1. Resolve project root and parent dir.
+   - `PROJECT_ROOT=$(git rev-parse --show-toplevel)` (fall back to `pwd` on failure).
+   - `PARENT_DIR=$PROJECT_ROOT/lanhu/specs`. Create it before running scripts.
 
-The generated Markdown must have exactly these four H2 sections in this order:
+2. Fetch.
+   - Run:
 
-```markdown
-# {design_name} 前端开发文档
+         python3 ~/.claude/skills/fd/scripts/fetch.py --url "<URL>" --parent-dir "$PARENT_DIR"
 
-## 文档描述
+   - On exit 0, stdout is one line of JSON like:
 
-## UI描述
+         {"raw_json":"<abs path>","dir":"<abs path>","design_name":"...","design_id":"...","version_id":"...","lanhu_url":"..."}
 
-## 交互
+     The script has already created the directory, sanitized the name, handled `_2`/`_3` collision suffixes, and written `raw.json` to disk.
+   - Capture `raw_json` and `dir`. Do not read `raw.json`.
+   - `fetch.py` downloads exportable slices to `<dir>/assets/` when present.
 
-## 数据
-```
+3. Write spec.md.
+   - Run:
 
-### 文档描述
+         python3 ~/.claude/skills/fd/scripts/write.py --input "<raw_json>" --output "<dir>/spec.md"
 
-Include source and verification metadata:
+   - Stdout is one line of JSON like `{"output":"...","text_layers":16,"shape_layers":35,"group_layers":11,"assets":2}`.
+   - `spec.md` must include the geometry contract below in `# UI描述`.
 
-- Lanhu URL
-- Design name or index
-- Generation timestamp with timezone
-- Source MCP calls used
-- Asset handling notes
-- Chrome DevTools verification record: viewport, inspected fixture/page, number of elements checked, mismatches corrected, unresolved blockers
+4. Report one line: `<dir name> → lanhu/specs/<dir name>/spec.md  (text=N, shape=N, group=N, assets=N)`.
 
-### UI描述
+## Responsive Geometry Contract
 
-Use only exact design data. Do not write broad descriptions such as "large title", "blue button", "centered card", or "spacing is generous". Every visible element must be represented by exact values from Lanhu HTML+CSS and Chrome computed data.
+Never describe a layer's `x/y/w/h` as an isolated implementation instruction.
 
-Required data:
+`# UI描述` must include:
 
-- Artboard: width, height, background, pixel ratio when available.
-- Element inventory: stable element id/selector, hierarchy, text/resource, absolute `x`, `y`, `width`, `height`, display/position, opacity, overflow, z-index.
-- Typography: font-family, font-size, font-weight, line-height, letter-spacing, text-align, color, text content.
-- Box model: margin, padding, border, border-radius, shadow, background, gradients, clipping.
-- Assets: local asset path, rendered size, natural size when available, object-fit/background-size, opacity.
-- Repeated lists: document one component template with exact style values plus a per-instance table for coordinates, text, and asset differences.
+- Design coordinate system: artboard width/height, origin, and any viewport/device size in the source design. All layer coordinates and dimensions remain in this design coordinate system, without rounding.
+- Parent context for every non-root layer: parent id/name/type, parent bbox, and child inset values `left/top/right/bottom` relative to that parent.
+- Sibling context for every repeated or adjacent group: primary axis, ordering, gaps, shared alignment line, equal-width/equal-height relationships, overlap relationships, and whether the group behaves like row, column, stack, wrap, grid, or free-positioned artwork.
+- Responsive intent per meaningful node: classify width and height separately as `fixed`, `proportional`, `stretch`, `content`, or `aspect-ratio`. Record the source evidence from parent/child/sibling geometry.
+- Unified scaling basis: downstream implementation must calculate sizes from the design artboard and containing parent together. Do not let each widget scale independently from only its own bbox.
+- Container rules: if a child fills, centers, aligns to an edge, keeps an aspect ratio, or follows sibling spacing, the spec must state that relationship explicitly.
 
-Rules:
+When the design contains a component group, describe the group before its children. The group-level calculation is authoritative; child coordinates are interpreted inside the group.
 
-- Preserve units and value formats exactly, including `px`, `rgba(...)`, decimals, gradients, and shadow strings.
-- Use the artboard top-left as `(0, 0)`. If Lanhu provides nested coordinates, record both parent-relative and absolute coordinates.
-- If a value is not provided by Lanhu or Chrome, write `未提供`; never infer or guess.
-- Do not omit visible elements. If something is intentionally excluded, record the reason in the Chrome verification record.
+Implementation guidance for fc:
 
-### 交互
+- Use the artboard size as the base design size.
+- Compute layout from parent constraints plus sibling relationships before assigning child dimensions.
+- Prefer proportional/stretched constraints for app UI regions and reserve raw absolute positioning for decorative or intentionally fixed artwork.
+- Preserve aspect ratio for image slices and icon artwork unless the layer relationship explicitly shows stretch.
+- Treat mismatches between individual bbox values and parent/sibling geometry as ambiguity to resolve from `raw.json`, not as permission to hard-code independent absolute sizes.
 
-Reserve this section for developers. Do not invent behavior from the UI.
+## Errors
 
-Use this placeholder:
+If `fetch.py` or `write.py` exits non-zero:
 
-```markdown
-> 待开发人员填写。请在后续需求确认阶段补充点击、输入、跳转、弹窗、加载、空态、错误态、权限态等交互规则。
-```
+- Read stderr from the failing script (1–3 lines, contains `ERROR: ...`).
+- `fetch.py` creates no directory until all data has been fetched, so a fetch failure leaves nothing to clean up — just report the URL + cause.
+- If `write.py` fails, the directory containing `raw.json` exists. Rename it from `<sanitized_name>` to `<sanitized_name>_err` and write `error.txt` inside with the stderr message. Do not delete `raw.json`.
+- Report the failure to the user and stop.
 
-### 数据
+## Cookie
 
-Reserve this section for developers. Do not invent APIs, fields, or storage rules.
+Both scripts read `LANHU_COOKIE` in this order: `--cookie`, `$LANHU_COOKIE`, `~/.claude/mcp/lanhu-mcp/.env`, `~/.agents/mcp/lanhu-mcp/.env`. Do not read cookie files in the main session.
 
-Use this placeholder:
+## Boundaries
 
-```markdown
-> 待开发人员填写。请在后续需求确认阶段补充数据来源、接口、字段映射、枚举、默认值、分页、缓存、刷新和异常处理规则。
-```
-
-## Chrome Verification
-
-Create or open a temporary verification page that renders the Lanhu-returned HTML+CSS with local assets. Use Chrome DevTools to inspect computed layout and style.
-
-Check each documented element:
-
-- DOM/text/resource presence matches the Lanhu output.
-- Bounding rect matches documented `x`, `y`, `width`, and `height`.
-- Computed typography matches documented font family, size, weight, line-height, letter-spacing, alignment, and color.
-- Computed box style matches background, gradient, border, radius, shadow, opacity, overflow, and clipping.
-- Image elements use local asset paths and match rendered dimensions.
-- The rendered screenshot visually matches the Lanhu design image; image comparison is secondary to HTML+CSS and computed styles.
-
-When any mismatch is found, fix `lanhu/specs/{safe-design-name}.md` and re-check the affected element. The final spec must record what was corrected under `## 文档描述`.
+- No Chrome DevTools verification. The Lanhu/Figma JSON is the source of truth.
+- No manual `raw.json` inspection.
+- No manual slice fetching; `fetch.py` handles exportable slices.
+- No interpretation of `# 交互描述` or `# 数据描述`; keep placeholders.
+- No semantic translation of layer names. Record slice and layer names verbatim.
