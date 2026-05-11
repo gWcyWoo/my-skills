@@ -1,128 +1,98 @@
 ---
 name: paac
-description: Apifox-contract-driven PHP API development for ThinkPHP 6 projects. Use when Codex needs to implement, verify, or reuse a ThinkPHP 6 API endpoint from an Apifox interface contract, including Apifox MCP discovery, route/controller/action resolution, existing implementation comparison, logic/model reuse decisions, user-reviewed TDD test design, red-first tests, implementation, and green verification.
+description: Use when implementing, verifying, or reusing a ThinkPHP 6 API endpoint from an Apifox interface contract.
 ---
 
 # PAAC
 
-PAAC turns one Apifox API contract into a ThinkPHP 6 implementation decision: reuse an existing endpoint, stop for user direction when existing logic conflicts, or implement the missing behavior with TDD.
+PAAC maps one Apifox interface to one ThinkPHP 6 outcome: reuse an existing endpoint, stop on conflict, or implement missing behavior through reviewed TDD gates.
+
+## Non-Negotiable Code Exploration Rule
+
+Before reading, searching, listing, extracting, or reasoning from project code for route, controller, logic, model, validator, middleware, response, test, or config evidence, use `my-explore-0` first and follow its constraints. This rule overrides every workflow step and reference file in this skill.
+
+Skill docs and Apifox payloads are not project code; PAAC may read those directly. Everything in the target ThinkPHP repository is project code.
 
 ## Workflow
 
-Run this workflow for one Apifox interface at a time. Do not batch multiple endpoints unless the user explicitly asks.
+Handle one Apifox interface at a time unless the user explicitly expands scope.
 
-1. Discover and read the Apifox interface.
-2. Normalize it into an `ApiContract`.
-3. Resolve the ThinkPHP 6 route, controller, and action.
-4. Compare any existing implementation against the Apifox description and schema.
-5. Decide reuse, conflict, or new implementation.
-6. Design tests and stop for user review.
-7. Write tests and prove they are red for the target behavior.
-8. Implement the smallest code change.
-9. Run relevant tests until green.
-10. Report the controller/action, reused or added logic/model code, and test results.
+1. Read Apifox, normalize `ApiContract`, resolve route/controller/action.
+2. Compare existing behavior against Apifox.
+3. Decide `reuse`, `conflict`, or `new`.
+4. For `new`, design tests and stop for user review.
+5. After approval, write tests, prove red, implement minimally, prove green.
+6. Report controller/action, reused or added logic/model code, and test results.
 
-## Required Checkpoints
+## Gates
 
 ### Contract Checkpoint
 
-Use available MCP/tool discovery to find Apifox tools. Do not hard-code a tool name.
+Use available MCP/tool discovery to find Apifox tools; never hard-code tool names. If no Apifox tool is available, stop and say the session cannot read Apifox. Do not invent endpoint data or continue from memory.
 
-If no Apifox tool is available, stop and tell the user the current session cannot read Apifox. Do not invent endpoint data.
+Before touching code, output a concise `ApiContract`: source, method, endpoint, title/name, description, auth, request path/query/headers/body, success/errors, field notes.
 
-After reading the interface, produce a concise normalized contract:
-
-```text
-ApiContract
-- method:
-- endpoint:
-- title/name:
-- description:
-- auth:
-- request:
-  - path:
-  - query:
-  - headers:
-  - body:
-- response:
-  - success:
-  - errors:
-- field notes:
-```
-
-Load [contract-normalization.md](references/contract-normalization.md) when the Apifox payload is large, nested, ambiguous, or tool-specific.
+Load [contract-normalization.md](references/contract-normalization.md) for large, nested, ambiguous, or tool-specific payloads.
 
 ### Routing Checkpoint
 
+Use `my-explore-0` before reading route files or running codebase discovery.
+
 Resolve the endpoint in the ThinkPHP 6 codebase before designing code changes.
 
-Priority:
+Priority: explicit `route/*.php`, route groups/prefixes/middleware/domains/variables/patterns/chains, `php think route:list` when useful, then TP6 default routing only after explicit routes fail. Treat endpoint-derived controller/action names as hypotheses until evidence confirms them.
 
-1. Inspect explicit routes in `route/*.php`.
-2. Resolve `Route::group`, prefixes, middleware, domains, variables, patterns, and chain calls.
-3. Use `php think route:list` only when it is available and useful.
-4. Fall back to ThinkPHP 6 default routing only when explicit routes do not resolve the endpoint.
-5. Treat endpoint-derived controller/action names as a hypothesis until code or route evidence confirms them.
+Output the resolved route, controller, action, middleware/auth, params, confidence, and evidence. If confidence is low and implementation would create or change behavior, stop and ask the user.
 
 Load [php-route-resolution.md](references/php-route-resolution.md) before resolving routes in an unfamiliar project or when route groups/resource routes are involved.
 
 ### Reuse Decision Checkpoint
 
-If the route/controller/action already exists, read the related controller, logic, model, validate, middleware, and tests needed to judge behavior.
+Use `my-explore-0` before reading controller, logic, model, validator, middleware, response helper, or test code.
+
+If the route/controller/action exists, read only related controller, logic, model, validator, middleware, response helpers, and tests needed to judge behavior.
 
 Classify the result:
 
-- `reuse`: Existing implementation satisfies the Apifox description and request/response contract. Stop implementation and tell the user exactly which controller/action is reused and why.
-- `conflict`: Existing implementation exists but the behavior, side effects, validation, or response shape differs from Apifox. Stop and ask the user whether to create a new action/route, rename/split behavior, or explicitly modify the existing behavior.
+- `reuse`: Existing implementation satisfies Apifox. Stop implementation and report the reused controller/action and why.
+- `conflict`: Existing behavior, side effects, validation, auth, or response shape differs from Apifox. Stop and ask whether to create/split/modify.
 - `new`: No matching implementation exists. Continue to test design.
 
-Do not modify existing `logic` behavior to satisfy a new contract unless the user explicitly approves that behavior change. Prefer full reuse, a new logic method/class, or a wrapper that preserves old semantics.
+Do not modify existing `logic` behavior unless the user approves that behavior change. Prefer full reuse, a new logic method/class, or a wrapper that preserves old semantics.
 
 Load [implementation-decision-tree.md](references/implementation-decision-tree.md) for the exact reuse/conflict/new decision rules.
 
 ### Test Design Checkpoint
 
-Before writing test code, present the proposed tests and stop for user review.
-
-Include:
-
-- Integration tests for the controller/action contract.
-- Unit tests for any new logic, model, validator, transformer, or response mapper.
-- Fixtures or database setup needed for meaningful behavior.
-- At least one negative or validation case when the contract includes validation, auth, or error behavior.
-
-Ask the user to confirm, add, remove, or revise the test cases. Do not write tests before this confirmation.
+Before writing tests, present integration tests, unit tests for new collaborators, fixtures/database setup, and negative cases for validation/auth/errors. Ask the user to confirm, add, remove, or revise. Do not write tests before confirmation.
 
 Load [tdd-gates.md](references/tdd-gates.md) before presenting the test design.
 
 ### Red Checkpoint
 
-After user approval, write only the confirmed tests first. Run the smallest relevant test command and prove the new tests are red.
-
-The red failure must show the target behavior is missing or wrong. If tests pass before implementation, stop and explain whether the behavior already exists, the test is ineffective, or the wrong code path was tested.
+After approval, write only confirmed tests first and run the smallest relevant test command. Red must prove target behavior is missing or wrong. If tests pass before implementation, stop and explain why.
 
 ### Green Checkpoint
 
 Implement the minimum code needed to satisfy the confirmed tests while respecting existing project conventions.
 
-Run:
-
-- the new/changed integration tests,
-- the new/changed unit tests,
-- and the smallest relevant existing regression tests.
+Run the new/changed integration tests, new/changed unit tests, and smallest relevant existing regression suite.
 
 A PAAC task is complete only when the confirmed tests are green or when a concrete environment blocker is reported with exact reproduction details.
+
+## Stop Points
+
+Stop and ask the user when:
+
+- Apifox is unavailable or the interface is ambiguous.
+- Contract ambiguity affects behavior, validation, auth, persistence, or response shape.
+- Route confidence is low, existing behavior conflicts, test design is unconfirmed, or pre-implementation tests pass.
 
 ## ThinkPHP 6 Defaults
 
 Treat these as discovery starting points, not fixed project truth:
 
-- routes: `route/*.php`
-- controllers: `app/controller`, `app/api/controller`, `app/<module>/controller`
-- logic: `app/logic`, `app/common/logic`, `app/<module>/logic`
-- models: `app/model`, `app/common/model`, `app/<module>/model`
-- validators: `app/validate`, `app/<module>/validate`
-- tests: project-defined PHPUnit/Pest directories such as `tests/Feature`, `tests/Unit`, `tests/api`, or existing local equivalents
+`route/*.php`; controllers in `app/controller`, `app/api/controller`, `app/<module>/controller`; logic in `app/logic`, `app/common/logic`, `app/<module>/logic`; models in `app/model`, `app/common/model`, `app/<module>/model`; validators in `app/validate`, `app/<module>/validate`; project-defined PHPUnit/Pest test dirs.
 
 Follow the repository's own naming, dependency injection, response, exception, auth, and testing patterns over these defaults.
 
@@ -133,6 +103,7 @@ Follow the repository's own naming, dependency injection, response, exception, a
 - Never skip route/controller/action resolution.
 - Never silently change existing behavior.
 - Never convert a conflict into an implementation task without user approval.
+- Never explore project code outside `my-explore-0`.
 - Never write implementation before approved tests.
 - Never accept green pre-implementation tests as valid red-first TDD evidence.
 - Respect active repo instructions for source-code reading, subagents, MCP usage, and validation commands.

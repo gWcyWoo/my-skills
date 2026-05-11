@@ -2,6 +2,10 @@
 
 Use this reference before designing or writing tests.
 
+## Required Exploration Gate
+
+If test design needs target-repository evidence such as existing test style, fixtures, auth helpers, factories, response format, or project-standard errors, use `my-explore-0` before reading or searching that code.
+
 ## Test Design Review
 
 Before writing tests, present a compact test plan:

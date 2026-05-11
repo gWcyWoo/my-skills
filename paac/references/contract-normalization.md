@@ -2,6 +2,10 @@
 
 Use this reference when an Apifox response is tool-specific, large, nested, or ambiguous.
 
+## Required Exploration Gate
+
+Do not inspect target-repository code while normalizing an Apifox contract. If a project convention is needed to interpret ambiguity, finish the contract checkpoint first, then use `my-explore-0` before reading or searching code.
+
 ## Tool Discovery
 
 Discover Apifox tools from the current environment instead of assuming names. Prefer tools whose name or description mentions Apifox, API detail, interface detail, endpoint, schema, project, folder, or collection.

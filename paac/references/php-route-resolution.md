@@ -2,6 +2,10 @@
 
 Use this reference when mapping an Apifox `method + endpoint` to ThinkPHP 6 code.
 
+## Required Exploration Gate
+
+Before reading route files, listing project files, running route discovery commands, or validating inferred controller/action classes in the target repository, use `my-explore-0` and follow its constraints.
+
 ## Route Sources
 
 Check project conventions first. Common ThinkPHP 6 sources:

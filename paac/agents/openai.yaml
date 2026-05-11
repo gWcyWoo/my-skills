@@ -1,4 +1,4 @@
 interface:
   display_name: "PAAC API Dev"
   short_description: "Implement ThinkPHP 6 APIs from Apifox contracts with TDD gates."
-  default_prompt: "Use the PAAC skill to read an Apifox API contract, resolve the ThinkPHP 6 route/controller, decide whether to reuse or implement, design tests for review, then drive the change red-to-green."
+  default_prompt: "Use the PAAC skill to read an Apifox API contract. Before any target-repo code exploration for routes/controllers/reuse evidence, use my-explore-0. Then resolve the ThinkPHP 6 route/controller, decide reuse/conflict/new, design tests for review, and drive approved work red-to-green."

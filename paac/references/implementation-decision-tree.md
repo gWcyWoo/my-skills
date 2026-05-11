@@ -2,6 +2,10 @@
 
 Use this reference after route/controller/action resolution.
 
+## Required Exploration Gate
+
+Before reading controller, validator, middleware, logic, model, response helper, transformer, resource, test, or caller code in the target repository, use `my-explore-0` and follow its constraints.
+
 ## Read Enough Code
 
 Inspect the controller action and only the related collaborators needed to judge behavior:
