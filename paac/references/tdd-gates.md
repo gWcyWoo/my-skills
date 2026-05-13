@@ -11,6 +11,8 @@ Proposed tests
 - Unit: <logic/model/validator/helper> - <input/context> -> <expected result>
 ```
 
+Omit unit test rows when no unit test applies.
+
 Then stop and ask:
 
 ```text
@@ -18,6 +20,15 @@ Please confirm, add, remove, or revise these test cases before I write them.
 ```
 
 ## Coverage
+
+Controller-only mock mode must use integration contract tests only. Do not write E2E tests, unit tests, or logic/service/model tests for controller-only mock mode.
+
+Controller-only mock mode tests must cover:
+
+- success request: Apifox HTTP method and endpoint path
+- success request: contract input parameters
+- success response: status and mock response schema
+- validation failure for missing or invalid required inputs when the contract has required inputs
 
 Integration tests must cover:
 
