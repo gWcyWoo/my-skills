@@ -1,20 +1,14 @@
 # TDD Gates
 
-Use this reference before designing or writing tests.
+## Test Plan
 
-## Required Exploration Gate
-
-If test design needs target-repository evidence such as existing test style, fixtures, auth helpers, factories, response format, or project-standard errors, use `my-explore-0` before reading or searching that code.
-
-## Test Design Review
-
-Before writing tests, present a compact test plan:
+Before writing tests, present:
 
 ```text
 Proposed tests
 - Integration: <case name> - <request> -> <expected response/status/side effect>
-- Integration: <case name> - <invalid/auth/error request> -> <expected error>
-- Unit: <logic/model/validator> - <input/context> -> <expected result>
+- Integration: <invalid/auth/error case> - <request> -> <expected error>
+- Unit: <logic/model/validator/helper> - <input/context> -> <expected result>
 ```
 
 Then stop and ask:
@@ -23,56 +17,60 @@ Then stop and ask:
 Please confirm, add, remove, or revise these test cases before I write them.
 ```
 
-## Integration Tests
+## Coverage
 
-Controller/action integration tests should cover:
+Integration tests must cover:
 
-- route method and path,
-- request params/body shape,
-- auth/middleware behavior when applicable,
-- validation failures,
-- success response structure,
-- persistence or external side effects when applicable,
-- project-standard error format.
+- HTTP method and endpoint path
+- request path/query/header/body fields
+- auth or middleware behavior when required by the contract or project conventions
+- validation failures
+- success response schema
+- error response schema
+- persistence or external side effects when present
 
-## Unit Tests
+Unit tests must cover newly created:
 
-Add unit tests for newly created:
+- logic methods/classes
+- validators
+- models with behavior beyond simple ORM mapping
+- transformers/resources/response mappers
+- pure helpers
 
-- logic methods/classes,
-- models with behavior beyond simple ORM mapping,
-- validators,
-- transformers/resources/response mappers,
-- pure helpers introduced for the endpoint.
+Do not add unit tests for trivial framework glue unless existing project tests do so.
 
-Do not add unit tests for trivial framework glue unless the project already does so.
+## Red
 
-## Red Gate
+After user confirmation:
 
-After approval, write tests before implementation and run the smallest command that executes the new tests.
+1. Write only confirmed tests.
+2. Run the smallest command that executes the new tests.
+3. Require red to prove missing or mismatched target behavior.
 
 Acceptable red:
 
-- missing route/action/class/method,
-- assertion failure showing missing behavior,
-- validation/response mismatch caused by current implementation.
+- missing route/action/class/method
+- assertion failure for target behavior
+- validation mismatch
+- response schema mismatch
 
 Unacceptable red:
 
-- syntax errors in the test,
-- missing fixtures unrelated to the target behavior,
-- database/config/test bootstrap failure,
-- wrong test namespace or command,
-- mocking error that does not prove behavior is missing.
+- test syntax error
+- missing unrelated fixture
+- database/config/bootstrap failure
+- wrong test namespace
+- wrong test command
+- mock setup error unrelated to target behavior
 
-If tests are green before implementation, stop. Explain whether implementation already exists, the test is ineffective, or the wrong path was tested.
+If tests pass before implementation, stop and report whether the implementation already exists, the test is ineffective, or the wrong path was tested.
 
-## Green Gate
+## Green
 
 After implementation, run:
 
-- the exact red tests,
-- related unit/integration tests,
-- the smallest relevant regression suite available in the repo.
+- exact red tests
+- related unit/integration tests
+- smallest relevant regression suite
 
-Do not claim completion unless all relevant tests are green or a concrete environment blocker is reported.
+Do not claim completion unless all required tests pass or a concrete environment blocker is reported.
