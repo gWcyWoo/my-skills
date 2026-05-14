@@ -12,17 +12,24 @@ description: Tool selection palette for code exploration. Consumed by the `my-ex
 
 <tool_selection>
 
-| Known context                       | Tool                                                                                        | Key args                             |
-| ----------------------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------ |
-| file + symbol name                  | extract_code                                                                                | files=["file#symbol"]                |
-| file + multiple symbols             | extract_code                                                                                | files=["f#a","f#b","g#c"]            |
-| file:line:col known, find callers   | LSP findReferences                                                                          | operation, filePath, line, character |
-| only have symbol name, want callers | seed first (search_code / ast-grep / extract_code → file:line:col), then LSP findReferences | two-step                             |
-| file path pattern                   | Glob                                                                                        | pattern                              |
-| exact string or regex               | Grep                                                                                        | pattern, path                        |
-| AST structural pattern              | ast-grep find_code                                                                          | pattern                              |
-| no file, no symbol (≤1 call)        | search_code                                                                                 | query (2-3 keywords), path           |
+| Known context                                | Tool                                                                                        | Key args                             |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------ |
+| file + symbol name                           | extract_code                                                                                | files=["file#symbol"]                |
+| file + multiple symbols                      | extract_code                                                                                | files=["f#a","f#b","g#c"]            |
+| **file path, NO symbol name yet** (discover) | **ast-grep find_code** to enumerate symbols → THEN extract_code with `#symbol`              | pattern=`export class $X` / `export function $X` / `export const $X` |
+| file:line:col known, find callers            | LSP findReferences                                                                          | operation, filePath, line, character |
+| only have symbol name, want callers          | seed first (search_code / ast-grep / extract_code → file:line:col), then LSP findReferences | two-step                             |
+| file path pattern                            | Glob                                                                                        | pattern                              |
+| exact string or regex                        | Grep                                                                                        | pattern, path                        |
+| AST structural pattern                       | ast-grep find_code                                                                          | pattern                              |
+| no file, no symbol (≤1 call)                 | search_code                                                                                 | query (2-3 keywords), path           |
 
 Priority: `extract_code > findReferences > ast-grep > Grep > search_code`
+
+**Never use `extract_code` with `path:1-N` (wide line range) as a substitute for symbol discovery.** If you have a path but not the symbol name, the correct flow is:
+1. `ast-grep find_code pattern="export class $X"` (or `export function $X`, `export const $X`, `export default function $X`) — returns `file:line:col` for each top-level symbol.
+2. `extract_code(files=["path#FoundName1", "path#FoundName2", ...])` — batched, with real symbol names.
+
+Wide line ranges like `:1-200`, `:1-300` are gaming the anchor rule — they bypass the spirit of precision exploration and dump whole-file content. Use them only when you legitimately know the target lines (e.g. `:42-58` for a known region).
 
 </tool_selection>
