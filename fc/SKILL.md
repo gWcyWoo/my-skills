@@ -212,12 +212,12 @@ Naming:
    - anti-pattern risk and mitigation
    - reuse-search role
 
-7. Search project reuse with `my-explore-0`
+7. Search project reuse with the `my-explore` subagent
 
-   Claude tool routing: invoke via `Skill(skill="my-explore-0", args=<batched query>)`. NEVER `Agent(subagent_type="my-explore-0")` — `my-explore-0` is a MAIN-session skill (the `-0` suffix marks it); no agent type by that name exists, and the misrouted call returns `Agent type 'my-explore-0' not found` and aborts step 7 mid-flight.
+   Claude tool routing: dispatch via `Agent(subagent_type="my-explore", prompt=<request per ~/.claude/agents/my-explore/PROTOCOL.md>)`. The subagent returns JSON; read `results[].body` for verbatim widget source. NEVER `Skill(skill="my-explore-0")` directly — that skill is now the subagent's tool-palette reference, not a user-facing entry point.
 
    Announce:
-   `Using my-explore-0 to search reusable Flutter widgets.`
+   `Using my-explore subagent to search reusable Flutter widgets.`
 
    Search `<root>/lib/` for all candidate roles in one batched query
 
