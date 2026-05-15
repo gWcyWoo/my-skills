@@ -1,0 +1,4 @@
+interface:
+  display_name: "My Explore"
+  short_description: "Run bounded code exploration in an isolated Codex child agent and return JSON evidence."
+  default_prompt: "Use my-explore: validate the request protocol, spawn or reuse one isolated child agent, send the exploration card, require JSON-only raw code evidence, and do not read target repository source in the parent session."
