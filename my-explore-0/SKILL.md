@@ -1,6 +1,6 @@
 ---
 name: my-explore-0
-description: Use when Codex needs lightweight code exploration in an unfamiliar or non-trivial codebase. Tells Codex how to analyze a need and what is forbidden; tool choice is Codex's own judgment within these constraints.
+description: A reference manual readable by either the main session when running lightweight exploration directly or the my-explore subagent at boot. The caller decides which path to use; this file specifies which code-evidence tool fits which intent and which exploration patterns are forbidden.
 ---
 
 <GOAL>
@@ -82,7 +82,7 @@ language_server.get_diagnostics — file-scoped errors
 
 <OUTPUT_FORMAT>
 Mode selection:
-- If the caller explicitly requests quiet mode, including "quiet mode for u-0", use `<quiet_output_format>` and do not print the default hypothesis plan or file-tag ledger.
+- If the caller explicitly requests quiet mode, including "quiet mode for u0", use `<quiet_output_format>` and do not print the default hypothesis plan or file-tag ledger.
 - Otherwise use the default output format.
 
 <quiet_output_format>
@@ -92,7 +92,7 @@ Between tool calls, your visible reply must be one short line:
 
   `→ <result>. next: <tool | done>`
 
-When enough information has been gathered, return only the concise facts the caller needs. If the caller is `u-0`, the final visible output must be only the u-0 `Summary` and `Needs Confirmation` fields unless the user explicitly asked for detailed evidence.
+When enough information has been gathered, return only the concise facts the caller needs. If the caller is `u0`, the final visible output must be only the u0 `Summary` and `Needs Confirmation` fields unless the user explicitly asked for detailed evidence.
 </quiet_output_format>
 
 Default output format:
@@ -130,7 +130,7 @@ For non-file calls (`search_code`, `get_symbol_definitions`, `wc -l`), use:
 Rules enforced by the tags:
   - `[OPEN]` with unknown Ltotal → next tool MUST be `wc -l`.
   - `[missing-in-complete]` → named blacklist applies; do NOT verify with any other tool.
-  - All plan entries resolved (each is `[COMPLETE]`, `[missing-in-complete]`, or satisfied) → output the caller's requested result; for `u-0`, output only `Summary` and `Needs Confirmation`, then `done — stopping`. Do NOT truncate.
+  - All plan entries resolved (each is `[COMPLETE]`, `[missing-in-complete]`, or satisfied) → output the caller's requested result; for `u0`, output only `Summary` and `Needs Confirmation`, then `done — stopping`. Do NOT truncate.
 
 These are output requirements, not internal thinking. A multi-line or verbose inter-call narration is itself a rule violation — collapse to the single line above.
 </OUTPUT_FORMAT>

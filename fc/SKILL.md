@@ -213,7 +213,7 @@ Naming:
    - anti-pattern risk and mitigation
    - reuse-search role
 
-7. Search project reuse with `my-explore-0`
+7. Search project reuse with `my-explore-0` first
 
    Announce:
    `Using my-explore-0 to search reusable Flutter widgets.`

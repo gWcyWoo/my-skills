@@ -10,7 +10,7 @@ description: Implementation via isolated `implementer` subagent. Loads coding st
 **Phase 1 — Validate inputs (main session).**
 
 1. Confirm required inputs are present:
-    - `{{REQUIREMENT_SUMMARY}}` — if missing → STOP: _"Invoke `u-0` first."_
+    - `{{REQUIREMENT_SUMMARY}}` — if missing → STOP: _"Invoke `u0` first."_
     - `{{FILES_IN_SCOPE}}` — if missing → STOP and ask: _"Which files should the implementation touch?"_
 2. Confirm `{{FILES_IN_SCOPE}}` is non-empty. Empty scope → return `Status: blocked`.
 
@@ -44,8 +44,8 @@ Red test files (optional — your goal is to make them turn green): {{TEST_FILES
 </task>
 
 <instructions>
-1. Think through the requirement against the files in scope. For any code exploration, invoke the `my-explore-0` skill (never use Read/Grep/probe/LSP on source directly).
-2. If red test files were passed, use `my-explore-0` to read and understand the test contract. Do NOT modify the tests.
+1. Think through the requirement against the files in scope. For any code exploration, prefer `/Users/Woo/.agents/skills/my-explore-0/SKILL.md` as the palette and use its allowed Codex MCP tools directly. Escalate to custom agent `my-explore` only when the exploration becomes broad, needs context isolation, or the user explicitly requests a subagent. Never use raw shell reads or `rg` on source directly.
+2. If red test files were passed, use the `my-explore-0` palette first to read and understand the test contract; escalate to custom agent `my-explore` only if the contract requires broad/context-isolated exploration. Do NOT modify the tests.
 3. Implement the change, touching ONLY files listed in `<task>` → `Files in scope`. Use `apply_patch` for manual edits, including genuinely new files when needed.
 4. **Load coding standards from diff.** Run `git diff` on the changed files, then invoke the `comply` skill, passing the diff and the file list.
 5. **Self-check against comply rules**: re-read each rule section comply returned and verify the diff complies. Fix any violations before returning.

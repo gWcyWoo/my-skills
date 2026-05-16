@@ -44,7 +44,7 @@ Run `wait_for_turn.py` as a blocking wait. Prefer the longest practical tool wai
 
 If Codex starts:
 1. Write `target.md` clearly, create a short session name, and create `conversations.md`.
-2. Use `u-0` to understand the target before the first turn.
+2. Use `u0` to understand the target before the first turn.
 3. Append `To claude` with Codex's target understanding and proposed solution.
 4. Wait for Claude with `wait_for_turn.py`.
 
@@ -56,7 +56,7 @@ If Claude already started:
 ## Reply Loop
 
 For every inbound batch:
-1. Use `u-0` to understand the other side's view.
+1. Use `u0` to understand the other side's view.
 2. Evaluate whether each claim helps solve `target.md`.
 3. Reply with Support or Changes requested, citing evidence for disagreements.
 4. Keep discussion tied to `target.md` and agreement on `solutions.md`.

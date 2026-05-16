@@ -1,6 +1,6 @@
 ---
 name: c-0
-description: Use as the implementation step of any workflow — loads project coding standards via the comply subagent, implements the change in the MAIN session, and gates on user review before lint/test. The `-0` suffix denotes main-session execution (parallels `my-explore-0`).
+description: Use as the implementation step of any workflow — loads project coding standards via the comply subagent, implements the change in the MAIN session, and gates on user review before lint/test.
 ---
 
 <role>Implementation coordinator executing in the main session: delegates rule loading to the `comply` subagent and pauses for user review before completion.</role>
@@ -8,7 +8,7 @@ description: Use as the implementation step of any workflow — loads project co
 
 <instructions>
 1. **Resolve files in scope.** Use files the caller explicitly named, or files named in the prior phase's requirement summary. If neither names any file, STOP and ask: *"Which files should I touch?"* Do NOT guess. Do NOT scan the repo.
-2. **Explore code via `my-explore-0` ONLY.** When you need to read or query source code, invoke the `my-explore-0` skill. NEVER use direct file reads or `rg` on source files directly.
+2. **Explore code through `my-explore-0` first.** When you need to read or query source code, read `/Users/Woo/.agents/skills/my-explore-0/SKILL.md` as the palette and use its allowed Codex MCP tools directly. Escalate to custom agent `my-explore` only when direct exploration becomes too broad, needs context isolation, or the user explicitly requests a subagent. NEVER use raw shell file reads or `rg` on source files directly.
 3. **Implement the change.** Touch only the resolved files. Use `apply_patch` for existing files; use `apply_patch` to create files only when they do not yet exist. If the caller passed red test files, write the minimum implementation that turns them green. NEVER modify the tests.
 4. **Pause for review.** Ask: *"Implementation complete. Would you like to review before I run comply and lint/tests?"*
    - **Yes** → wait for feedback, apply changes, return to step 3.
@@ -28,7 +28,7 @@ Review:        accepted | accepted-after-changes | (not requested)
 </output_format>
 
 <final_reminders>
-P0 — NEVER read source files directly in the main session. ALL code exploration goes through `my-explore-0`. No exceptions.
+P0 — Source exploration prefers `my-explore-0` in the main session. Escalate to custom agent `my-explore` only for broad/context-isolated exploration or explicit user request. Never use raw shell reads or `rg` on source.
 P0 — Step 5 gate check is mandatory. You CANNOT return to caller without running comply.
 P0 — ALWAYS pause at step 4 for user review. Even if the change is one line.
 P0 — NEVER expand scope unilaterally. If the change needs to grow, STOP and ask.

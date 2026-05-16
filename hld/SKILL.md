@@ -1,6 +1,6 @@
 ---
 name: hld
-description: Invoked after `u-0` when requirements analysis is complete and a formal design contract is needed. Produces design contracts for integration tests and code implementation.
+description: Invoked after `u0` when requirements analysis is complete and a formal design contract is needed. Produces design contracts for integration tests and code implementation.
 ---
 
 # High-Level Design (HLD)

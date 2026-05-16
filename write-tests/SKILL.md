@@ -3,14 +3,14 @@ name: write-tests
 description: Use when the workflow needs to author test cases first in Codex — dispatches a `test-writer` subagent to plan, revise, and implement tests, while the main session relays user review at each STOP. Keeps test code, rule files, and source out of the main session.
 ---
 
-<role>Write-tests coordinator executing in the main session: invokes exactly ONE `test-writer` subagent through `my-subagent` for the full planning→implementation arc, relays user review at each STOP via `send_input`, and discusses integration/E2E scenarios with the user in natural language before handing them to the subagent for formalization. Never drafts unit cases, never formalizes any test cases (unit / integration / E2E), never writes or edits test code, never reads test code, rule files, or source files into its own context. Code understanding goes through `my-explore-0`/`d-0`/`u-0`, which return summaries.</role>
+<role>Write-tests coordinator executing in the main session: invokes exactly ONE `test-writer` subagent through `my-subagent` for the full planning→implementation arc, relays user review at each STOP via `send_input`, and discusses integration/E2E scenarios with the user in natural language before handing them to the subagent for formalization. Never drafts unit cases, never formalizes any test cases (unit / integration / E2E), never writes or edits test code, never reads test code, rule files, or source files into its own context. Code understanding goes through `u0`, which returns summaries and routes any needed exploration.</role>
 
 <context>
 **Execution shape.** Main session runs the user-facing STOPs and its own requirement understanding. A single `test-writer` subagent (`agent_type: "worker"`, `model: "gpt-5.4"`) persists across the whole arc: drafts unit plan → revises on feedback → optionally drafts integration/E2E plan → revises → implements + red phase. Revisions and mode switches are sent via `send_input` to the same subagent. A new session always invokes a fresh subagent; within a session there is exactly one `test-writer`.
 
 **Address by agent ID, NOT by name.** The Codex child-agent tool returns an agent ID. Capture the `agent_id` returned by the initial `my-subagent` invocation IMMEDIATELY, store it as `<test_writer_agent_id>`, and use that ID in EVERY subsequent `send_input`. Never address by `"test-writer"` after the initial invocation.
 
-**test-writer uses a normal Codex child-agent toolset, not a restricted subagent.** It must run tests (`exec_command`), write files (`apply_patch` or project-native formatting tools), read test scaffolding through allowed Codex exploration tools, and explore code (`my-explore-0`). The isolation is **context**, not tool restriction. Do NOT narrow its tool inventory.
+**test-writer uses a normal Codex child-agent toolset, not a restricted subagent.** It must run tests (`exec_command`), write files (`apply_patch` or project-native formatting tools), read test scaffolding through allowed Codex exploration tools, and explore code through `my-explore-0` first, escalating to custom agent `my-explore` only when needed. The isolation is **context**, not tool restriction. Do NOT narrow its tool inventory.
 
 **Test rule files** (loaded by the subagent, never by the coordinator):
 - `~/.agents/skills/auto-testcase/general.md` — always
@@ -51,7 +51,7 @@ Think thoroughly before your first action.
 6. Apply exactly one branch based on the user answer:
    - **No** (default) → skip to step 11.
    - **Yes** → proceed to step 7.
-7. **Discuss scope and scenarios collaboratively with the user.** Cover two things in the same conversation: (a) which test type(s) they want — integration, e2e, or both; (b) which target scenarios. Lead by proposing 2–5 candidate scenarios in plain natural language, drawn from your own understanding (`d-0`/`u-0` context, the requirement, key user journeys, integration boundaries, critical-path flows). Ask the user to keep / drop / add. Iterate until you BOTH have an explicit, agreed list. Stay in natural language — do NOT format into cases, do NOT pick file:line targets, do NOT invoke any test-rule files. The output of this step is two pieces of state: `{{TEST_TYPES}}` and `{{AGREED_SCENARIOS}}`.
+7. **Discuss scope and scenarios collaboratively with the user.** Cover two things in the same conversation: (a) which test type(s) they want — integration, e2e, or both; (b) which target scenarios. Lead by proposing 2–5 candidate scenarios in plain natural language, drawn from your own understanding (`u0` context, the requirement, key user journeys, integration boundaries, critical-path flows). Ask the user to keep / drop / add. Iterate until you BOTH have an explicit, agreed list. Stay in natural language — do NOT format into cases, do NOT pick file:line targets, do NOT invoke any test-rule files. The output of this step is two pieces of state: `{{TEST_TYPES}}` and `{{AGREED_SCENARIOS}}`.
 8. Call `send_input(target: "<test_writer_agent_id>", ...)` using the "Formalize integration/E2E plan" template, populated with `{{TEST_TYPES}}` and `{{AGREED_SCENARIOS}}` from step 7.
 9. Wait for the subagent to return the formalized plan. **STOP #2.** Paste verbatim (no edits, no commentary). Ask the user literally: *"Confirm this formalized integration/E2E plan or request changes?"*
 10. Apply exactly one branch based on the user response:
@@ -72,7 +72,7 @@ Think thoroughly before your first action.
 <input>
 - {{REQUIREMENT_SUMMARY}}: confirmed requirement description handed in by the caller (e.g., `tdd` Step 2)
 - {{FILES_UNDER_TEST}}: `file:line` pointers to the modules/functions under test
-- {{CONTEXT_NOTES}}: (optional) anything the main session learned via `d-0`/`u-0` that the subagent should know; pass literal `none` if not supplied
+- {{CONTEXT_NOTES}}: (optional) anything the main session learned via `u0` that the subagent should know; pass literal `none` if not supplied
 </input>
 
 ## Initial spawn prompt
@@ -93,7 +93,7 @@ You are the test-writer subagent. You persist across the whole planning→implem
    - `general.md` — always
    - `unit.md` — for this phase
    Extract only the rule sections relevant to the requirement.
-2. Use the `my-explore-0` skill for any code exploration needed to design test cases. Do NOT read source files with raw shell file-read commands when exploration is non-trivial.
+2. Use `my-explore-0` first for any code exploration needed to design test cases. Escalate to custom agent `my-explore` only when exploration is broad, needs context isolation, or the user explicitly requires it. Do NOT read source files with raw shell file-read commands when exploration is non-trivial.
 3. Draft a unit test plan. For each case: name, scenario (happy path / edge / error), expected behavior, target file:line.
 4. Return ONLY the <plan_output_format> below. No code, no rule dumps.
 </instructions>
@@ -199,7 +199,7 @@ ACTIONS:
   1–4 identical to above.
   5. Ask integration/E2E. User: "yes, E2E".
   6. Branch: yes → step 7.
-  7. Discuss scope. Coordinator (using d-0/u-0 context) proposes 3 candidate journeys: (a) signup with malformed email → inline error, (b) signup with already-used email → inline error, (c) signup with mismatched password confirm. User: "(a) and (b), drop (c) — handled elsewhere". Agreed: TEST_TYPES=e2e, AGREED_SCENARIOS=[a, b].
+  7. Discuss scope. Coordinator (using u0 context) proposes 3 candidate journeys: (a) signup with malformed email → inline error, (b) signup with already-used email → inline error, (c) signup with mismatched password confirm. User: "(a) and (b), drop (c) — handled elsewhere". Agreed: TEST_TYPES=e2e, AGREED_SCENARIOS=[a, b].
   8. `send_input` with "Formalize integration/E2E plan" template. Subagent returns formalized E2E plan with 2 cases (target file:line, rule-compliant phrasing).
   9. STOP #2. User: "looks good".
   10. Branch: confirmed → step 11.
@@ -216,7 +216,7 @@ ACTIONS:
 - Invoking a second `test-writer` within the same session. Revisions and mode switches always use `send_input` to the captured agent ID.
 - Forgetting to capture the agent ID at step 1a. Without the ID you cannot resume the subagent — your only options become invoking a fresh one (forbidden by P0) or aborting.
 - Modifying the initial prompt or `send_input` templates beyond `{{...}}` substitution.
-- Narrowing `test-writer`'s tool inventory to remove `exec_command` or block `my-explore-0`.
+- Narrowing `test-writer`'s tool inventory to remove `exec_command`, block `my-explore-0`, or block escalation to custom agent `my-explore`.
 - Asking the user "integration/E2E?" before STOP #1 is satisfied.
 - Skipping STOP #2 silently when the user said yes.
 - Pasting subagent output with edits or commentary. Paste verbatim.
@@ -244,7 +244,7 @@ Stop the moment those hold.
 </success_criteria>
 
 <final_reminders>
-P0 — Main session NEVER drafts unit cases, NEVER formalizes any test case (unit / integration / E2E), NEVER writes or edits test files, and NEVER reads `~/.agents/skills/auto-testcase/*.md`, test code, or source files into its own context. Discussing integration/E2E scenarios in natural language with the user (step 7) IS allowed and required — that is scope-setting, not formalization. Rule consultation, case formalization, and code writing all belong to the `test-writer` subagent. Use `my-explore-0`/`d-0`/`u-0` — which return summaries — for any code understanding.
+P0 — Main session NEVER drafts unit cases, NEVER formalizes any test case (unit / integration / E2E), NEVER writes or edits test files, and NEVER reads `~/.agents/skills/auto-testcase/*.md`, test code, or source files into its own context. Discussing integration/E2E scenarios in natural language with the user (step 7) IS allowed and required — that is scope-setting, not formalization. Rule consultation, case formalization, and code writing all belong to the `test-writer` subagent. Use `u0` — which returns summaries and routes any needed exploration — for any code understanding.
 P0 — Two production modes, do not blur them. Unit cases: subagent drafts from rules + code, user reviews. Integration/E2E cases: main session + user co-define scenarios in natural language FIRST (step 7), then subagent formalizes the agreed scenarios into rule-compliant cases (step 8). Subagent NEVER invents integration/E2E scenarios; main session NEVER formalizes any cases.
 P0 — Exactly ONE `test-writer` per session. Revisions, mode switches, and implementation ALL go through `send_input(target: "<test_writer_agent_id>", ...)`. Invoking a second subagent breaks the review chain and is forbidden.
 P0 — Address the subagent by ID. Capture the agent ID at step 1a immediately after `my-subagent` returns and use it in every subsequent `send_input`. The ID resumes the same agent from transcript with full context preserved.
@@ -253,6 +253,6 @@ P0 — Never claim red phase passed without the subagent returning runner output
 P0 — If child-agent dispatch is unavailable, stop and tell the user; do NOT write tests in place.
 P1 — Paste subagent output verbatim to the user at every STOP. Do NOT summarize the summary, do NOT strip fields, do NOT reformat.
 P1 — Do NOT modify the initial prompt or any `send_input` template beyond `{{...}}` substitution. The templates are the contract.
-P1 — Do NOT narrow `test-writer`'s tool inventory. It needs `exec_command`, file editing tools, file reading through allowed exploration tools, and `my-explore-0` to do its job.
-P2 — Use `d-0`/`u-0` in the main session for your own requirement understanding before spawning. The subagent uses `my-explore-0` for test-specific exploration.
+P1 — Do NOT narrow `test-writer`'s tool inventory. It needs `exec_command`, file editing tools, file reading through allowed exploration tools, `my-explore-0`, and escalation to custom agent `my-explore` to do its job.
+P2 — Use `u0` in the main session for your own requirement understanding before spawning. The subagent uses `my-explore-0` first for test-specific exploration and escalates to custom agent `my-explore` only when needed.
 </final_reminders>

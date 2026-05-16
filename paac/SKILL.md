@@ -36,9 +36,10 @@ Scope: handle exactly one Apifox interface unless the user explicitly expands sc
    - Stop if required input or response data is missing or ambiguous.
 
 4. Inspect existing code.
-   - Use `my-explore-0` for every target-repository evidence read.
-   - Load `my-explore-0` rules at most once per conversation. If already loaded, reuse those rules for later exploration passes; do not reread `my-explore-0/SKILL.md`.
-   - Do not inspect target-repository files for PAAC evidence outside a `my-explore-0` exploration pass.
+   - Use `/Users/Woo/.agents/skills/my-explore-0/SKILL.md` first for every target-repository evidence read, calling its allowed Codex MCP tools directly.
+   - Escalate to custom agent `my-explore` only when direct exploration becomes too broad, needs context isolation, or the user explicitly requests a subagent.
+   - Load the `my-explore-0` palette at most once per conversation. If already loaded, reuse it for later exploration passes.
+   - Do not inspect target-repository files for PAAC evidence outside a `my-explore-0` guided exploration pass or an escalated custom agent `my-explore` pass.
    - Required repository evidence is mode-dependent:
      - Controller-only mock mode: routes, target controller/action, contract input validation, response helper, auth/header middleware or config conventions, and minimal integration-test convention/config/command evidence. Do not inspect logic, service, model, or migration files unless the existing target action calls them or route/controller evidence is ambiguous.
      - Non-empty `description` mode: routes, target controller/action, validation, middleware/auth/config, response helpers, behavior-touched logic/service/model/migration files, and minimal test convention/config/command evidence.
@@ -53,8 +54,8 @@ Scope: handle exactly one Apifox interface unless the user explicitly expands sc
    - A new exploration pass does not reset `search_used` for the same endpoint and same evidence category.
    - A later search is allowed only for a genuinely new evidence category with no known candidate file, and the visible hypothesis plan must name the still-unknown category.
    - If the next visible step would be `next: search_code` after a prior search already found candidates for the category, stop and change the next step to `extract_code`.
-   - If additional target-repository context is needed, start a new bounded exploration pass under the already-loaded `my-explore-0` rules and carry forward the ledger. Do not reset search permission for the same endpoint or evidence category. Prefer `extract_code` from known candidate files before any new search.
-   - If `my-explore-0` cannot obtain required evidence, stop and report the missing evidence. Do not fall back to direct shell reads.
+   - If additional target-repository context is needed, start a new bounded exploration pass through `my-explore-0` and carry forward the ledger. Escalate to custom agent `my-explore` only when the pass is too broad for direct exploration. Do not reset search permission for the same endpoint or evidence category. Prefer `extract_code` from known candidate files before any new search.
+   - If `my-explore-0` or an escalated custom agent `my-explore` pass cannot obtain required evidence, stop and report the missing evidence. Do not fall back to direct shell reads.
    - Derive the target controller/action from `endpoint`: trim leading/trailing `/`, split by `/`, set controller keyword to `array[-2]`, and set action keyword to `array[-1]`.
    - Convert the controller keyword to StudlyCase and append `Controller`; keep the action keyword as the method name unless the project has a conflicting established naming rule.
    - Example: `api/sms/send` -> `SmsController::send()`.
@@ -70,15 +71,15 @@ Scope: handle exactly one Apifox interface unless the user explicitly expands sc
    - For every reused, updated, or added action with a non-empty Apifox `description`, put the full `description` content in the method header comment immediately above the action method. Normalize only comment syntax required for valid PHP.
    - For controller-only mock mode, do not fabricate method header comment content from an empty `description`; keep only project-required docblock tags if the project requires them, and remove stale business-description comments not present in Apifox.
    - If the implementation matches Apifox but the non-empty `description` method header comment is absent or stale, update only the comment and report the endpoint as reused with a comment update.
-   - Edit only files identified by `my-explore-0` or files whose paths are derived directly from the Apifox endpoint and existing project conventions returned by `my-explore-0`.
-   - If patch context is insufficient, run another exploration pass under the already-loaded `my-explore-0` rules. Do not reread `my-explore-0/SKILL.md`; do not read the target file directly to obtain patch context.
+   - Edit only files identified through `my-explore-0`, an escalated custom agent `my-explore` pass, or files whose paths are derived directly from the Apifox endpoint and existing project conventions returned by that evidence.
+   - If patch context is insufficient, run another exploration pass through `my-explore-0`, escalating to custom agent `my-explore` only when needed. Do not read the target file directly to obtain patch context.
    - Follow existing project conventions for routes, controllers, validation, auth, responses, exceptions, models, services, dependency injection, and tests.
 
 6. Test.
    - If Step 5 selects reuse with no behavior change and no code change except an optional method-header comment update, skip TDD and report the reuse.
    - Load [tdd-gates.md](references/tdd-gates.md).
    - In controller-only mock mode, write only minimal integration contract tests. Do not write E2E tests, unit tests, or logic/service/model tests.
-   - Use `my-explore-0` for test style, fixture, bootstrap, PHPUnit/Pest configuration, helper, middleware, and command-discovery evidence.
+   - Use `my-explore-0` first for test style, fixture, bootstrap, PHPUnit/Pest configuration, helper, middleware, and command-discovery evidence. Escalate to custom agent `my-explore` only when needed.
    - Present the test plan and stop for user confirmation.
    - Write only confirmed tests.
    - Run the smallest relevant test command and require a valid red result.
@@ -97,6 +98,6 @@ Scope: handle exactly one Apifox interface unless the user explicitly expands sc
 - Do not implement more than one Apifox interface unless the user expands scope.
 - Do not fabricate Apifox fields.
 - Do not skip Apifox refresh before reading data.
-- Do not read target-repository evidence outside `my-explore-0`.
+- Do not read target-repository evidence outside `my-explore-0` guided exploration or an escalated custom agent `my-explore` pass.
 - Do not write tests before user confirms the test plan.
 - Do not claim completion without green confirmed tests, verified reuse with no behavior change, or a concrete environment blocker.
