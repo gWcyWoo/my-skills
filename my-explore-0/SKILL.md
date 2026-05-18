@@ -1,6 +1,6 @@
 ---
 name: my-explore-0
-description: Tool selection palette for code exploration. Consumed by the `my-explore` subagent at boot. Do NOT invoke this skill directly — all callers should dispatch the `my-explore` subagent via `Agent(subagent_type="my-explore", ...)`, which reads this file as its tool-palette reference.
+description: Tool selection palette for code exploration. A reference manual readable by either (a) the main session when running lightweight exploration directly, or (b) the `my-explore` subagent at boot when delegated heavier exploration. Maps each retrieval intent to the one correct tool call. The CALLER decides which path (main session vs subagent) — this file only specifies which tool fits which intent.
 ---
 
 <NEVER>
@@ -16,7 +16,7 @@ description: Tool selection palette for code exploration. Consumed by the `my-ex
 | -------------------------------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------ |
 | file + symbol name                           | extract_code                                                                                | files=["file#symbol"]                |
 | file + multiple symbols                      | extract_code                                                                                | files=["f#a","f#b","g#c"]            |
-| **file path, NO symbol name yet** (discover) | **LSP documentSymbol** to list all symbols in the file → THEN extract_code with `#symbol`   | operation=documentSymbol, filePath=`...` |
+| **file path, NO symbol name yet** (discover) | **LSP documentSymbol** to list all symbols in the file → THEN extract_code with `#symbol`   | operation=documentSymbol, filePath=`...`, line=1, character=1 |
 | file path + need a specific structural shape | ast-grep find_code (only when LSP documentSymbol doesn't cover what you want)               | pattern=`export class $X`, `eventBus.on($_, $$$)`, etc. |
 | file:line:col known, find callers            | LSP findReferences                                                                          | operation, filePath, line, character |
 | only have symbol name, want callers          | seed first (LSP documentSymbol / ast-grep / extract_code → file:line:col), then LSP findReferences | two-step                             |
@@ -39,7 +39,7 @@ Priority: `extract_code > findReferences > LSP documentSymbol > ast-grep > Grep 
 - You need cross-file structural matching (documentSymbol is one-file-at-a-time).
 
 **Never use `extract_code` with `path:1-N` (wide line range) as a substitute for symbol discovery.** If you have a path but not the symbol name, the correct flow is:
-1. `LSP documentSymbol filePath="..."` — returns symbol list with line ranges.
+1. `LSP(operation="documentSymbol", filePath="...", line=1, character=1)` — returns symbol list with line ranges. `line`/`character` are schema-required even though documentSymbol ignores them; passing `1, 1` is the convention. Omitting them = `InputValidationError`.
 2. `extract_code(files=["path#FoundName1", "path#FoundName2", ...])` — batched, with real symbol names.
 
 Wide line ranges like `:1-200`, `:1-300` are gaming the anchor rule — they bypass the spirit of precision exploration and dump whole-file content. Use them only when you legitimately know the target lines (e.g. `:42-58` for a known region).

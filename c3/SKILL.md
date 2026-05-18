@@ -12,7 +12,7 @@ Claude side of c3. Initial tick: resolve `$base`/`$dialog`, write `target.md` + 
 - `target.md` — problem to solve (initiator writes once)
 - `conversations.md` — canonical dialogue log (no `conversation.md` fallback)
 - `solutions.md` — agreed solution
-- `notes-{ts}.md` — `u-0` evidence dumps cited from conversation
+- `notes-{ts}.md` — `u0` evidence dumps cited from conversation
 
 **Wire format** for `$dialog`:
 ```
@@ -43,7 +43,7 @@ Header: `- {ts} To {Codex|Claude|User}:`. Standalone `- done` is the only comple
 <instructions>
 0. **Pre-flight: resolve `$base` and `$dialog`.** `default_base = ./c3/$(date +%Y-%m-%d)/{{SESSION_NAME}}/`. If exists → `base = $default_base`. Else `find . -maxdepth 6 -type d -path "*/c3/$(date +%Y-%m-%d)/{{SESSION_NAME}}"`. Else if no `target.md` → initiating: `AskUserQuestion` for target body, `mkdir -p`, `Write target.md`. Else mid-session → `AskUserQuestion` for absolute project path. `$dialog = ${base}conversations.md`.
 
-1. **Initiating** (no `$dialog` on disk): invoke the `u-0` skill via the **Skill tool** (`Skill(skill="u-0", ...)`) on `target.md` — `u-0` is a MAIN-session skill, **not an Agent subagent_type**, do NOT call `Agent(subagent_type="u-0")` (will error with "Agent type not found"). Then `Write` `${base}notes-{ts}.md` with findings → write initial `To codex:` block via the write helper (target understanding + proposed direction, citing `file:line`) → arm background watcher → tick line.
+1. **Initiating** (no `$dialog` on disk): invoke the `u0` skill via the **Skill tool** (`Skill(skill="u0", ...)`) on `target.md` — `u0` is a MAIN-session skill, **not an Agent subagent_type**, do NOT call `Agent(subagent_type="u0")` (will error with "Agent type not found"). Then `Write` `${base}notes-{ts}.md` with findings → write initial `To codex:` block via the write helper (target understanding + proposed direction, citing `file:line`) → arm background watcher → tick line.
 
 2. **On `<task-notification>` from background `wait_for_turn`**: stdout contains the pending inbound batch (one or more `To claude:` turns in append order). Process the WHOLE batch (per I3) before appending exactly ONE outbound — that single response answers the entire batch.
 
@@ -53,7 +53,7 @@ Header: `- {ts} To {Codex|Claude|User}:`. Standalone `- done` is the only comple
    - **announces peer wrote `solutions.md`** → `Read` `${base}solutions.md`, verify against `target.md`. If sound → write `To codex: solutions.md confirmed; awaiting user gate (per I4)` → **HALT** (do NOT re-arm; tick line announces gate). Else → write `To codex: solutions.md needs revision: 1. … 2. …`; re-arm.
    - **confirms our `solutions.md`** ("confirmed", "go implement") → write `To codex: confirmed; awaiting user gate (per I4)` → **HALT**.
    - **assigns Claude as `solutions.md` writer** ("+1 you write solutions.md") → `Write` `${base}solutions.md` per template → write `To codex: solutions.md ready, please review` → re-arm. Do NOT implement.
-   - **else (normal discussion)** — physical action sequence: (a) for requirement understanding invoke `u-0` via the **Skill tool** (`Skill(skill="u-0")` — NEVER `Agent(subagent_type="u-0")`, no agent type by that name exists); for raw code exploration dispatch the `my-explore` subagent via `Agent(subagent_type="my-explore", prompt=<request per ~/.claude/agents/my-explore/PROTOCOL.md>)` on the message + referenced code; (b) `Write` `${base}notes-{ts}.md` with full evidence (file:line citations, verdicts, mechanism); (c) write `To codex:` block (file:line-citing bullets); (d) re-arm.
+   - **else (normal discussion)** — physical action sequence: (a) for requirement understanding invoke `u0` via the **Skill tool** (`Skill(skill="u0")` — NEVER `Agent(subagent_type="u0")`, no agent type by that name exists); for raw code exploration dispatch the `my-explore` subagent via `Agent(subagent_type="my-explore", prompt=<request per ~/.claude/agents/my-explore/PROTOCOL.md>)` on the message + referenced code; (b) `Write` `${base}notes-{ts}.md` with full evidence (file:line citations, verdicts, mechanism); (c) write `To codex:` block (file:line-citing bullets); (d) re-arm.
 
 4. **Implement** (entered ONLY after user passes I4 gate; ownership per I5): apply each Solution step in `solutions.md` (dispatch the `my-explore` subagent via `Agent(subagent_type="my-explore", prompt=<request per ~/.claude/agents/my-explore/PROTOCOL.md>)` if files differ from the spec; STOP on non-trivial gaps). Run tests + lint + type-check. Self-fix ≤3; persistent failure → write `To user: implementation blocked: {check}: {error}; what I tried: …` → HALT. On green: write `To codex: implementation done; changed: {file:line list}; tests/lint/typecheck passed; please review` → re-arm.
 
@@ -83,6 +83,6 @@ P0 (I5) — Ownership at gate: user picks (a) Claude implements + Codex reviews 
 P0 (I6) — Append order > timestamps. Header timestamps are advisory only (clock skew between Claude/Codex is real — observed 6+ min in c3-v2 session). Reasoning about turn sequence MUST use file append order.
 P0 — User is an OBSERVER, not a recipient. Never inline verification reports, per-claim verdict lists, fix proposal bodies, review summaries, or closing recaps in user-facing text. Substance flows through `$dialog` + `notes-{ts}.md`. User-facing output per tick is the single `<output_format>` line.
 P0 — Every code claim cites `file:line` from `notes-{ts}.md`. Memory is not evidence.
-P0 — `u-0`, `c-0`, `um0` are SKILLS, not Agents. Invoke via `Skill(skill="u-0")` etc. — NEVER `Agent(subagent_type="u-0")`. The `-0` suffix denotes MAIN-session skill execution; no agent type by that name exists. `my-explore` IS an agent — dispatch via `Agent(subagent_type="my-explore", ...)`; do NOT call `Skill(skill="my-explore-0")` (that skill is now the subagent's tool-palette reference, not a user-facing entry).
+P0 — `u0`, `c-0`, `um0` are SKILLS, not Agents. Invoke via `Skill(skill="u0")` etc. — NEVER `Agent(subagent_type="u0")`. The `-0` suffix denotes MAIN-session skill execution; no agent type by that name exists. `my-explore` IS an agent — dispatch via `Agent(subagent_type="my-explore", ...)`; do NOT call `Skill(skill="my-explore-0")` (that skill is now the subagent's tool-palette reference, not a user-facing entry).
 P0 — Implementation edits stay in `solutions.md` scope; out-of-scope changes need user OK. Pre-review gate: tests + lint + type-check actually pass before posting `please review`. Self-fix ≤3; else `To user: implementation blocked: …`.
 </final_reminders>
