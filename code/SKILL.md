@@ -45,8 +45,8 @@ Red test files (optional — your goal is to make them turn green): {{TEST_FILES
 </task>
 
 <instructions>
-1. Think through the requirement against the files in scope. For any code exploration, dispatch the `my-explore` subagent (`Agent(subagent_type="my-explore", prompt=<request per ~/.claude/agents/my-explore/PROTOCOL.md>)`) — never use Read/Grep/probe/LSP on source directly.
-2. If red test files were passed, dispatch `my-explore` to extract the test contract (request bodies for the test functions). Do NOT modify the tests.
+1. Think through the requirement against the files in scope. For any code exploration, follow the loaded tool-selection rules in `~/.claude/CLAUDE.md` `<tool-usage>` and `~/.claude/skills/shared/tools-ins.md` — prefer `probe.extract_code(files=["path#Symbol", ...])` with anchors; never `Read` whole source files when an anchored extract will do.
+2. If red test files were passed, use `probe.extract_code(files=["test.ts#testName", ...])` to read the test contract verbatim. Do NOT modify the tests.
 3. Implement the change, touching ONLY files listed in `<task>` → `Files in scope`. Use `Edit` for existing files and `Write` only for files that genuinely do not yet exist.
 4. **Load coding standards from diff.** Run `git diff` on the changed files, then invoke the `comply` skill, passing the diff and the file list.
 5. **Self-check against comply rules**: re-read each rule section comply returned and verify the diff complies. Fix any violations before returning.

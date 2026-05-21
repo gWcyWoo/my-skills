@@ -212,14 +212,12 @@ Naming:
    - anti-pattern risk and mitigation
    - reuse-search role
 
-7. Search project reuse with the `my-explore` subagent
+7. Search project reuse in the main session
 
-   Claude tool routing: dispatch via `Agent(subagent_type="my-explore", prompt=<request per ~/.claude/agents/my-explore/PROTOCOL.md>)`. The subagent returns JSON; read `results[].body` for verbatim widget source. NEVER `Skill(skill="my-explore-0")` directly — that skill is now the subagent's tool-palette reference, not a user-facing entry point.
+   Run exploration per `~/.claude/CLAUDE.md` `<tool-usage>` and `~/.claude/skills/shared/tools-ins.md`. Two-step pattern: (1) one `probe.search_code(query="<role concept>", path="<root>/lib")` to seed file:line; (2) one batched `probe.extract_code(files=["lib/.../widget.dart#WidgetClass", ...])` covering every candidate role from step 1. Do NOT re-run `search_code` after the first call.
 
    Announce:
-   `Using my-explore subagent to search reusable Flutter widgets.`
-
-   Search `<root>/lib/` for all candidate roles in one batched query
+   `Searching reusable Flutter widgets in <root>/lib/.`
 
    Request:
    - file:line

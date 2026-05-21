@@ -1,59 +1,49 @@
 ---
 name: u0
-description: Lightweight understanding step in the main session. First clarify the user's requirement via discussion (NO code lookup). Then explore code — main session uses the `my-explore-0` palette directly when ≤2 directions, spawns the `my-explore` subagent when ≥3. Produce a concise gap-analysis, get explicit user confirmation, then hand off or iterate.
+description: Main-session requirement-understanding step. Step 1 clarifies the requirement with the user (no code lookup). Step 2 explores code in the main session per the loaded tool-selection rules (`~/.claude/CLAUDE.md` `<tool-usage>` + `~/.claude/skills/shared/tools-ins.md`). Step 3 emits a gap analysis and STOPS for explicit user confirmation. Step 4 routes to refine / reshape / list-candidates / hand-off.
 ---
 
 <role>
-Lightweight understanding coordinator in the main session. Absorbs ALL user dialogue (there is no separate discussion skill — discussion happens inside Step 1 and Step 4 here). Produces a confirmed gap analysis, not a formal HLD.
+Main-session coordinator. Absorbs all user dialogue inside Step 1 and Step 4. Output is a confirmed gap analysis.
 </role>
 
 <instructions>
 
-## Step 1 — Understand the requirement (NO code lookup)
+## Step 1 — Clarify the requirement (NO code lookup)
 
-Read the user's opening. Identify symptom (bugs) or desired behavior (features) and any named files / symbols / UI labels they mentioned. Ask the user about EVERY ambiguity — never assume.
+Identify, from the user's message: symptom (bug) or desired behavior (feature), and every named file / symbol / UI label. Ask the user about every ambiguity. Do not assume.
 
-Iterate with the user until the requirement is concrete enough to drive specific exploration directions. Then convert the clarified requirement into internal *directions* — a list of concrete, retrievable questions ("does X exist?", "what calls Y?", "what is the body of Z?", "where is feature F's entry point?").
+Iterate until the requirement resolves into concrete exploration *directions* — each a retrievable question: "does X exist?", "what calls Y?", "what is the body of Z?", "where is feature F's entry point?".
 
-This conversion is **model-internal**. Do NOT print the directions list to the user. The user sees only your clarifying questions and (eventually) the Step 3 summary.
+Directions are model-internal. Do NOT print them to the user.
 
-HARD RULE for this step: you NEVER touch code. No `Read`, `Grep`, `Glob`, `extract_code`, LSP, `ast-grep`, `search_code`, and no `Agent(subagent_type="my-explore")`. Code lookup only starts at Step 2.
+HARD RULE: Step 1 runs zero code-lookup tools. No `Read`, `Grep`, `Glob`, `extract_code`, LSP, `ast-grep`, `search_code`.
 
-## Step 2 — Explore code (routed by direction count)
+## Step 2 — Explore code in the main session
 
-Count the independent directions produced in Step 1. Route by single gate:
+Run exploration per the session's loaded rules:
 
-### Route A — ≤2 directions → main session, palette direct
+- `~/.claude/CLAUDE.md` `<exploration>` and `<tool-usage>` — loop discipline and per-task tool choice.
+- `~/.claude/skills/shared/tools-ins.md` — the per-call "To get {want}, call {invocation}" line and the bottom-up scenario palette.
 
-Read `~/.claude/skills/my-explore-0/SKILL.md` and `~/.claude/skills/my-explore-0/TOOLS.md` as the palette manual, then call the listed tools **directly in the main session**:
-`extract_code` (mcp__probe) · LSP `documentSymbol` / `findReferences` / `get_symbol_definitions` · `ast-grep` · `Glob` · `Grep` · `search_code`.
+Do NOT read `my-explore-0/SKILL.md`, do NOT read `my-explore-0/TOOLS.md`, do NOT dispatch `Agent(subagent_type="my-explore")`. All three are retired.
 
-Follow palette priority: `extract_code > findReferences > LSP documentSymbol > ast-grep > Grep > search_code`. Trade-off: the result bodies land in main context — that is the accepted cost of the lightweight path.
+Escalation trigger: if any single direction produces more than 2 tool calls OR more than one direction expands into sub-questions during execution, STOP exploration, report current evidence to the user, and ask whether to continue, narrow, or split. Do not silently grow the exploration.
 
-### Route B — ≥3 directions → `my-explore` subagent
+## Step 3 — Emit gap analysis and STOP
 
-Dispatch via `Agent(subagent_type="my-explore", prompt=<request>)`. Build the request body per `~/.claude/agents/my-explore/PROTOCOL.md` (Intent + ≤3 Directions per request + Anchors + optional Budget). The subagent returns JSON with `results[]` — each entry has a `body` field with verbatim source. **Read the bodies, reason on them; never paste raw JSON to the user.**
+Emit ONLY the `<default_output>` block. STOP. Wait for the user's explicit confirmation (a "yes" / "go" / equivalent) before any further action.
 
-### Overrides
+## Step 4 — Route next step (with user)
 
-- The user explicitly says "走 subagent" / "用 my-explore" / equivalent → Route B regardless of direction count.
-- The user explicitly says "别开 subagent" / "主会话查就行" → Route A regardless.
-- **Mid-flight escalation:** if a Route A direction balloons (each one expands into several sub-questions, or main context starts visibly polluting) → pivot the remaining directions to Route B for the next batch.
+After confirmation, ask the user which of:
 
-## Step 3 — Synthesize and present
-
-Emit ONLY the `<default_output>` block below. STOP. Wait for the user's **explicit** confirmation before doing anything else.
-
-## Step 4 — Decide next step (with user)
-
-After confirmation, ask the user which:
-
-- **(a) Refine directions and re-explore** → back to Step 2 with new/sharper directions.
-- **(b) Requirement itself needs reshaping** → back to Step 1.
-- **(c) List candidates / trade-offs** based on EXISTING evidence → produce 2 named directions, each with a one-line trade-off. **No new exploration.** This is the only place candidate-generation lives now; do not invoke it spontaneously.
+- **(a) Refine directions and re-explore** → return to Step 2 with new directions.
+- **(b) Reshape requirement** → return to Step 1.
+- **(c) List candidates / trade-offs from existing evidence** → emit exactly 2 named directions, each with a one-line trade-off. No new exploration.
 - **(d) Hand off to `c-0` / `write-tests`** → emit final summary, stop.
 
-If the user explicitly asks for "files / scope / locations" at any time after Step 2 has produced evidence, emit `<on_demand_output>`.
+If the user requests "files / scope / locations" any time after Step 2 has evidence, emit `<on_demand_output>`.
 
 </instructions>
 
@@ -73,7 +63,7 @@ Approach: <one to three sentences>
 </default_output>
 
 <on_demand_output>
-Emit ONLY when the user explicitly asks (e.g. "show files", "key files?", "what's in scope?"):
+Emit ONLY when the user requests files / scope / locations:
 
 Files in scope:
 - path:line — <one-line role>
@@ -83,24 +73,23 @@ Files in scope:
 <success_criteria>
 Complete when ALL hold:
 
-- Step 1 finished BEFORE any code lookup; every ambiguity was asked, not assumed.
-- Step 2 routed correctly by direction count (≤2 → Route A, ≥3 → Route B), with any mid-flight escalation noted.
-- The `<default_output>` block was emitted (concise — no file lists, no exploration dumps).
-- The user explicitly confirmed.
-- Step 4 next-step decision recorded.
-
-Stop. Hand control to the caller or the chosen downstream skill.
+- Step 1 finished before any code-lookup tool call.
+- Every ambiguity was asked, not assumed.
+- Step 2 ran in the main session per `<tool-usage>` + `shared/tools-ins.md`. No `my-explore-0/*` read. No `Agent(subagent_type="my-explore")` dispatch.
+- `<default_output>` was emitted (no file lists, no exploration dumps).
+- User confirmed explicitly.
+- Step 4 route recorded.
 </success_criteria>
 
 <final_reminders>
-P0 — Step 1 NEVER reads code. Code lookup begins only at Step 2.
-P0 — Step 1's converted directions are model-internal. Do NOT print them to the user — that is the d0-style ceremony we deleted.
-P0 — NEVER guess when the requirement is ambiguous. Ask.
-P0 — Step 2 routing is mechanical: count independent directions. ≤2 → main-session palette; ≥3 → my-explore subagent. No fuzz, no "feels light enough".
-P0 — NEVER skip the Step 3 STOP-and-confirm.
-P0 — NEVER dump raw exploration results, my-explore subagent JSON, or "Files in scope" by default. The default user-visible output is the concise `<default_output>` only. File lists are emitted ONLY when the user explicitly asks.
-P0 — Candidate-generation lives ONLY in Step 4 branch (c), only when the user asks. Never volunteer candidates mid-flow — that was d0's job, and d0 has been retired.
-P1 — Do not write tests or code. Those are downstream (`write-tests` / `c-0`).
-P2 — If the user provides exploration context up front, you may skip to Step 3.
+P0 — Step 1 calls zero code-lookup tools.
+P0 — Step 1 directions are model-internal. Do not print them.
+P0 — Ask on ambiguity. Do not guess.
+P0 — Step 2 runs in the main session. Do not read `my-explore-0/SKILL.md` or `my-explore-0/TOOLS.md`. Do not call `Agent(subagent_type="my-explore")`.
+P0 — Step 3 STOPS and waits for explicit confirmation.
+P0 — Default user output is `<default_output>` only. Emit `<on_demand_output>` only on explicit user request.
+P0 — Candidate generation runs only in Step 4 branch (c), only on user request.
+P1 — Do not write tests or code. Hand off to `write-tests` / `c-0`.
+P2 — Skip to Step 3 if the user supplies exploration context up front.
 P2 — Mirror the user's language.
 </final_reminders>

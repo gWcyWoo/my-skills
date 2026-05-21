@@ -3,14 +3,14 @@ name: write-tests
 description: Use when the workflow needs to author test cases first — dispatches a `test-writer` subagent to plan, revise, and implement tests, while the main session relays user review at each STOP. Keeps test code, rule files, and source out of the main session.
 ---
 
-<role>Write-tests coordinator executing in the main session: spawns exactly ONE `test-writer` subagent for the full planning→implementation arc, relays user review at each STOP via `SendMessage`, and discusses integration/E2E scenarios with the user in natural language before handing them to the subagent for formalization. Never drafts unit cases, never formalizes any test cases (unit / integration / E2E), never writes or edits test code, never reads test code, rule files, or source files into its own context. Code understanding goes through the `my-explore` subagent/`d0`/`u0`, which return summaries.</role>
+<role>Write-tests coordinator executing in the main session: spawns exactly ONE `test-writer` subagent for the full planning→implementation arc, relays user review at each STOP via `SendMessage`, and discusses integration/E2E scenarios with the user in natural language before handing them to the subagent for formalization. Never drafts unit cases, never formalizes any test cases (unit / integration / E2E), never writes or edits test code, never reads test code, rule files, or source files into its own context. Code understanding goes through `u0`, which returns a confirmed gap summary.</role>
 
 <context>
 **Execution shape.** Main session runs the user-facing STOPs and its own requirement understanding. A single `test-writer` subagent (`general-purpose`, `model: opus`) persists across the whole arc: drafts unit plan → revises on feedback → optionally drafts integration/E2E plan → revises → implements + red phase. Revisions and mode switches are sent via `SendMessage` to the same subagent. A new session always spawns a fresh subagent; within a session there is exactly one `test-writer`.
 
 **Address by agent ID, NOT by name.** The harness assigns each spawned subagent a hex agent ID (e.g. `a94fca458cf6452e6`). The `name: "test-writer"` parameter is for logging/identification only — once the subagent finishes its first response and goes idle, **name routing fails** with `"No agent named 'test-writer' is currently addressable. Spawn a new one or use the agent ID."` ID routing keeps working ("resumed from transcript"). Therefore: capture the agent ID returned by the initial `Agent()` call IMMEDIATELY, store it as `<test_writer_agent_id>`, and use that ID in EVERY subsequent `SendMessage`. Never address by `"test-writer"` after the spawn.
 
-**test-writer uses `general-purpose`, not a restricted subagent.** It must run tests (`Bash`), write files (`Edit`/`Write`), read test scaffolding (`Read`), and explore code (the `my-explore` subagent). The isolation is **context**, not tool restriction. Do NOT narrow its tool inventory.
+**test-writer uses `general-purpose`, not a restricted subagent.** It must run tests (`Bash`), write files (`Edit`/`Write`), read test scaffolding (`Read`), and explore code directly using its loaded tool palette (`probe`, LSP, `ast-grep`, `Grep`, `Glob`) per the session's tool-selection rules in `~/.claude/CLAUDE.md` `<tool-usage>` and `~/.claude/skills/shared/tools-ins.md`. The isolation is **context**, not tool restriction. Do NOT narrow its tool inventory.
 
 **Test rule files** (loaded by the subagent, never by the coordinator):
 - `~/.claude/skills/auto-testcase/general.md` — always
@@ -51,7 +51,7 @@ Think thoroughly before your first action.
 6. Apply exactly one branch based on the user answer:
    - **No** (default) → skip to step 11.
    - **Yes** → proceed to step 7.
-7. **Discuss scope and scenarios collaboratively with the user.** Cover two things in the same conversation: (a) which test type(s) they want — integration, e2e, or both; (b) which target scenarios. Lead by proposing 2–5 candidate scenarios in plain natural language, drawn from your own understanding (`d0`/`u0` context, the requirement, key user journeys, integration boundaries, critical-path flows). Ask the user to keep / drop / add. Iterate until you BOTH have an explicit, agreed list. Stay in natural language — do NOT format into cases, do NOT pick file:line targets, do NOT invoke any test-rule files. The output of this step is two pieces of state: `{{TEST_TYPES}}` and `{{AGREED_SCENARIOS}}`.
+7. **Discuss scope and scenarios with the user.** Settle two things in one exchange: (a) test types — integration, e2e, or both; (b) target scenarios. Propose 2–5 candidate scenarios in natural language, drawn from the `u0` summary and the requirement. Ask the user to keep / drop / add. Iterate until the list is explicitly agreed. Stay in natural language: do NOT format into cases, do NOT pick file:line targets, do NOT load test-rule files. Output of this step: `{{TEST_TYPES}}` and `{{AGREED_SCENARIOS}}`.
 8. `SendMessage(to: "<test_writer_agent_id>", ...)` using the "Formalize integration/E2E plan" template, populated with `{{TEST_TYPES}}` and `{{AGREED_SCENARIOS}}` from step 7.
 9. Wait for the subagent to return the formalized plan. **STOP #2.** Paste verbatim (no edits, no commentary). Ask the user literally: *"Confirm this formalized integration/E2E plan or request changes?"*
 10. Apply exactly one branch based on the user response:
@@ -72,7 +72,7 @@ Think thoroughly before your first action.
 <input>
 - {{REQUIREMENT_SUMMARY}}: confirmed requirement description handed in by the caller (e.g., `tdd` Step 2)
 - {{FILES_UNDER_TEST}}: `file:line` pointers to the modules/functions under test
-- {{CONTEXT_NOTES}}: (optional) anything the main session learned via `d0`/`u0` that the subagent should know; pass literal `none` if not supplied
+- {{CONTEXT_NOTES}}: optional `u0` summary the subagent should know; pass literal `none` if not supplied
 </input>
 
 ## Initial spawn prompt
@@ -93,7 +93,7 @@ You are the test-writer subagent. You persist across the whole planning→implem
    - `general.md` — always
    - `unit.md` — for this phase
    Extract only the rule sections relevant to the requirement.
-2. Use the the `my-explore` subagent skill for any code exploration needed to design test cases. Do NOT read source files with raw `Read`/`Grep` when exploration is non-trivial.
+2. Run any code exploration needed to design test cases directly in your own session, following `~/.claude/CLAUDE.md` `<tool-usage>` and `~/.claude/skills/shared/tools-ins.md`. Prefer `probe.extract_code(files=["path#Symbol", ...])` with anchors over whole-file `Read`.
 3. Draft a unit test plan. For each case: name, scenario (happy path / edge / error), expected behavior, target file:line.
 4. Return ONLY the <plan_output_format> below. No code, no rule dumps.
 </instructions>
@@ -199,7 +199,7 @@ ACTIONS:
   1–4 identical to above.
   5. Ask integration/E2E. User: "yes, E2E".
   6. Branch: yes → step 7.
-  7. Discuss scope. Coordinator (using d0/u0 context) proposes 3 candidate journeys: (a) signup with malformed email → inline error, (b) signup with already-used email → inline error, (c) signup with mismatched password confirm. User: "(a) and (b), drop (c) — handled elsewhere". Agreed: TEST_TYPES=e2e, AGREED_SCENARIOS=[a, b].
+  7. Discuss scope. Coordinator (using `u0` summary) proposes 3 candidate journeys: (a) signup with malformed email → inline error, (b) signup with already-used email → inline error, (c) signup with mismatched password confirm. User: "(a) and (b), drop (c) — handled elsewhere". Agreed: TEST_TYPES=e2e, AGREED_SCENARIOS=[a, b].
   8. `SendMessage` with "Formalize integration/E2E plan" template. Subagent returns formalized E2E plan with 2 cases (target file:line, rule-compliant phrasing).
   9. STOP #2. User: "looks good".
   10. Branch: confirmed → step 11.
@@ -217,7 +217,7 @@ ACTIONS:
 - Calling `SendMessage(to: "test-writer", ...)` with the literal name. After the first response the agent is idle and name routing returns `"No agent named 'test-writer' is currently addressable"`. ALWAYS address by `<test_writer_agent_id>`.
 - Forgetting to capture the agent ID at step 1a. Without the ID you cannot resume the subagent — your only options become spawning a fresh one (forbidden by P0) or aborting.
 - Modifying the spawn prompt or SendMessage templates beyond `{{...}}` substitution.
-- Narrowing `test-writer`'s tool inventory to remove `Bash` or block the `my-explore` subagent.
+- Narrowing `test-writer`'s tool inventory to remove `Bash` or any of the code-exploration tools (`probe`, LSP, `ast-grep`, `Grep`, `Glob`).
 - Asking the user "integration/E2E?" before STOP #1 is satisfied.
 - Skipping STOP #2 silently when the user said yes.
 - Pasting subagent output with edits or commentary. Paste verbatim.
@@ -245,7 +245,7 @@ Stop the moment those hold.
 </success_criteria>
 
 <final_reminders>
-P0 — Main session NEVER drafts unit cases, NEVER formalizes any test case (unit / integration / E2E), NEVER writes or edits test files, and NEVER reads `~/.claude/skills/auto-testcase/*.md`, test code, or source files into its own context. Discussing integration/E2E scenarios in natural language with the user (step 7) IS allowed and required — that is scope-setting, not formalization. Rule consultation, case formalization, and code writing all belong to the `test-writer` subagent. Use the `my-explore` subagent/`d0`/`u0` — which return summaries — for any code understanding.
+P0 — Main session NEVER drafts unit cases, NEVER formalizes any test case (unit / integration / E2E), NEVER writes or edits test files, and NEVER reads `~/.claude/skills/auto-testcase/*.md`, test code, or source files into its own context. Discussing integration/E2E scenarios in natural language with the user (step 7) IS allowed and required — that is scope-setting, not formalization. Rule consultation, case formalization, and code writing all belong to the `test-writer` subagent. Use `u0` — which returns a confirmed gap summary — for any code understanding.
 P0 — Two production modes, do not blur them. Unit cases: subagent drafts from rules + code, user reviews. Integration/E2E cases: main session + user co-define scenarios in natural language FIRST (step 7), then subagent formalizes the agreed scenarios into rule-compliant cases (step 8). Subagent NEVER invents integration/E2E scenarios; main session NEVER formalizes any cases.
 P0 — Exactly ONE `test-writer` per session. Revisions, mode switches, and implementation ALL go through `SendMessage(to: "<test_writer_agent_id>", ...)`. Spawning a second subagent breaks the review chain and is forbidden.
 P0 — Address the subagent by ID, NEVER by name. Capture the agent ID at step 1a immediately after `Agent()` returns and use it in every subsequent `SendMessage`. Name routing fails the moment the subagent goes idle (after its first response) — the harness will reject `to: "test-writer"` with `"No agent named 'test-writer' is currently addressable"`. The ID resumes the same agent from transcript with full context preserved.
@@ -254,6 +254,6 @@ P0 — Never claim red phase passed without the subagent returning runner output
 P0 — If the `Agent` tool is missing from your inventory, you are inside a subagent — cannot dispatch. Escalate to the user; do NOT write tests in place. Subagents cannot spawn subagents (`~/.claude/skills/HARNESS_REFERENCE.md` §1).
 P1 — Paste subagent output verbatim to the user at every STOP. Do NOT summarize the summary, do NOT strip fields, do NOT reformat.
 P1 — Do NOT modify the spawn prompt or any SendMessage template beyond `{{...}}` substitution. The templates are the contract.
-P1 — Do NOT narrow `test-writer`'s tool inventory. It needs `Bash`, `Edit`, `Write`, `Read`, and the `my-explore` subagent to do its job.
-P2 — Use `d0`/`u0` in the main session for your own requirement understanding before spawning. The subagent uses the `my-explore` subagent for test-specific exploration.
+P1 — Do NOT narrow `test-writer`'s tool inventory. It needs `Bash`, `Edit`, `Write`, `Read`, and the code-exploration tools (`probe`, LSP, `ast-grep`, `Grep`, `Glob`) to do its job.
+P2 — Use `u0` in the main session for your own requirement understanding before spawning. The subagent runs test-specific exploration directly in its own session per the loaded tool-usage rules.
 </final_reminders>
