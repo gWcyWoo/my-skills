@@ -14,22 +14,22 @@ Rule files:
 
 Use `development_rules.md` as higher-priority project guidance. If it conflicts with `flutter-widget.md`, `development_rules.md` wins.
 
-Use `flutter-widget.md` as an external decision guide, not as inline context.
+Use `flutter-widget.md` only through exact `FW-*` ID reads.
 
-Do not read it fully. Do not load broad rule families. First discover only headings/rule IDs:
+Do not read it fully. Do not query multiple `FW-*` IDs or `FW-*` prefixes in one command. First discover only headings/rule IDs:
 
 ```bash
 rg -n "^#{1,3} .*\\[FW-" ~/.code/shared-rules/frontend/flutter-widget.md
 ```
 
-Then read only exact individual rule IDs needed for unresolved design decisions:
+Then read only exact individual rule IDs for decisions not resolved by `development_rules.md`:
 
 - Read `development_rules.md` first. If a `DEV-*` rule resolves the decision, do not query `flutter-widget.md` for the same decision.
 - One `flutter-widget.md` query must contain exactly one `FW-*` ID.
 - Use exact ID lookup only, for example:
   `rg -n -A 20 -B 2 "\\[FW-LAYOUT-COLUMN\\]" ~/.code/shared-rules/frontend/flutter-widget.md`
 - Do not use alternation, prefix, wildcard, heading-number, or family queries such as `FW-LAYOUT-*`, `FW-ANTI-*`, `FW-LAYOUT-COLUMN|FW-LAYOUT-ROW`, `#10`, or `#11`.
-- During plan review, read at most 5 individual `FW-*` rules total. Implementation may read additional exact IDs only for new blockers.
+- During plan review, read at most 5 individual `FW-*` rules total. During implementation, read an additional exact ID only when a decision was not present during plan review.
 - Cite `FW-*` only for exact rules actually read.
 
 Each component, layout, size, and asset decision must be checked against `development_rules.md` before plan review. Record applicable `DEV-*` IDs or `无直接适用规则`. If a decision would violate a `DEV-*` rule, reject it and choose a compliant alternative. If no compliant alternative exists or the spec/user explicitly requires the violation, keep it only as a `DEV 例外` and record the violated rule, violation reason, risk, mitigation, and required user confirmation. Cite `FW-*` only when an exact `FW-*` rule was read.
@@ -209,16 +209,13 @@ Naming:
    - chosen widget/layout
    - cited `DEV-*` rule when applicable
    - cited exact `FW-*` rule when read
-   - rejected nearest alternative
+   - rejected alternative
    - anti-pattern risk and mitigation
    - reuse-search role
 
-7. Search project reuse with `my-explore-0` first
+7. Search project reuse
 
-   Announce:
-   `Using my-explore-0 to search reusable Flutter widgets.`
-
-   Search `<root>/lib/` for all candidate roles in one batched query
+   Follow the active `AGENTS.md` source-exploration rules. Search `<root>/lib/` for all candidate roles in one pass.
 
    Request:
    - file:line

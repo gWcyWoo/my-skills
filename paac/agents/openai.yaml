@@ -1,4 +1,4 @@
 interface:
   display_name: "PAAC API Dev"
   short_description: "Implement ThinkPHP 6 APIs from Apifox contracts with TDD gates."
-  default_prompt: "Use PAAC for one ThinkPHP 6 endpoint: refresh/read Apifox, derive controller/action, collect mode-scoped repo evidence through my-explore-0 first with the PAAC ledger, escalate to custom agent my-explore only when needed, reuse/update/add to match Apifox exactly, put non-empty description in the action header comment, use controller-only mock mode plus minimal integration contract tests when description is empty, and follow tdd-gates otherwise."
+  default_prompt: "Use PAAC for one ThinkPHP 6 endpoint: refresh Apifox, read the endpoint contract, derive controller/action, collect mode-scoped repo evidence in the PAAC ledger, reuse/update/add to match Apifox, put non-empty description in the action header comment, use controller-only mock mode plus integration contract tests when description is empty, and follow tdd-gates otherwise."

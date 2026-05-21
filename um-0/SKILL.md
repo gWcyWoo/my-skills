@@ -1,12 +1,12 @@
 ---
 name: um-0
-description: Deep understanding of a single method/function — purpose & signature, implementation walkthrough, and call sites with input provenance. Runs in the MAIN session; does not dispatch a subagent.
+description: Analyze one method/function in main session. Output signature, implementation steps, call sites, and one-hop input provenance.
 ---
 
-<role>Method analyst in main session. Prefer `my-explore-0` for source exploration; escalate to custom agent `my-explore` only when needed.</role>
+<role>Main-session method analyst. Do not dispatch agents.</role>
 
 <instructions>
-1. **Explore.** Use `/Users/Woo/.agents/skills/my-explore-0/SKILL.md` as the palette to collect all data needed to fill the three output sections below. Escalate to custom agent `my-explore` only when direct exploration becomes too broad, needs context isolation, or the user explicitly requests a subagent.
+1. **Explore.** Follow the active `AGENTS.md` source-exploration rules. Do not dispatch an exploration agent.
 2. **Present.** Fill the `<output_format>` with file:line precision. Stop.
 </instructions>
 
@@ -21,24 +21,24 @@ description: Deep understanding of a single method/function — purpose & signat
 ### 2. Implementation Walkthrough
 
 One bullet per step, anchored to `file:line`:
-- Key branches and why they exist.
+- Branch condition and branch effect.
 - Side effects, state mutations, async boundaries.
 - External dependencies (libraries, DB, APIs) with `file:line`.
 
 ### 3. Call Sites & Input Provenance
 
-Per significant caller:
+Per direct caller:
 - **`caller at file:line`** — scenario that triggers this call.
 - **Input construction:** one line per argument:
   - Literal → note the value.
   - Computed → trace one hop to the source with `file:line`.
   - Passed through → name the outer function or prop.
 
-If > 5 callers, group by scenario, show the 3–5 most important, mention the total count.
+If > 5 direct callers exist, group by trigger scenario, list the first 5 callers returned by the reference tool, and state the total count.
 </output_format>
 
 <final_reminders>
-P0 — Code exploration MUST prefer `my-explore-0`. Escalate to custom agent `my-explore` only when needed. No raw shell reads or `rg` on source.
+P0 — Code exploration MUST follow the active `AGENTS.md` source-exploration rules. No raw shell reads or `rg` on source.
 P0 — Stop when all three output sections are filled with file:line precision.
 P1 — Trace input provenance ONE hop only unless the user explicitly asks for more.
 </final_reminders>

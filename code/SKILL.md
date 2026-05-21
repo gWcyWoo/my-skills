@@ -1,9 +1,9 @@
 ---
 name: code
-description: Implementation via isolated `implementer` subagent. Loads coding standards via `comply`, then dispatches.
+description: Dispatch implementer subagent. Require comply self-check before ready-for-verify.
 ---
 
-<role>Coordinator: validate inputs, dispatch `implementer` through `my-subagent`, relay summary.</role>
+<role>Coordinator. Validate inputs. Dispatch `implementer` through `my-subagent`. Relay summary.</role>
 
 <instructions>
 
@@ -40,13 +40,13 @@ You are the `implementer` subagent. Write implementation code, load rules from d
 <task>
 Requirement: {{REQUIREMENT_SUMMARY}}
 Files in scope (touch ONLY these): {{FILES_IN_SCOPE}}
-Red test files (optional — your goal is to make them turn green): {{TEST_FILES}}
+Red test files (empty allowed): {{TEST_FILES}}
 </task>
 
 <instructions>
-1. Think through the requirement against the files in scope. For any code exploration, prefer `/Users/Woo/.agents/skills/my-explore-0/SKILL.md` as the palette and use its allowed Codex MCP tools directly. Escalate to custom agent `my-explore` only when the exploration becomes broad, needs context isolation, or the user explicitly requests a subagent. Never use raw shell reads or `rg` on source directly.
-2. If red test files were passed, use the `my-explore-0` palette first to read and understand the test contract; escalate to custom agent `my-explore` only if the contract requires broad/context-isolated exploration. Do NOT modify the tests.
-3. Implement the change, touching ONLY files listed in `<task>` → `Files in scope`. Use `apply_patch` for manual edits, including genuinely new files when needed.
+1. Compare the requirement with `<task>` → `Files in scope`. Before reading or querying source, follow the active `AGENTS.md` source-exploration rules. Raw shell source reads and `rg` over source are forbidden.
+2. If red test files were passed, identify each red test's asserted behavior before editing implementation. Do NOT modify the tests.
+3. Implement the change, touching ONLY files listed in `<task>` → `Files in scope`. Use `apply_patch` for manual edits. Create a file only when its path is absent.
 4. **Load coding standards from diff.** Run `git diff` on the changed files, then invoke the `comply` skill, passing the diff and the file list.
 5. **Self-check against comply rules**: re-read each rule section comply returned and verify the diff complies. Fix any violations before returning.
 6. **Red-test reasoning**: if red test files were passed, REASON whether your implementation would turn them green. If any red test already passes BEFORE your implementation (tautology), surface it in Notes with Status:blocked.
@@ -58,12 +58,11 @@ Status:        ready-for-verify | blocked
 Files touched: path → one-line description per file (new / edited / deleted)
 Rules applied: which rule sections from comply were enforced (list titles, not content)
 Test targets:  which red tests the implementation targets (if TEST_FILES was passed), or "n/a"
-Notes:         any deviations from the plan, defects surfaced (e.g. tautology tests), assumptions
-Confidence:    high | medium | low
+Notes:         plan deviations, tautology tests, blockers
 </subagent_output_format>
 
 <subagent_final_reminders>
-P0 — NEVER run any test runner (vitest / pytest / npm test / go test / etc.). REASON about correctness only; verification is the parent workflow's Step 4.
+P0 — NEVER run any test runner (vitest / pytest / npm test / go test / etc.). Use source and test evidence only; verification is the parent workflow's Step 4.
 P1 — Do not add error handling, validation, fallbacks, or feature flags the <rules> did not require.
 P1 — Do not add comments or docstrings to code you did not change.
 </subagent_final_reminders>
