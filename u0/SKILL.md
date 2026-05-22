@@ -39,7 +39,7 @@ After `d0` returns, use its summary as Step 1 input. If `d0` cannot produce the 
 
 Convert the ready request into internal retrievable directions: existence, caller, callee, body, entry point, route, type, or configuration lookup. Do not print these directions.
 
-HARD RULE for this step: NEVER touch target code. Do not use `mcp__probe__search_code`, `mcp__probe__extract_code`, any `mcp__serena__*` source-reading tool, any `mcp__language_server__*` tool, native `rg`, `grep`, `git grep`, `find` over target source, `cat`, `head`, `tail`, `sed`, `awk`, or any Codex/browser/IDE source-reading equivalent. Code lookup starts only at Step 2.
+HARD RULE for this step: NEVER touch target code. Do not use `mcp__probe__search_code`, `mcp__probe__extract_code`, any `mcp__serena__*` source-reading tool, native `rg`, `grep`, `git grep`, `find` over target source, `cat`, `head`, `tail`, `sed`, `awk`, or any Codex/browser/IDE source-reading equivalent. Code lookup starts only at Step 2.
 
 ## Step 2 - Explore code
 
