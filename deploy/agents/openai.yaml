@@ -1,0 +1,4 @@
+interface:
+  display_name: "Deploy"
+  short_description: "Bootstrap Debian servers with opt rootless Docker."
+  default_prompt: "Use $deploy to bootstrap a fresh Debian server: ask local vs remote first, collect the connection method, then create /srv/docker-env with opt rootless Docker and plan PHP/Node runtime plus optional Nginx."
