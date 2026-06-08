@@ -172,7 +172,7 @@ mcpServers:
 
 | Requirement | Mechanism | Status |
 |---|---|---|
-| Keep test code, rules, and source out of the main session for `write-tests` | Dispatch a named `test-writer` subagent (`general-purpose` type) | ✅ in place |
+| Keep test code, rules, and source out of the main session for `tc` | Dispatch a named `test-writer` subagent (`general-purpose` type) | ✅ in place |
 | Restrict tools in the main session itself | **Only achievable via `PreToolUse` hooks** | ⏳ not yet implemented |
 | Deny a tool to the main session but allow it in a subagent | **Not currently possible** at the harness level | ❌ blocked by GitHub #30161 |
 | Save context by hiding an MCP server's tools from the main session | Inline `mcpServers:` in a subagent frontmatter | 💡 not yet exploited — opportunity |

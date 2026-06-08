@@ -77,7 +77,7 @@ After confirmation, ask the user which:
 - **(a) Refine directions and re-explore** - return to Step 2 with new or sharper directions.
 - **(b) Reshape the requirement** - return to Step 1.
 - **(c) List candidates / trade-offs** from existing evidence - emit exactly 2 named directions, each with a one-line trade-off. Run no new tool calls. Candidate generation runs only in this branch.
-- **(d) Hand off to `c-0` / `write-tests` / `hld`** - emit the final summary, stop, hand control to the downstream skill.
+- **(d) Hand off to `c-0` / `tc` / `hld`** - emit the final summary, stop, hand control to the downstream skill.
 
 If the user requests "files", "scope", or "locations" after Step 2 has produced evidence, emit `<on_demand_output>`.
 
@@ -116,7 +116,7 @@ P0 - User-owned gap → `d0`. Code-fact gap → Step 2.
 P0 - Step 3 STOPs and waits for explicit user confirmation.
 P0 - Default output is the Step 3 summary only. `<on_demand_output>` runs only on explicit user request.
 P0 - Candidate generation runs only in Step 4 branch (c), only on user request.
-P1 - Do not write tests or code. Hand off to `write-tests` / `c-0`.
+P1 - Do not write tests or code. Hand off to `tc` / `c-0`.
 P2 - If the user supplies all Step 1 facts up front, skip to Step 3.
 P2 - Mirror the user's language.
 </final_reminders>
