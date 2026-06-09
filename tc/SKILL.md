@@ -1,92 +1,116 @@
 ---
 name: tc
-description: Use when the workflow needs to author test cases first — dispatches a `test-writer` subagent to draft the mandatory unit and integration test plans (anchored to this skill's bundled test rules), an optional E2E plan, and the test implementation, while the main session relays user review at each STOP. Keeps test code, rule files, and source out of the main session.
+description: Use when the workflow needs to author test cases first — runs ONE test-authoring flow (mandatory unit + integration plans anchored to this skill's bundled test rules, an optional E2E plan, then the test implementation, with user review at each STOP). Phase 0 asks where the flow runs: this main session (reuses already-loaded code/design, avoids a duplicate cold exploration) or an isolated `test-writer` subagent (keeps test code, rule files, and source out of the main session).
 ---
 
-<role>Write-tests coordinator executing in the main session: spawns exactly ONE `test-writer` subagent for the full planning→implementation arc (unit plan → integration plan → optional E2E plan → implementation), relays user review at each STOP via `SendMessage`, and discusses E2E scenarios with the user in natural language before handing them to the subagent for formalization. Never drafts unit or integration cases, never formalizes any test cases (unit / integration / E2E), never writes or edits test code, never reads test code, rule files, or source files into its own context. Code understanding goes through `u0`, which returns a confirmed gap summary.</role>
+<role>Test-authoring coordinator running in the main session. FIRST asks the user where the flow runs (Phase 0). There is ONE flow — unit plan → integration plan → optional E2E plan → implementation + red phase, gated by the 4 STOPs — and it is IDENTICAL in both modes; only the executor changes:
+- **main-session mode**: this session runs the flow itself — loads the rule files, reuses the code/design already loaded in this conversation (explores only genuine gaps), drafts plans, writes test code, runs the red phase, and presents output at each STOP.
+- **subagent mode**: the same flow is delegated to ONE persistent `test-writer` subagent; this session only spawns it, drives it via `SendMessage`, and relays its output verbatim at each STOP — and to stay lean it never loads rule files or reads source/test code.
+The STOP gating, the both-plans-mandatory rule, the E2E co-definition rule, the red-phase rules, and the test-code-only rule hold identically in both modes — subagent mode merely adds the isolation machinery and restrictions on top of the same flow.</role>
 
 <context>
-**Execution shape.** Main session runs the user-facing STOPs and its own requirement understanding. A single `test-writer` subagent (`general-purpose`, `model: opus`) persists across the whole arc: drafts unit plan → revises on feedback → drafts integration plan → revises → optionally formalizes the E2E plan → revises → implements + red phase. Revisions and mode switches are sent via `SendMessage` to the same subagent. A new session always spawns a fresh subagent; within a session there is exactly one `test-writer`.
+**The flow (both modes).** unit plan → integration plan → optional E2E plan → implementation + red phase. Each plan/implementation step is "produced" by the executor of the chosen mode; the main session always runs the user-facing STOPs and (for E2E) the natural-language scenario discussion.
 
-**Address by agent ID, NOT by name.** The harness assigns each spawned subagent a hex agent ID (e.g. `a94fca458cf6452e6`). The `name: "test-writer"` parameter is for logging/identification only — once the subagent finishes its first response and goes idle, **name routing fails** with `"No agent named 'test-writer' is currently addressable. Spawn a new one or use the agent ID."` ID routing keeps working ("resumed from transcript"). Therefore: capture the agent ID returned by the initial `Agent()` call IMMEDIATELY, store it as `<test_writer_agent_id>`, and use that ID in EVERY subsequent `SendMessage`. Never address by `"test-writer"` after the spawn.
+**Authoritative case-design spec.** The rule files bundled with this skill (listed below) are the single source of truth for test design — they carry the detail of `~/.claude/CLAUDE.md` `<tdd-flow>` gate `2-test-case-design`. Division of duties: unit and integration tests are EQUALLY important with distinct duties; only together do they guarantee correctness — BOTH plans are mandatory, and a unit case that needs to mock a network or a process belongs to integration. The full gate process (gates 0–4) lives in `~/.claude/CLAUDE.md` `<tdd-flow>`; this skill executes gates 2–3. The executor anchors both plans to the rule files.
 
-**test-writer uses `general-purpose`, not a restricted subagent.** It must run tests (`Bash`), write files (`Edit`/`Write`), read test scaffolding (`Read`), and explore code directly using its loaded tool palette (`probe`, LSP, `ast-grep`, `Grep`, `Glob`) per the session's tool-selection rules in `~/.claude/CLAUDE.md` `<tool-usage>` and `~/.claude/skills/shared/tools-ins.md`. The isolation is **context**, not tool restriction. Do NOT narrow its tool inventory.
-
-**Authoritative case-design spec.** The rule files bundled with this skill (listed below) are the single source of truth for test design — they carry the detail of `~/.claude/CLAUDE.md` `<tdd-flow>` gate `2-test-case-design`. Division of duties: unit and integration tests are EQUALLY important with distinct duties; only together do they guarantee correctness — BOTH plans are mandatory in this skill, and a unit case that needs to mock a network or a process belongs to integration. The full gate process (gates 0–4) lives in `~/.claude/CLAUDE.md` `<tdd-flow>`; this skill executes gates 2–3. The subagent anchors both plans to the loaded rule files; the coordinator never reads, restates, or interprets them.
-
-**Test rule files** (loaded by the subagent, never by the coordinator):
+**Test rule files:**
 - `~/.claude/skills/tc/general.md` — always (division of duties, shared discipline, red-phase rules)
 - `~/.claude/skills/tc/unit.md` — unit plan phase
 - `~/.claude/skills/tc/integration.md` — integration plan phase
 - `~/.claude/skills/tc/e2e.md` — only when the user requests E2E
+In main-session mode this session loads them; in subagent mode ONLY the subagent loads them — the coordinator never does.
 
-**Red phase rule** (defined in `~/.claude/skills/tc/general.md`; the coordinator verifies against the subagent summary):
-- New features → ALL new tests MUST fail for missing functionality — not compile or environment errors. Minimal signature stubs (empty bodies returning not-implemented) MAY be introduced to make compilation pass.
+**Red phase rule** (defined in `~/.claude/skills/tc/general.md`):
+- New features → ALL new tests MUST fail for missing functionality — not compile or environment errors. Minimal EMPTY signature stubs for genuinely-NEW symbols MAY be added ONLY to make the package compile; tc writes NO production logic and edits NO existing production symbol — real bodies, rewrites of existing functions, symbol removals/renames, and feature completion are gate-4 only.
 - Bug fixes → the bug-reproducing tests MUST fail; existing tests may pass.
 - Guard cases that pin existing behavior stay green and MUST be labeled as such in both the plan and the summary.
 
-**Two modes of producing a plan:**
-- **Unit & Integration (both MANDATORY)** — subagent-drafted from the bundled rule files + code exploration, in two consecutive rounds: unit first, integration only after the unit plan is confirmed. The subagent proposes cases; user reviews each plan at its own STOP.
-- **E2E (OPTIONAL)** — co-defined in natural-language discussion between main session and user FIRST; the subagent then formalizes the agreed scenarios into rule-compliant cases. The subagent never invents E2E scenarios on its own.
+**Two kinds of plan production (same in both execution modes):**
+- **Unit & Integration (both MANDATORY)** — drafted from the bundled rule files + code exploration, in two consecutive rounds: unit first, integration only after the unit plan is confirmed. The executor proposes cases; the user reviews each plan at its own STOP.
+- **E2E (OPTIONAL)** — co-defined in natural-language discussion between main session and user FIRST; then formalized into rule-compliant cases. E2E scenarios are NEVER invented without user agreement.
 
 **The 4 STOP points (#1, #2, #4 mandatory; #3 conditional):**
-1. After the subagent returns the unit test plan — user confirms/adjusts cases. Revisions loop via `SendMessage`.
-2. After the subagent returns the integration test plan — user confirms/adjusts cases. Revisions loop via `SendMessage`.
-3. After the subagent returns the formalized E2E plan — user approves/adjusts the formalization. Note: BEFORE this STOP, main session and user MUST have already agreed on the scenarios in natural language (step 11); the subagent's job at step 12 is formalization only. Skipped entirely if the user said no in step 9.
-4. After the subagent returns the implementation + red phase summary — user approves or requests changes.
+1. After the unit test plan is produced — user confirms/adjusts cases. Revisions loop.
+2. After the integration test plan is produced — user confirms/adjusts cases. Revisions loop.
+3. After the formalized E2E plan is produced — user approves/adjusts the formalization. BEFORE this STOP, main session and user MUST have already agreed on the scenarios in natural language (step 9). Skipped entirely if the user said no at step 8.
+4. After the implementation + red phase summary is produced — user approves or requests changes.
+
+**Subagent mode only — execution machinery.**
+- One persistent subagent. A single `test-writer` subagent (`general-purpose`, `model: opus`) persists across the whole arc: drafts unit plan → revises → drafts integration plan → revises → optionally formalizes E2E → revises → implements + red phase. A new session always spawns a fresh subagent; within a session there is exactly one `test-writer`. Never spawn a second.
+- Address by agent ID, NOT by name. The harness assigns each spawned subagent a hex agent ID (e.g. `a94fca458cf6452e6`). The `name: "test-writer"` parameter is for logging only — once the subagent goes idle, name routing fails with `"No agent named 'test-writer' is currently addressable. Spawn a new one or use the agent ID."` ID routing keeps working ("resumed from transcript"). Capture the agent ID returned by the initial `Agent()` call IMMEDIATELY, store it as `<test_writer_agent_id>`, and use that ID in EVERY subsequent `SendMessage`.
+- test-writer uses `general-purpose`, not a restricted subagent. It must run tests (`Bash`), write files (`Edit`/`Write`), read test scaffolding (`Read`), and explore code directly (`probe`, LSP, `ast-grep`, `Grep`, `Glob`) per `~/.claude/CLAUDE.md` `<tool-usage>` and `~/.claude/skills/shared/tools-ins.md`. The isolation is **context**, not tool restriction. Do NOT narrow its tool inventory.
 </context>
 
 <instructions>
 Think thoroughly before your first action.
 
-**Phase 1 — Spawn and get unit test plan.**
+**Phase 0 — Choose execution mode.**
+0. Ask the user literally: *"Run test authoring in this main session, or in an isolated subagent? Pick main session if you've already read the code under test and settled the design in this conversation — it reuses that context instead of re-exploring from cold. Pick subagent to keep test code, rule files, and source out of this session."*
+   - **Main session** (default if the answer is unclear) → run Phases 1–4 in THIS session yourself.
+   - **Subagent** → run Phases 1–4 by delegating to one persistent `test-writer`; see `## Subagent mode` for the spawn/`SendMessage`/relay machinery and the extra restrictions.
+   The phases, STOPs, output formats, and rules below are IDENTICAL in both modes — only who executes the work step changes. Do NOT begin until the user has chosen.
 
-1. Call `Agent` with `subagent_type: "general-purpose"`, `name: "test-writer"`, `model: "opus"`, and the prompt from `## Initial spawn prompt` below. Substitute ONLY the `{{...}}` placeholders; change no other text. Never spawn a second `test-writer` in the same session.
-1a. **Capture the agent ID immediately.** The `Agent()` call returns an agent ID (a hex string like `a94fca458cf6452e6`). Save it as `<test_writer_agent_id>` BEFORE doing anything else with the response. This ID is the ONLY reliable way to address the subagent later — name routing breaks once the agent goes idle.
-2. Wait for the subagent to return the unit test plan. Do NOT act on the plan or start any side-work before STOP #1.
-3. **STOP #1.** Paste the plan verbatim (no edits, no commentary). Ask the user literally: *"Confirm this unit test plan or request changes?"*
-4. Apply exactly one branch based on the user response:
-   - **Confirmed** → proceed to step 5.
-   - **Changes requested** → `SendMessage(to: "<test_writer_agent_id>", ...)` using the "Revise plan" template with the user's words verbatim in `{{USER_FEEDBACK}}`, then loop to step 2. Do NOT spawn a new subagent; do NOT apply the changes yourself; do NOT address by name.
+In Phases 1–4 below, **"produce"** means:
+- main-session mode → do it yourself: load the named rule file(s), reuse the code/design already loaded in this conversation and explore only genuine gaps (per `~/.claude/CLAUDE.md` `<tool-usage>`), and draft/write/run directly.
+- subagent mode → have the `test-writer` do it via the matching message in `## Subagent mode`, and take what it returns.
 
-**Phase 2 — Get integration test plan (mandatory).**
+**Plans are for review, not for implementation detail.** Every plan presented at a STOP states, per case, ONLY: name, the behavior/contract under test, and the expected observable result — plus a `Decisions to approve` line for scope-changing choices (behavior deletions, migrations, mocked boundaries). Mechanics — file:line targets, seams, fixtures, stubs, gate-4 hazards, migration source line numbers — are the executor's to track for implementation and surface in the STOP #4 summary, NEVER in the plan. Keep it skimmable; if the user won't read it, the STOP is wasted.
 
-5. `SendMessage(to: "<test_writer_agent_id>", ...)` using the "Draft integration plan" template below (it has no placeholders; send it verbatim).
-6. Wait for the subagent to return the integration test plan. Do NOT act on it before STOP #2.
-7. **STOP #2.** Paste the plan verbatim (no edits, no commentary). Ask the user literally: *"Confirm this integration test plan or request changes?"*
-8. Apply exactly one branch based on the user response:
-   - **Confirmed** → proceed to step 9.
-   - **Changes requested** → `SendMessage` with the "Revise plan" template and the user's words verbatim in `{{USER_FEEDBACK}}`, then loop to step 6. Do NOT spawn a new subagent; do NOT apply the changes yourself.
+**Phase 1 — Unit test plan.**
+1. Produce the UNIT test plan in `<plan_output_format>` (rule files: `general.md` + `unit.md`). A candidate case that needs to mock a network or a process belongs to integration — exclude it here and list it under `Notes` as deferred-to-integration.
+2. **STOP #1.** Present the plan (subagent mode: paste verbatim, no edits, no commentary). Ask the user literally: *"Confirm this unit test plan or request changes?"*
+3. Apply exactly one branch:
+   - **Confirmed** → Phase 2.
+   - **Changes requested** → revise the plan with the user's words verbatim (main-session mode: edit it yourself; subagent mode: `SendMessage` the "Revise plan" template with the user's words in `{{USER_FEEDBACK}}`), then loop to step 2. Do NOT advance to implementation.
 
-**Phase 3 — Optional E2E plan (co-defined with user, then formalized by subagent).**
+**Phase 2 — Integration test plan (mandatory).**
+4. Produce the INTEGRATION test plan in `<plan_output_format>` (`Test type: integration`; load `integration.md`; `general.md` stays loaded; do NOT revisit `unit.md`). Cover EVERY relevant interface `integration.md` enumerates, pick up every case the unit plan deferred under its `Notes`, and do NOT duplicate what the unit plan already locks.
+5. **STOP #2.** Present the plan (subagent mode: paste verbatim). Ask the user literally: *"Confirm this integration test plan or request changes?"*
+6. Apply exactly one branch:
+   - **Confirmed** → Phase 3.
+   - **Changes requested** → revise with the user's words verbatim (same mechanics as step 3), loop to step 5.
 
-9. Ask the user literally: *"Do you need E2E tests?"*
-10. Apply exactly one branch based on the user answer:
-    - **No** (default) → skip to step 15.
-    - **Yes** → proceed to step 11.
-11. **Discuss E2E scenarios with the user.** Propose 2–5 candidate scenarios in natural language, drawn from the `u0` summary and the requirement. Ask the user to keep / drop / add. Iterate until the list is explicitly agreed. Stay in natural language: do NOT format into cases, do NOT pick file:line targets, do NOT load test-rule files. Output of this step: `{{AGREED_SCENARIOS}}`.
-12. `SendMessage(to: "<test_writer_agent_id>", ...)` using the "Formalize E2E plan" template, populated with `{{AGREED_SCENARIOS}}` from step 11.
-13. Wait for the subagent to return the formalized plan. **STOP #3.** Paste verbatim (no edits, no commentary). Ask the user literally: *"Confirm this formalized E2E plan or request changes?"*
-14. Apply exactly one branch based on the user response:
-    - **Confirmed** → proceed to step 15.
-    - **Scenario-level changes** (add / drop / replace a scenario) → loop back to step 11 to re-discuss; do NOT send scenario edits as `SendMessage` revisions, because the subagent did not propose the scenarios.
-    - **Formalization-level changes only** (wording, file:line, case naming, rule alignment) → `SendMessage` with the "Revise plan" template and the user's words verbatim in `{{USER_FEEDBACK}}`, then loop to step 13. Do NOT spawn a new subagent; do NOT edit the plan yourself.
+**Phase 3 — Optional E2E plan (co-defined with user, then formalized).**
+7. Ask the user literally: *"Do you need E2E tests?"*
+8. Apply exactly one branch:
+   - **No** (default) → skip to Phase 4.
+   - **Yes** → step 9.
+9. **Discuss E2E scenarios with the user** (always main session, both modes). Propose 2–5 candidate scenarios in natural language, drawn from the requirement/understanding. Ask the user to keep / drop / add. Iterate until the list is explicitly agreed. Stay in natural language: do NOT format into cases, do NOT pick file:line targets. Output: `{{AGREED_SCENARIOS}}`.
+10. Produce the FORMALIZED E2E plan in `<plan_output_format>` (`Test type: e2e`; load `e2e.md`) from `{{AGREED_SCENARIOS}}` only — never invent scenarios beyond the agreed list; if one is infeasible, flag it under `Notes` with the closest feasible alternative for user approval.
+11. **STOP #3.** Present the plan (subagent mode: paste verbatim). Ask the user literally: *"Confirm this formalized E2E plan or request changes?"*
+12. Apply exactly one branch:
+    - **Confirmed** → Phase 4.
+    - **Scenario-level changes** (add / drop / replace a scenario) → loop back to step 9 to re-discuss (subagent mode: do NOT send scenario edits as a "Revise plan" message — the executor did not propose the scenarios).
+    - **Formalization-level changes only** (wording, file:line, case naming, rule alignment) → revise with the user's words verbatim (same mechanics as step 3), loop to step 11.
 
 **Phase 4 — Implement and review.**
-
-15. `SendMessage(to: "<test_writer_agent_id>", ...)` using the "Proceed to implementation" template. Do NOT re-spawn; do NOT attempt to write tests yourself even if the subagent seems slow.
-16. Wait for the subagent to return the implementation + red phase summary. **STOP #4.** Paste verbatim (no edits, no summarization). Ask the user literally: *"Test code complete. Would you like to review or change anything before proceeding?"*
-17. Apply exactly one branch based on the user response:
-    - **Approved** → proceed to step 18.
-    - **Changes requested** → `SendMessage` with the user's words verbatim in `{{USER_FEEDBACK}}`, then loop to step 16. Do NOT spawn a new subagent; do NOT edit the test files yourself.
-18. Return control to the caller with the `<output_format>` block. Do NOT continue into implementation of the feature under test — that is the caller's next step.
+13. Produce the implementation + red phase: write test files for EXACTLY the confirmed cases (unit + integration + E2E if confirmed) following the project's existing test framework; add minimal EMPTY signature stubs for genuinely-NEW symbols ONLY if needed to compile; write NO production logic and edit NO existing production symbol. Run the suite via `Bash`, capture real runner output, and verify the red phase per `general.md`'s red-phase rules. Return the `<impl_output_format>`.
+14. **STOP #4.** Present the summary (subagent mode: paste verbatim, no summarization). Ask the user literally: *"Test code complete. Would you like to review or change anything before proceeding?"*
+15. Apply exactly one branch:
+    - **Approved** → step 16.
+    - **Changes requested** → revise with the user's words verbatim (same mechanics as step 3), loop to step 14.
+16. Return control to the caller with the `<output_format>` block. Do NOT continue into implementation of the feature under test — that is the caller's gate-4 step.
 </instructions>
 
 <input>
 - {{REQUIREMENT_SUMMARY}}: confirmed requirement description handed in by the caller (the `<tdd-flow>` gate-0 confirmation)
 - {{FILES_UNDER_TEST}}: `file:line` pointers to the modules/functions under test
-- {{CONTEXT_NOTES}}: optional `u0` summary and/or the confirmed interface/flow design (gate-1 contracts) the subagent should anchor to; pass literal `none` if not supplied
+- {{CONTEXT_NOTES}}: optional `u0` summary and/or the confirmed interface/flow design (gate-1 contracts) to anchor to; pass literal `none` if not supplied
+(In subagent mode these are substituted into the spawn prompt below. In main-session mode they are already present in this conversation — use them directly.)
 </input>
+
+## Subagent mode
+
+Chosen at Phase 0. The entire Phase 1–4 flow is executed by ONE persistent `test-writer` subagent; this session spawns it, drives it, and relays its output verbatim at each STOP. Mapping from flow step → message:
+- Phase 1 step 1 "produce" → `Agent(...)` with the `## Initial spawn prompt`; capture the agent ID at once.
+- any phase "revise" → `SendMessage` "Revise plan".
+- Phase 2 step 4 "produce" → `SendMessage` "Draft integration plan".
+- Phase 3 step 10 "produce" → `SendMessage` "Formalize E2E plan".
+- Phase 4 step 13 "produce" → `SendMessage` "Proceed to implementation".
+
+Every `SendMessage` addresses `<test_writer_agent_id>` (the captured hex ID), NEVER the name. Substitute only `{{...}}` placeholders; change no other template text. The `<plan_output_format>` and `<impl_output_format>` referenced by the flow are defined inside the templates below and apply to both modes.
+
+**Spawn (Phase 1):** Call `Agent` with `subagent_type: "general-purpose"`, `name: "test-writer"`, `model: "opus"`, and the `## Initial spawn prompt`. Capture the returned agent ID as `<test_writer_agent_id>` BEFORE anything else. Never spawn a second `test-writer`.
 
 ## Initial spawn prompt
 
@@ -108,18 +132,17 @@ You are the test-writer subagent. You persist across the whole planning→implem
    Extract only the rule sections relevant to the requirement.
 2. The loaded rule files are authoritative for case design — apply `unit.md`'s division of duties in full. If a candidate case needs to mock a network or a process, it belongs to the integration plan — exclude it here and list it under `Notes` as deferred-to-integration.
 3. Run any code exploration needed to design test cases directly in your own session, following `~/.claude/CLAUDE.md` `<tool-usage>` and `~/.claude/skills/shared/tools-ins.md`. Prefer `probe.extract_code(files=["path#Symbol", ...])` with anchors over whole-file `Read`.
-4. Draft a unit test plan. For each case: name, scenario (happy path / edge / error), expected behavior, target file:line. Label guard cases that pin existing behavior as such.
-5. Return ONLY the <plan_output_format> below. No code, no rule dumps.
+4. Draft a unit test plan. For each case give ONLY what the user needs to review: name, the behavior/contract it pins (happy path / edge / error), and the expected observable result. Label guard cases as such. Surface scope-changing choices (behavior deletions, migrations, any mocked boundary) under `Decisions to approve`. Keep mechanics (target file:line, seams, fixtures, stubs, gate-4 hazards) OUT of the plan — track them for the implementation phase, where they appear in the impl summary.
+5. Return ONLY the <plan_output_format> below. No code, no rule dumps, no mechanics — keep it skimmable.
 </instructions>
 
 <plan_output_format>
 Test type:    unit
-Files under test: <file:line list>
 Cases:
-  - <name>: <scenario> → <expected behavior> [target: file:line]
+  - <name>: <behavior/contract under test> → <expected observable result>
   - ...
-Rule sources: <which rule files consulted>
-Notes: <any assumption, ambiguity, or case deferred to integration>
+Decisions to approve: <only scope-changing choices — behavior deletions, migrations, any mocked boundary; one line each. Omit if none.>
+Notes: <genuine open questions, ambiguities, or cases deferred to integration — NOT mechanics (no file:line, seams, fixtures, gate-4 hazards)>
 Confidence: high | medium | low
 </plan_output_format>
 
@@ -133,7 +156,7 @@ P0 — Load ONLY `general.md` + `unit.md`. Do NOT preload `integration.md` or `e
 
 ## SendMessage templates
 
-Each template is sent via `SendMessage(to: "<test_writer_agent_id>", message: "<filled template>")`, where `<test_writer_agent_id>` is the hex agent ID captured at step 1a. Substitute only the `{{...}}` placeholders inside the template body.
+Each template is sent via `SendMessage(to: "<test_writer_agent_id>", message: "<filled template>")`, where `<test_writer_agent_id>` is the hex agent ID captured at spawn. Substitute only the `{{...}}` placeholders inside the template body.
 
 ### Revise plan
 
@@ -153,7 +176,7 @@ The unit test plan is confirmed. Draft the INTEGRATION test plan now — plannin
 1. Load `~/.claude/skills/tc/integration.md` (`general.md` stays loaded; do NOT revisit `unit.md`, do NOT load `e2e.md`).
 2. The loaded `integration.md` is authoritative: cover EVERY relevant interface it enumerates and obey its consistency rules in full. Do NOT duplicate what the confirmed unit plan already locks. Pick up every case the unit plan deferred to integration under its `Notes`.
 3. Run any additional code exploration needed in your own session, same tool rules as before.
-4. Return ONLY the <plan_output_format> with `Test type: integration`. No code, no rule dumps. After returning, STOP and wait for the next message.
+4. Return ONLY the <plan_output_format> with `Test type: integration` — per case, what it pins + expected result; scope-changing choices under `Decisions to approve`; mechanics (file:line / seams / fixtures / gate-4 hazards) kept for implementation, NOT in the plan. No code, no rule dumps, keep it skimmable. After returning, STOP and wait for the next message.
 </instructions>
 ```
 
@@ -167,7 +190,7 @@ Agreed scenarios (natural-language, exactly as discussed):
 
 Load `~/.claude/skills/tc/e2e.md`. Do NOT revisit `unit.md` or `integration.md` — those plans are already confirmed.
 
-For each agreed scenario, produce one formalized case: name, scenario summary, expected behavior, target file:line where applicable, rule-compliant phrasing. Return one <plan_output_format> block with `Test type: e2e`. Do NOT write test code, do NOT advance to implementation. After returning, STOP and wait for the next message.
+For each agreed scenario, produce one formalized case: name, the behavior/journey under test, and the expected observable result, in rule-compliant phrasing. Keep mechanics (target file:line, fixtures) out of the plan. Return one <plan_output_format> block with `Test type: e2e`. Do NOT write test code, do NOT advance to implementation. After returning, STOP and wait for the next message.
 ```
 
 ### Proceed to implementation
@@ -176,10 +199,10 @@ For each agreed scenario, produce one formalized case: name, scenario summary, e
 All plans confirmed by user. Proceed to implementation.
 
 <instructions>
-1. Write test files for EXACTLY the confirmed cases — unit + integration (+ E2E if confirmed), one file or more per test type, following the project's existing test framework and conventions. Do NOT invent new cases, do NOT silently drop confirmed cases. If you discover a confirmed case is infeasible, STOP and report back instead of dropping it.
+1. Write test files for EXACTLY the confirmed cases — unit + integration (+ E2E if confirmed), one file or more per test type, following the project's existing test framework and conventions. Do NOT invent new cases, do NOT silently drop confirmed cases. If you discover a confirmed case is infeasible, STOP and report back instead of dropping it. You write `*_test.go` files plus, only if needed to compile, minimal EMPTY signature stubs for genuinely-NEW symbols (not-implemented bodies). You MUST NOT implement production behavior, MUST NOT edit/rewrite/remove/rename any existing production symbol, MUST NOT put logic in a stub — that is gate-4.
 2. Follow the shared discipline in the loaded `general.md`: temp dirs and path hooks for persistence, injected clocks, no randomness; real child processes reaped asynchronously; waits poll with deadlines, never bare sleeps; case names state the contract, not the implementation.
 3. Actually execute the test suite via `Bash` and capture real runner output. Verify the red phase per the red-phase rules in `general.md`:
-   - New features: ALL new tests MUST fail for missing functionality — not compile or environment errors. Minimal signature stubs (empty bodies returning not-implemented) MAY be introduced to make compilation pass. If a new test passes without the feature implemented, the test is wrong — fix the test (not the assertion, not with a skip marker).
+   - New features: ALL new tests MUST fail for missing functionality — not compile or environment errors. Minimal EMPTY signature stubs for NEW symbols MAY be introduced ONLY to make compilation pass; you MUST NOT fill a stub with logic, edit an existing production function's body, or remove/rename existing symbols — if compiling or going red would require that, STOP and report it as gate-4 work. If a new test passes without the feature implemented, the test is wrong — fix the test (not the assertion, not with a skip marker).
    - Bug fixes: the new bug-reproducing tests MUST fail; existing tests may pass.
    - Guard cases labeled as pinning existing behavior stay green; report them as such.
    Do NOT use `xit`, `.skip`, `todo`, `pending`, or commented-out assertions to manufacture a green/red result.
@@ -200,91 +223,110 @@ P0 — NEVER claim red phase passed without running the test suite via Bash and 
 P0 — NEVER paste test code, source, or runner stdout back. Return file:line summaries only.
 P0 — If a test unexpectedly passes, fix the test to exercise the missing behavior; do NOT lower the bar, do NOT mark skip/todo.
 P0 — Write exactly the confirmed cases. Additions, deletions, or renames require reporting under `Notes` with a reason.
+P0 — Test code + EMPTY new-symbol compile stubs ONLY. NEVER implement production behavior, NEVER edit/rewrite/remove/rename an existing production symbol, NEVER put logic in a stub. If a red test would only pass by writing production code, STOP and report — that is gate-4, not yours.
 P1 — Use the project's existing test framework. Do NOT introduce a new one.
 </subagent_final_reminders>
 ```
 
 <examples>
-<example>
-SCENARIO: Caller (`<tdd-flow>` gates 0–1 confirmed) hands over "add email validation to signup". No E2E needed.
+<example label="subagent mode">
+SCENARIO: Caller (`<tdd-flow>` gates 0–1 confirmed) hands over "add email validation to signup". Main session is light (code not loaded here). No E2E needed.
 ACTIONS:
-  1. Spawn `test-writer` with the initial prompt. Subagent returns unit plan: 5 cases (empty, malformed, valid, unicode, max-length).
-  2. STOP #1. User: "add duplicate-email".
-  3. `SendMessage` with "Revise plan" template. Subagent returns 6-case plan (duplicate-email deferred to integration under Notes — needs the user store).
-  4. STOP #1 again. User: "good".
-  5. `SendMessage` with "Draft integration plan". Subagent returns integration plan: 4 cases (signup happy path through the real handler, malformed email rejected at the API boundary with status + log, duplicate-email outcome case against a real temp store, seam case: real server handler + real client function).
-  6. STOP #2. User: "good".
-  7. Ask E2E. User: no.
-  8. `SendMessage` with "Proceed to implementation". Subagent returns: 2 test files, 10 cases, 10 red, used general.md + unit.md + integration.md, confidence high.
-  9. STOP #4. User: "looks good".
-  10. Return Status: confirmed.
+  1. Phase 0: user picks subagent.
+  2. Spawn `test-writer` with the initial prompt; capture the agent ID. Subagent returns unit plan: 5 cases (empty, malformed, valid, unicode, max-length).
+  3. STOP #1. User: "add duplicate-email". `SendMessage` "Revise plan". Subagent returns 6-case plan (duplicate-email deferred to integration under Notes). STOP #1 again. User: "good".
+  4. `SendMessage` "Draft integration plan". Subagent returns 4 cases (signup happy path, malformed rejected at the API boundary with status + log, duplicate-email against a real temp store, real server handler + real client function seam).
+  5. STOP #2. User: "good". Ask E2E. User: no.
+  6. `SendMessage` "Proceed to implementation". Subagent returns: 2 test files, 10 cases, 10 red, confidence high. STOP #4. User: "looks good". Return Status: confirmed.
 </example>
 
-<example>
+<example label="subagent mode + E2E">
 SCENARIO: Same requirement, but user wants E2E too.
 ACTIONS:
-  1–6 identical to above.
-  7. Ask E2E. User: "yes".
-  8. Branch: yes → step 11. Discuss scope. Coordinator (using `u0` summary) proposes 3 candidate journeys: (a) signup with malformed email → inline error, (b) signup with already-used email → inline error, (c) signup with mismatched password confirm. User: "(a) and (b), drop (c) — handled elsewhere". Agreed: AGREED_SCENARIOS=[a, b].
-  9. `SendMessage` with "Formalize E2E plan" template. Subagent returns formalized E2E plan with 2 cases (target file:line, rule-compliant phrasing).
-  10. STOP #3. User: "looks good".
-  11. Branch: confirmed → step 15.
-  12. `SendMessage` with "Proceed to implementation". Subagent returns combined summary (1 unit file + 1 integration file + 1 E2E file, all red).
-  13. STOP #4 → confirmed. Return.
+  1–4 identical to above (through STOP #2 confirmed).
+  5. Ask E2E. User: "yes". Discuss scope (using the requirement/understanding): propose 3 candidate journeys — (a) malformed email → inline error, (b) already-used email → inline error, (c) mismatched password confirm. User: "(a) and (b), drop (c)". AGREED_SCENARIOS=[a, b].
+  6. `SendMessage` "Formalize E2E plan". Subagent returns formalized E2E plan, 2 cases. STOP #3. User: "looks good".
+  7. `SendMessage` "Proceed to implementation". Subagent returns combined summary (unit + integration + E2E files, all red). STOP #4 → confirmed. Return.
 </example>
 
-<example label="BAD — do not do this">
-- Drafting unit OR integration cases yourself in main session. Both are the subagent's territory (it has rule + code context, you do not).
-- Discussing integration scenarios with the user in natural language and sending them to the subagent as "agreed scenarios". Integration is subagent-drafted from the bundled rule files + code exploration; only E2E goes through user co-definition.
-- Skipping the integration plan because "the unit plan covers enough". Unit and integration are EQUALLY important per `~/.claude/skills/tc/general.md` — both plans are mandatory.
-- Merging unit and integration into one plan / one STOP. They are two separate plans with two separate STOPs (#1, #2), drafted in two consecutive rounds.
-- Letting the subagent invent E2E scenarios autonomously. E2E scenarios MUST be discussed and agreed with the user in step 11 BEFORE the subagent sees them. The subagent's job at step 12 is formalization, not generation.
-- Skipping step 11's discussion and sending raw user words as "agreed scenarios". Step 11 is a real collaborative discussion — you propose candidates, the user keeps/drops/adds — not a stenography step.
-- Formalizing the E2E plan yourself in main session (writing case names, file:line, rule-compliant phrasing). Formalization belongs to the subagent.
-- Reading the bundled rule files (`~/.claude/skills/tc/general.md`, `unit.md`, `integration.md`, `e2e.md`) in main session. The subagent loads rules; the coordinator never does.
-- Spawning a second `test-writer` within the same session. Revisions and mode switches always use `SendMessage` to the captured agent ID.
-- Calling `SendMessage(to: "test-writer", ...)` with the literal name. After the first response the agent is idle and name routing returns `"No agent named 'test-writer' is currently addressable"`. ALWAYS address by `<test_writer_agent_id>`.
-- Forgetting to capture the agent ID at step 1a. Without the ID you cannot resume the subagent — your only options become spawning a fresh one (forbidden by P0) or aborting.
-- Modifying the spawn prompt or SendMessage templates beyond `{{...}}` substitution.
-- Narrowing `test-writer`'s tool inventory to remove `Bash` or any of the code-exploration tools (`probe`, LSP, `ast-grep`, `Grep`, `Glob`).
-- Asking the user "E2E?" before STOP #2 is satisfied.
-- Skipping STOP #3 silently when the user said yes.
+<example label="main-session mode">
+SCENARIO: Same "add email validation to signup", but the user has already read the signup code and settled the design in THIS conversation; at Phase 0 they pick main session.
+ACTIONS:
+  1. Phase 0: user picks main session.
+  2. Phase 1: load `general.md` + `unit.md`; REUSE the already-loaded signup code (no cold re-exploration — only probe genuine gaps); draft the unit plan (5 cases) in `<plan_output_format>`. STOP #1. User: "add duplicate-email". Edit the plan inline (duplicate-email deferred to integration under Notes). STOP #1 again. User: "good".
+  3. Phase 2: load `integration.md`; draft 4 integration cases inline. STOP #2. User: "good".
+  4. Phase 3: ask E2E. User: no.
+  5. Phase 4: write 2 test files (+ any empty new-symbol stubs); run the suite via `Bash`; 10 red as expected. STOP #4. User: "looks good".
+  6. Return Status: confirmed.
+</example>
+
+<example label="BAD — both modes">
+- Discussing INTEGRATION scenarios with the user in natural language and treating them as agreed scenarios. Integration is drafted from the bundled rule files + code exploration; only E2E goes through user co-definition.
+- Skipping the integration plan because "the unit plan covers enough." Unit and integration are EQUALLY important — both plans are mandatory.
+- Merging unit and integration into one plan / one STOP. They are two separate plans with two separate STOPs (#1, #2), in two consecutive rounds.
+- Letting E2E scenarios be produced without step 9's explicit user agreement, or skipping step 9's discussion and sending raw user words as "agreed scenarios". Step 9 is a real collaboration (propose / keep / drop / add).
+- Asking "E2E?" before STOP #2 is satisfied. Skipping STOP #3 silently when the user said yes.
+- Inferring consent for one STOP from approval of another. A "go ahead" satisfies only the STOP it was given for.
+- Writing production logic, filling a stub with logic, or editing/renaming an existing production symbol to make a test go green. That is gate-4 — STOP and report.
+</example>
+
+<example label="BAD — subagent mode">
+- Drafting or formalizing cases yourself in the main session. In this mode that is the subagent's territory (it has rule + code context, you do not).
+- Reading the bundled rule files (`general.md` / `unit.md` / `integration.md` / `e2e.md`), source, or test code into the main session.
+- Spawning a second `test-writer`. Revisions and mode switches always use `SendMessage` to the captured agent ID.
+- Calling `SendMessage(to: "test-writer", ...)` with the literal name after the first response — name routing returns `"No agent named 'test-writer' is currently addressable"`. ALWAYS address by `<test_writer_agent_id>`.
+- Forgetting to capture the agent ID at spawn — without it you can neither resume nor (legally) continue.
+- Modifying the spawn prompt or any SendMessage template beyond `{{...}}` substitution. Narrowing `test-writer`'s tool inventory.
 - Pasting subagent output with edits or commentary. Paste verbatim.
-- Sending scenario-level E2E changes (add/drop/replace a scenario) as a "Revise plan" `SendMessage`. Scenario edits require re-discussing in step 11 — the subagent didn't propose the scenarios, so it can't revise them. Only formalization-level changes go through "Revise plan".
+- Sending scenario-level E2E changes (add/drop/replace) as a "Revise plan" `SendMessage`. Scenario edits require re-discussing in step 9.
+</example>
+
+<example label="BAD — main-session mode">
+- Re-exploring the code from cold when this conversation already holds it. The whole reason for this mode is to reuse loaded context — only probe genuine gaps.
+- Skipping a STOP because "I authored it myself, so review is unnecessary." Every STOP still gates on the user.
+- Treating "I'm in the same session now" as license to write production logic. Test code + empty stubs ONLY, in both modes.
 </example>
 </examples>
 
 <output_format>
 Status:        confirmed | aborted
-Test files:    <copied verbatim from subagent implementation summary>
-Red results:   <copied verbatim from subagent implementation summary>
+Test files:    <from the implementation summary>
+Red results:   <from the implementation summary>
 Notes:         <any user-requested deviations resolved during review>
 </output_format>
 
 <success_criteria>
 Complete when ALL of these hold:
-- STOP #1 satisfied (unit plan confirmed via subagent-returned plan).
-- STOP #2 satisfied (integration plan confirmed via subagent-returned plan).
-- STOP #3 satisfied OR skipped per step 10.
-- Subagent returned an implementation summary with all `<impl_output_format>` slots filled.
+- STOP #1 satisfied (unit plan confirmed).
+- STOP #2 satisfied (integration plan confirmed).
+- STOP #3 satisfied OR skipped per step 8.
+- An implementation summary with all `<impl_output_format>` slots filled was produced.
 - STOP #4 satisfied.
 - Red-phase result reported with `file:line` and matches the rule.
-- No test code, rule content, or source was read into the main session.
+- (subagent mode only) No test code, rule content, or source was read into the main session.
 
 Stop the moment those hold.
 </success_criteria>
 
 <final_reminders>
-P0 — Main session NEVER drafts unit or integration cases, NEVER formalizes any test case (unit / integration / E2E), NEVER writes or edits test files, and NEVER reads the bundled rule files (`~/.claude/skills/tc/general.md` / `unit.md` / `integration.md` / `e2e.md`), test code, or source files into its own context. Discussing E2E scenarios in natural language with the user (step 11) IS allowed and required — that is scope-setting, not formalization. Rule consultation, case drafting, case formalization, and code writing all belong to the `test-writer` subagent. Use `u0` — which returns a confirmed gap summary — for any code understanding.
-P0 — Unit AND integration plans are BOTH mandatory and EQUALLY important per `~/.claude/skills/tc/general.md`: two separate plans, two separate STOPs (#1 then #2), drafted by the subagent in two consecutive rounds. Never merge them into one STOP, never skip the integration round.
-P0 — Production modes, do not blur them. Unit and integration cases: subagent drafts from the bundled rule files + code exploration, user reviews at STOP #1/#2. E2E cases (optional): main session + user co-define scenarios in natural language FIRST (step 11), then subagent formalizes the agreed scenarios into rule-compliant cases (step 12). Subagent NEVER invents E2E scenarios; main session NEVER drafts or formalizes any cases.
-P0 — Exactly ONE `test-writer` per session. Revisions, mode switches, and implementation ALL go through `SendMessage(to: "<test_writer_agent_id>", ...)`. Spawning a second subagent breaks the review chain and is forbidden.
-P0 — Address the subagent by ID, NEVER by name. Capture the agent ID at step 1a immediately after `Agent()` returns and use it in every subsequent `SendMessage`. Name routing fails the moment the subagent goes idle (after its first response) — the harness will reject `to: "test-writer"` with `"No agent named 'test-writer' is currently addressable"`. The ID resumes the same agent from transcript with full context preserved.
+**Both modes (invariants — never relax):**
+P0 — tc writes TEST CODE + EMPTY new-symbol compile stubs and NOTHING ELSE. Any production logic, real function body, rewrite of an existing function, symbol removal/rename, or feature completion is a HARD VIOLATION — reject it at STOP #4 and send it back. Production implementation is exclusively the caller's gate-4 step.
+P0 — Unit AND integration plans are BOTH mandatory and EQUALLY important per `~/.claude/skills/tc/general.md`: two separate plans, two separate STOPs (#1 then #2), in two consecutive rounds. Never merge them, never skip the integration round.
+P0 — Plan production, do not blur the two kinds. Unit and integration: drafted from the bundled rule files + code exploration, user reviews at STOP #1/#2. E2E (optional): main session + user co-define scenarios in natural language FIRST (step 9), then formalize the agreed scenarios (step 10). NEVER invent E2E scenarios; step 9 is a real collaboration, not stenography.
 P0 — STOP points #1, #2, and #4 are always mandatory; #3 is mandatory whenever the user requested E2E. A "go ahead" satisfies only the STOP it was given for. Never infer consent for STOP #N from approval of STOP #M.
-P0 — Never claim red phase passed without the subagent returning runner output that proves it. If the subagent's `Red results` slot is empty or hedged, reject and `SendMessage` for a real run before proceeding.
-P0 — If the `Agent` tool is missing from your inventory, you are inside a subagent — cannot dispatch. Escalate to the user; do NOT write tests in place. Subagents cannot spawn subagents (`~/.claude/skills/HARNESS_REFERENCE.md` §1).
-P1 — Paste subagent output verbatim to the user at every STOP. Do NOT summarize the summary, do NOT strip fields, do NOT reformat.
-P1 — Do NOT modify the spawn prompt or any SendMessage template beyond `{{...}}` substitution. The templates are the contract.
-P1 — Do NOT narrow `test-writer`'s tool inventory. It needs `Bash`, `Edit`, `Write`, `Read`, and the code-exploration tools (`probe`, LSP, `ast-grep`, `Grep`, `Glob`) to do its job.
-P2 — Use `u0` in the main session for your own requirement understanding before spawning. The subagent runs test-specific exploration directly in its own session per the loaded tool-usage rules.
+P0 — Never claim the red phase passed without runner output that proves it: new-feature tests fail for missing functionality (not compile/env errors), bug-repro tests fail, labeled guard cases stay green. Never manufacture a result with `xit`/`.skip`/`todo`/`pending`/commented-out assertions.
+
+**Subagent mode only:**
+P0 — Main session NEVER drafts cases, NEVER formalizes any case, NEVER writes/edits/reads test files, and NEVER reads the bundled rule files or source into its own context. Use `u0` (returns a confirmed gap summary) for any code understanding. Discussing E2E scenarios in natural language at step 9 IS allowed and required — that is scope-setting, not formalization.
+P0 — Exactly ONE `test-writer` per session. Revisions, mode switches, and implementation ALL go through `SendMessage(to: "<test_writer_agent_id>", ...)`. Spawning a second subagent breaks the review chain and is forbidden.
+P0 — Address the subagent by ID, NEVER by name. Capture the agent ID immediately after `Agent()` returns; name routing fails the moment the subagent goes idle. The ID resumes the same agent from transcript with full context preserved.
+P0 — If the `Agent` tool is missing from your inventory, you are already inside a subagent and cannot dispatch — fall back to main-session mode, or escalate to the user; do NOT write tests blindly. Subagents cannot spawn subagents (`~/.claude/skills/HARNESS_REFERENCE.md` §1).
+P1 — Paste subagent output verbatim at every STOP. Do NOT summarize, strip fields, or reformat.
+P1 — Do NOT modify the spawn prompt or any `SendMessage` template beyond `{{...}}` substitution. The templates are the contract.
+P1 — Do NOT narrow `test-writer`'s tool inventory. It needs `Bash`, `Edit`, `Write`, `Read`, and the code-exploration tools (`probe`, LSP, `ast-grep`, `Grep`, `Glob`).
+
+**Main-session mode only:**
+P0 — You run the whole flow yourself: load the rule files, REUSE the code/design already loaded in this conversation (explore only genuine gaps — do NOT re-explore from cold), draft plans, write tests, run the red phase. Every "both modes" invariant above still binds you — STOPs, both plans, E2E co-definition, test-code-only, real red-phase proof.
+P1 — Present each plan/summary for review at its STOP exactly as in subagent mode; the only difference is you authored it, so there is nothing to "paste verbatim" — present your own output and ask the literal STOP question.
+P2 — Reach for `u0` only if a needed area is NOT already loaded; the point of this mode is to avoid re-reading what the session already holds.
 </final_reminders>
