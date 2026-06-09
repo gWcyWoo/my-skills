@@ -54,7 +54,7 @@ In Phases 1–4 below, **"produce"** means:
 - main-session mode → do it yourself: load the named rule file(s), reuse the code/design already loaded in this conversation and explore only genuine gaps (per `~/.claude/CLAUDE.md` `<tool-usage>`), and draft/write/run directly.
 - subagent mode → have the `test-writer` do it via the matching message in `## Subagent mode`, and take what it returns.
 
-**Plans are for review, not for implementation detail.** Every plan presented at a STOP states, per case, ONLY: name, the behavior/contract under test, and the expected observable result — plus a `Decisions to approve` line for scope-changing choices (behavior deletions, migrations, mocked boundaries). Mechanics — file:line targets, seams, fixtures, stubs, gate-4 hazards, migration source line numbers — are the executor's to track for implementation and surface in the STOP #4 summary, NEVER in the plan. Keep it skimmable; if the user won't read it, the STOP is wasted.
+**Plans are a terse coverage outline, not implementation detail.** Every plan at a STOP groups cases by capability/behavior (group header = the GOAL); each case is one line = its BOUNDARY (condition / range / edge) → expected result / what must NOT happen. User-facing names only. Mechanics — internal symbol names, file:line, seams, fixtures, stubs, gate-4 hazards, migration source line numbers — are the executor's to track for implementation and surface in the STOP #4 summary, NEVER in the plan. The user reads coverage directly; keep it 言简意赅.
 
 **Phase 1 — Unit test plan.**
 1. Produce the UNIT test plan in `<plan_output_format>` (rule files: `general.md` + `unit.md`). A candidate case that needs to mock a network or a process belongs to integration — exclude it here and list it under `Notes` as deferred-to-integration.
@@ -132,17 +132,20 @@ You are the test-writer subagent. You persist across the whole planning→implem
    Extract only the rule sections relevant to the requirement.
 2. The loaded rule files are authoritative for case design — apply `unit.md`'s division of duties in full. If a candidate case needs to mock a network or a process, it belongs to the integration plan — exclude it here and list it under `Notes` as deferred-to-integration.
 3. Run any code exploration needed to design test cases directly in your own session, following `~/.claude/CLAUDE.md` `<tool-usage>` and `~/.claude/skills/shared/tools-ins.md`. Prefer `probe.extract_code(files=["path#Symbol", ...])` with anchors over whole-file `Read`.
-4. Draft a unit test plan. For each case give ONLY what the user needs to review: name, the behavior/contract it pins (happy path / edge / error), and the expected observable result. Label guard cases as such. Surface scope-changing choices (behavior deletions, migrations, any mocked boundary) under `Decisions to approve`. Keep mechanics (target file:line, seams, fixtures, stubs, gate-4 hazards) OUT of the plan — track them for the implementation phase, where they appear in the impl summary.
+4. Draft a unit test plan as a terse coverage outline: GROUP cases by the capability/behavior under test (group header = the GOAL); under each, one line per case = its BOUNDARY (the condition / range / edge that distinguishes it) → expected result / what must NOT happen. Label guard cases as such. Use only user-facing names; keep internal symbol names, file:line, seams, fixtures, stubs, gate-4 hazards OUT of the plan (track them for implementation). Surface behavior deletions / migrations / mocked boundary under `Decisions to approve`; deferrals-to-integration and coverage limits under `Notes`.
 5. Return ONLY the <plan_output_format> below. No code, no rule dumps, no mechanics — keep it skimmable.
 </instructions>
 
 <plan_output_format>
 Test type:    unit
-Cases:
-  - <name>: <behavior/contract under test> → <expected observable result>
-  - ...
-Decisions to approve: <only scope-changing choices — behavior deletions, migrations, any mocked boundary; one line each. Omit if none.>
-Notes: <genuine open questions, ambiguities, or cases deferred to integration — NOT mechanics (no file:line, seams, fixtures, gate-4 hazards)>
+Coverage (group by capability/behavior under test; the group header is the GOAL):
+  <capability/goal>:
+    - <boundary: the condition / range / edge that distinguishes this case> → <expected result / what must NOT happen>
+    - ...
+  <next capability/goal>:
+    - ...
+Decisions to approve: <behavior deletions / migrations / mocked boundary; one line each. Omit if none.>
+Notes: <coverage limitations, cases deferred to integration, or genuine open questions — terse; NOT mechanics. Omit if none.>
 Confidence: high | medium | low
 </plan_output_format>
 
@@ -176,7 +179,7 @@ The unit test plan is confirmed. Draft the INTEGRATION test plan now — plannin
 1. Load `~/.claude/skills/tc/integration.md` (`general.md` stays loaded; do NOT revisit `unit.md`, do NOT load `e2e.md`).
 2. The loaded `integration.md` is authoritative: cover EVERY relevant interface it enumerates and obey its consistency rules in full. Do NOT duplicate what the confirmed unit plan already locks. Pick up every case the unit plan deferred to integration under its `Notes`.
 3. Run any additional code exploration needed in your own session, same tool rules as before.
-4. Return ONLY the <plan_output_format> with `Test type: integration` — per case, what it pins + expected result; scope-changing choices under `Decisions to approve`; mechanics (file:line / seams / fixtures / gate-4 hazards) kept for implementation, NOT in the plan. No code, no rule dumps, keep it skimmable. After returning, STOP and wait for the next message.
+4. Return ONLY the <plan_output_format> with `Test type: integration`: a terse coverage outline grouped by command/capability (header = goal), each case a line = boundary → expected / must-not. User-facing names only; mechanics (internal symbols, file:line, seams, fixtures, gate-4 hazards) kept for implementation, NOT in the plan. No code, no rule dumps. After returning, STOP and wait for the next message.
 </instructions>
 ```
 
@@ -190,7 +193,7 @@ Agreed scenarios (natural-language, exactly as discussed):
 
 Load `~/.claude/skills/tc/e2e.md`. Do NOT revisit `unit.md` or `integration.md` — those plans are already confirmed.
 
-For each agreed scenario, produce one formalized case: name, the behavior/journey under test, and the expected observable result, in rule-compliant phrasing. Keep mechanics (target file:line, fixtures) out of the plan. Return one <plan_output_format> block with `Test type: e2e`. Do NOT write test code, do NOT advance to implementation. After returning, STOP and wait for the next message.
+For each agreed scenario, produce one formalized case as a terse line: the journey/goal and its boundary → expected result / what must NOT happen, in rule-compliant phrasing. User-facing names only; keep mechanics (file:line, fixtures) out of the plan. Return one <plan_output_format> block with `Test type: e2e`. Do NOT write test code, do NOT advance to implementation. After returning, STOP and wait for the next message.
 ```
 
 ### Proceed to implementation

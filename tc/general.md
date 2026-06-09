@@ -13,7 +13,8 @@ Unit and integration cases are EQUALLY important with distinct duties, and only 
 
 ## Plan presentation (every phase)
 
-The plan returned at a STOP is for the user to APPROVE cases, not a compliance log. Per case state ONLY: `name → behavior/contract under test → expected observable result`. Add a `Decisions to approve` line for scope-changing choices (behavior deletions, migrations, the one mocked boundary). The mechanics these rules made you choose — real-vs-stand-in seams, one-contract-one-source mapping, file:line targets, fidelity boundaries, red-phase/gate-4 hazards — are your internal implementation notes: keep them for the implementation phase, NEVER dump them in the plan. No `Files under test`, no `[target: file:line]`, no per-case seam/red/hazard prose. If the user won't read it, the STOP is wasted.
+The plan at a STOP is for the user to read and judge coverage directly — keep it terse (言简意赅). GROUP cases by the capability/behavior under test; the group header is the GOAL. Under each, one line per case: its BOUNDARY (the condition / range / edge that distinguishes it) → the expected result or what must NOT happen. Goal + boundary + expectation is everything the user needs — nothing more.
+Use only user-facing names (commands, flags, files, output, exit codes). NEVER put internal function/symbol names, file:line targets, seams, fixtures, one-contract mapping, or red-phase/gate-4 hazards in the plan — those are your implementation notes. Flag deliberately-uncovered scenarios and cases deferred to integration under `Notes`; behavior deletions / migrations / mocked boundaries under `Decisions to approve`. Do NOT map cases to requirements — the user reads coverage directly.
 
 ## Red phase rules
 
