@@ -1,0 +1,26 @@
+# dDP 容器镜像 —— php-fpm + ThinkPHP 扩展(自建)。digest 钉 + Trivy 扫留给 CI。
+# 构建上下文 = apps/<name>/deploy/(含本文件 + php.ini + www.conf)。
+FROM php:__PHP_VER__-fpm-__SUITE__
+
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+      git unzip libzip-dev libicu-dev libpng-dev libjpeg62-turbo-dev \
+      libfreetype6-dev libonig-dev libfcgi-bin; \
+    docker-php-ext-configure gd --with-freetype --with-jpeg; \
+    docker-php-ext-install -j"$(nproc)" \
+      pdo_mysql mysqli mbstring zip bcmath intl gd opcache; \
+    pecl install redis-5.3.7; \
+    docker-php-ext-enable redis; \
+    apt-get clean; \
+    rm -rf /var/lib/apt/lists/*
+
+COPY --from=composer:2 /usr/bin/composer /usr/local/bin/composer
+COPY php.ini  /usr/local/etc/php/conf.d/99-dpt.ini
+COPY www.conf /usr/local/etc/php-fpm.d/www.conf
+
+WORKDIR /var/www/__NAME__
+# 运行期可写目录:建挂载点并置属主 33:33。命名卷 __NAME__-runtime 首挂时从镜像层 copy-up
+# 继承此属主 → 容器内 www-data(33:33)可写。chown 在 build 期(root),运行期零新增权限。
+RUN mkdir -p /var/www/__NAME__/runtime && chown 33:33 /var/www/__NAME__/runtime
+CMD ["php-fpm"]

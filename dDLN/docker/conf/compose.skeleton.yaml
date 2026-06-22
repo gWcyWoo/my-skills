@@ -1,0 +1,44 @@
+# dpt docker 框架 / compose 骨架 —— 未来业务 compose 照此填(安全默认值已内置)。
+# 完整约束见同目录 FRAMEWORK.md。宿主 nginx 是唯一公网边缘;本栈所有服务只 127.0.0.1 / 内网,绝不对公网发布。
+name: app
+
+networks:
+  internal:
+    driver: bridge
+
+# 复用锚点:每个服务 <<: *hardening 套上强制安全默认值。
+x-hardening: &hardening
+  restart: unless-stopped
+  read_only: true                 # 只读根文件系统;可写处用 tmpfs/named volume
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL                         # 再按需 cap_add 最小集
+  logging:
+    driver: journald              # 并入宿主 journald(已限额),杜绝容器日志撑盘
+  deploy:
+    resources:
+      limits:
+        memory: 512m              # 按服务实际改;务必设上限
+
+services:
+  php-fpm:
+    <<: *hardening
+    image: php:8.3-fpm-bookworm@sha256:REPLACE_WITH_PINNED_DIGEST   # 钉 digest,禁 :latest
+    user: "33:33"                 # www-data,非 root
+    networks: [internal]
+    ports:
+      - "127.0.0.1:9000:9000"     # 只给宿主 nginx fastcgi 用,绝不公网
+    tmpfs:
+      - /tmp
+    volumes:
+      - app-code:/var/www/html:ro
+    healthcheck:
+      test: ["CMD-SHELL", "php-fpm -t || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  app-code:

@@ -1,0 +1,84 @@
+# system/rule/security_hardening.rules —— 系统级安全基线(CIS Debian 12 L1 子集 + 网络/内核加固)
+# 格式: kind|name|expected|severity|reference
+# kind: pkg=APT 包(installed) | service=systemd(active/enabled) | sysctl=内核参数
+#       module=内核模块(blacklisted) | file=路径权限(mode:owner:group)
+# 命令式项(ufw / fail2ban / unattended / login.defs / coredump / tmp 挂载 / auditd 规则)在 security_enhance.sh。
+# reference 暂为类别级,锁版时对 CIS Debian 12 benchmark 钉精确 §。
+
+# ---- 必备安全包 ----
+pkg|ufw|installed|high|CIS:firewall
+pkg|fail2ban|installed|high|intrusion-prevention
+pkg|unattended-upgrades|installed|high|CIS:patching
+pkg|apparmor|installed|medium|CIS:MAC
+pkg|libpam-pwquality|installed|medium|CIS:auth
+pkg|auditd|installed|medium|CIS:audit
+
+# ---- 服务状态 ----
+service|ufw|active|high|CIS:firewall
+service|fail2ban|active|high|intrusion-prevention
+service|apt-daily-upgrade.timer|enabled|high|CIS:patching
+service|apparmor|active|medium|CIS:MAC
+service|auditd|active|medium|CIS:audit
+service|systemd-timesyncd|active|medium|CIS:time
+
+# ---- sysctl 网络安全 → /etc/sysctl.d/60-dpt-security.conf ----
+sysctl|net.ipv4.conf.all.rp_filter|1|high|CIS:network
+sysctl|net.ipv4.conf.default.rp_filter|1|high|CIS:network
+sysctl|net.ipv4.conf.all.accept_redirects|0|high|CIS:network
+sysctl|net.ipv4.conf.default.accept_redirects|0|high|CIS:network
+sysctl|net.ipv6.conf.all.accept_redirects|0|high|CIS:network
+sysctl|net.ipv6.conf.default.accept_redirects|0|high|CIS:network
+sysctl|net.ipv4.conf.all.send_redirects|0|high|CIS:network
+sysctl|net.ipv4.conf.default.send_redirects|0|high|CIS:network
+sysctl|net.ipv4.conf.all.accept_source_route|0|high|CIS:network
+sysctl|net.ipv4.conf.default.accept_source_route|0|high|CIS:network
+sysctl|net.ipv6.conf.all.accept_source_route|0|high|CIS:network
+sysctl|net.ipv4.conf.all.log_martians|1|medium|CIS:network
+sysctl|net.ipv4.conf.default.log_martians|1|medium|CIS:network
+sysctl|net.ipv4.icmp_echo_ignore_broadcasts|1|medium|CIS:network
+sysctl|net.ipv4.icmp_ignore_bogus_error_responses|1|low|CIS:network
+sysctl|net.ipv4.tcp_syncookies|1|high|CIS:network
+
+# ---- sysctl 内核/文件安全 ----
+sysctl|kernel.randomize_va_space|2|high|CIS:kernel
+sysctl|kernel.kptr_restrict|2|medium|CIS:kernel
+sysctl|kernel.dmesg_restrict|1|medium|CIS:kernel
+sysctl|fs.protected_hardlinks|1|medium|CIS:fs
+sysctl|fs.protected_symlinks|1|medium|CIS:fs
+sysctl|fs.suid_dumpable|0|high|CIS:fs
+
+# ---- sysctl 进阶内核加固(值取自探测,绝不下调已更强的)----
+# 注:不设 kernel.unprivileged_userns_clone —— 留给 Docker(用户明确要部署容器)。
+sysctl|kernel.yama.ptrace_scope|1|medium|hardening:ptrace
+sysctl|kernel.unprivileged_bpf_disabled|2|medium|hardening:bpf
+sysctl|net.core.bpf_jit_harden|2|medium|hardening:bpf
+sysctl|kernel.kexec_load_disabled|1|medium|hardening:kexec
+sysctl|fs.protected_fifos|2|medium|CIS:fs
+sysctl|fs.protected_regular|2|medium|CIS:fs
+sysctl|dev.tty.ldisc_autoload|0|low|hardening:tty
+sysctl|kernel.perf_event_paranoid|3|low|hardening:perf
+
+# ---- 关键文件权限(Debian 默认值,多数仅验证未漂移)----
+file|/etc/passwd|644:root:root|high|CIS:fs
+file|/etc/group|644:root:root|medium|CIS:fs
+file|/etc/shadow|640:root:shadow|high|CIS:fs
+file|/etc/gshadow|640:root:shadow|high|CIS:fs
+file|/etc/crontab|600:root:root|medium|CIS:cron
+file|/etc/cron.d|700:root:root|low|CIS:cron
+file|/etc/cron.daily|700:root:root|low|CIS:cron
+file|/etc/cron.hourly|700:root:root|low|CIS:cron
+file|/etc/cron.weekly|700:root:root|low|CIS:cron
+file|/etc/cron.monthly|700:root:root|low|CIS:cron
+
+# ---- 冷门/高危内核模块黑名单 → /etc/modprobe.d/dpt-cis.conf ----
+module|dccp|blacklisted|medium|CIS:modules
+module|sctp|blacklisted|medium|CIS:modules
+module|rds|blacklisted|low|CIS:modules
+module|tipc|blacklisted|low|CIS:modules
+module|cramfs|blacklisted|low|CIS:fs
+module|freevxfs|blacklisted|low|CIS:fs
+module|jffs2|blacklisted|low|CIS:fs
+module|hfs|blacklisted|low|CIS:fs
+module|hfsplus|blacklisted|low|CIS:fs
+module|udf|blacklisted|low|CIS:fs
+module|usb-storage|blacklisted|low|CIS:hw

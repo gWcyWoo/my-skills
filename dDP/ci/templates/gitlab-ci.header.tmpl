@@ -1,0 +1,75 @@
+# .gitlab-ci.yml —— dDP rootless CI(host 直编 + rsync + USR2 优雅 reload;runner 无 docker / 无 sudo / 无部署密钥)。
+# 由 dDP render_ci 生成,你 copy 进项目仓库根。每个分支一组 build_<branch>/deploy_<branch>,共用下方隐藏基。
+# 多分支(test/master/...)共存于本文件:再配一个分支时用 render_ci --append 生成其分支块、追加到末尾即可。
+# 镜像重建不在 CI(改 Dockerfile/PHP 版本时由 dDP build_image 重建,因 runner 无 docker)。
+stages: [build, deploy]
+
+default:
+  interruptible: true            # 新 pipeline 自动取消同分支在跑的旧 job,省资源
+
+variables:
+  GIT_DEPTH: "20"                # 浅克隆加速 checkout(rsync 用完整工作树,浅克隆不影响)
+
+# ========== 共享基(勿改;分支差异全在下面 build_<b>/deploy_<b> 的 variables/tags)==========
+.dpt_build:
+  stage: build
+  resource_group: "$APP_NAME-$CI_COMMIT_BRANCH"   # 同 app+分支串行,杜绝并发部署互踩
+  timeout: 15m
+  script:
+    - 'echo "[build] $(php -v | head -1) | branch=$CI_COMMIT_BRANCH sha=$CI_COMMIT_SHORT_SHA"'
+    - composer install --no-interaction --prefer-dist                                     # 装 dev 依赖以跑测试
+    - |
+      # 仅当 composer.json 定义了 scripts.test 才跑测试(无则跳过,避免"test 未定义"被误判为失败)。
+      # 测试跑在干净 checkout,绝不碰宿主 src/.env(生产凭据)。
+      if php -r '$j=json_decode(file_get_contents("composer.json"),true); exit(isset($j["scripts"]["test"])?0:1);'; then
+        composer test
+      else
+        echo "[build] composer.json 无 scripts.test —— 跳过测试"
+      fi
+    - composer install --no-dev --prefer-dist --no-interaction --optimize-autoloader      # 仅生产依赖 + 优化 autoload
+  artifacts:
+    paths: [vendor/]             # shell executor 在 deploy 前会 git clean 删 vendor/,必须经 artifacts 传给 deploy
+    expire_in: 1h
+
+.dpt_deploy:
+  stage: deploy
+  resource_group: "$APP_NAME-$CI_COMMIT_BRANCH"
+  timeout: 10m
+  script:
+    - echo "[deploy] 备份当前 src(供回滚)"
+    - rm -rf "$CI_PROJECT_DIR/.prev"; mkdir -p "$CI_PROJECT_DIR/.prev"
+    - rsync -a --delete --exclude runtime/ --exclude .env --exclude .git --exclude .reload-trigger --exclude .reload-done "$APP_SRC/" "$CI_PROJECT_DIR/.prev/"
+    - echo "[deploy] rsync build → src(保留 .env / runtime;归一化权限供 rootless 容器只读挂载读取)"
+    # rootless:容器以映射 uid 经 world 位读 src,--chmod 归一化保证可读;.env 排除(由 cage_app 单独管属主/权限)。
+    # --no-owner/--no-group + --omit-dir-times:runner 非 src/. 属主,保留属主/目录时间会失败(rsync code 23),只交付内容。
+    - rsync -rltD --delete --delay-updates --omit-dir-times --no-owner --no-group --chmod=D755,F644 --exclude runtime/ --exclude .env --exclude .git --exclude .reload-trigger --exclude .reload-done "$CI_PROJECT_DIR/" "$APP_SRC/"
+    - |
+      echo "[deploy] 触发优雅 reload,并【等其落地】再做健康检查(避免抢跑旧 opcache 代码 → 假阳性)"
+      prev="$(stat -c %Y "$APP_SRC/.reload-done" 2>/dev/null || echo 0)"
+      touch "$APP_SRC/.reload-trigger"
+      landed=0
+      for i in $(seq 1 20); do                       # 最多 ~40s 等 opt 侧监听器执行 USR2 + 写新 .reload-done
+        now="$(stat -c %Y "$APP_SRC/.reload-done" 2>/dev/null || echo 0)"
+        [ "$now" -gt "$prev" ] && { landed=1; break; }
+        sleep 2
+      done
+      [ "$landed" = 1 ] && echo "reload 已落地" || echo "[warn] 未见 .reload-done 更新(reload 监听器需重跑 cage_app 装新版?)—— 仍继续健康检查"
+    - |
+      echo "[deploy] 健康检查(【仅 5xx / 无响应判失败】;2xx/3xx/4xx 均视为应用已存活,适配 API 的 401/403/404)"
+      ok=0
+      for i in $(seq 1 20); do
+        code="$(curl -sk -o /dev/null -w '%{http_code}' -H "Host: $APP_DOMAIN" https://127.0.0.1/ || echo 000)"
+        echo "health: $code"
+        case "$code" in
+          2*|3*|4*) ok=1; break ;;                   # 应用已响应(含 401/403/404)→ 存活
+          *) : ;;                                     # 5xx 或 000(拒连/超时/空)→ 坏,重试
+        esac
+        sleep 3
+      done
+      if [ "$ok" != 1 ]; then
+        echo "[rollback] 健康失败(持续 5xx / 无响应)→ 回滚 src 并重新 reload"
+        rsync -rltD --delete --omit-dir-times --no-owner --no-group --chmod=D755,F644 --exclude runtime/ --exclude .env --exclude .git --exclude .reload-trigger --exclude .reload-done "$CI_PROJECT_DIR/.prev/" "$APP_SRC/"
+        touch "$APP_SRC/.reload-trigger"
+        exit 1
+      fi
+    - 'echo "[deploy] done branch=$CI_COMMIT_BRANCH sha=$CI_COMMIT_SHORT_SHA"'

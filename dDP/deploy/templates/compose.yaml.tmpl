@@ -1,0 +1,49 @@
+# dDP 项目 compose —— 严格 dDLN 硬化。rootless(属 opt)。挂共享 external 网 dpt-net。
+# 代码 src 只读挂载(CI 在宿主侧 rsync);可写 runtime 走 named volume;根 FS 只读 + tmpfs。
+name: __NAME__
+
+networks:
+  dpt-net:
+    external: true
+
+services:
+  php:
+    build:
+      context: ./deploy
+      dockerfile: Dockerfile
+    image: local/__NAME__-php__PHP_VERTAG__:latest
+    container_name: __NAME__-php
+    restart: unless-stopped
+    working_dir: /var/www/__NAME__
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    user: "33:33"
+    networks: [dpt-net]
+    ports:
+      - "127.0.0.1:__PORT__:9000"
+    volumes:
+      - ./src:/var/www/__NAME__:ro
+      - __NAME__-runtime:/var/www/__NAME__/runtime
+    tmpfs:
+      - /tmp
+      - /run
+    deploy:
+      resources:
+        limits:
+          memory: __MEM_LIMIT__
+          pids: 200
+    logging:
+      driver: journald
+    healthcheck:
+      test: ["CMD-SHELL", "SCRIPT_NAME=/ping SCRIPT_FILENAME=/ping REQUEST_METHOD=GET cgi-fcgi -bind -connect 127.0.0.1:9000 | grep -q pong"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  __NAME__-runtime:
+    name: __NAME__-runtime
