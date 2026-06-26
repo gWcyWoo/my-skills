@@ -20,6 +20,10 @@ def main() -> int:
         assets = load_json(args.assets)
     except FileNotFoundError:
         assets = {}
+    if isinstance(raw, dict) and isinstance(raw.get("figma_json"), dict) and raw["figma_json"].get("artboard"):
+        from export_figma_scene import main as figma_main
+
+        return figma_main()
     nodes = collect_scene_nodes(raw, assets)
     if not nodes:
         raise SystemExit("ERROR: no nodes with bbox found in raw design.")

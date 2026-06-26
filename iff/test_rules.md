@@ -3,7 +3,7 @@
 > **迁移自 原 `tc`(general/unit/integration)并适配 Flutter + 自主批处理**:已剥离 tc 的交互 gate / STOP / `test-writer` / plan 评审(iFF 全自动、无用户 gate),保留其实质纪律,补 Flutter 测试惯例。每个 subagent 对自己这一行的 feature 按本规则走 TDD(red → green → refactor)。
 
 ## 测试来源(两源)
-1. **UI 理解 → widget 测试**:从 `spec.md`(+ `ui_notes`)理解 UI,断言渲染 / 关键元素存在 / 布局 / 文案;断言可观察结果,不锁实现细节。
+1. **设计结构 → widget 测试**:从 `scene.json`、`layout_contract.json`、`render_plan.json`、`tokens.json`、`assets_manifest.json`(+ `ui_notes`)理解 UI,断言真实组件、关键文案、状态区域、资产节点和交互热区存在;断言可观察结果,不把 `spec.md` 当视觉来源。
 2. **交互规则 → widget/integration 测试**:先用 `parse_interactions.py` + `make_interaction_tests_plan.py` 把 `interaction` 编译为 `interaction_contract.json` 和 `interaction_test_plan.json`;`interaction` 里**每一条交互描述都要覆盖 HAPPY / BOUNDARY / FAILURE**。每个测试必须在测试名或注释中包含 plan 里的 case id(如 `INT-001-HAPPY`),供 `check_interaction_coverage.py` 审计。涉及接口的交互:把 `api` 作为 **mock 依赖**(按接口契约伪造),断言「触发 →(mock 接口)→ 状态/渲染/导航」的可观察结果;不断言调用次数/内部顺序(除非顺序本身是契约)。
 
 ## 分层职责(单元 与 widget/集成 等同重要,只有合起来才证明正确)

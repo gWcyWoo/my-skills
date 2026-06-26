@@ -27,6 +27,18 @@ def widget_for(node: dict) -> str:
     return "Container"
 
 
+def overlap_ratio(node_bbox: list[float], group_bbox: list[float]) -> float:
+    x, y, w, h = node_bbox
+    gx, gy, gw, gh = group_bbox
+    ix1 = max(x, gx)
+    iy1 = max(y, gy)
+    ix2 = min(x + w, gx + gw)
+    iy2 = min(y + h, gy + gh)
+    if ix2 <= ix1 or iy2 <= iy1:
+        return 0.0
+    return ((ix2 - ix1) * (iy2 - iy1)) / max(w * h, 1.0)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--scene", required=True)
@@ -35,6 +47,10 @@ def main() -> int:
     args = parser.parse_args()
 
     scene = load_json(args.scene)
+    if scene.get("sourceSchema") == "lanhu_figma_json":
+        from make_figma_layout_contract import main as figma_main
+
+        return figma_main()
     groups = load_json(args.groups).get("groups") or []
     nodes = {node["id"]: node for node in scene.get("nodes") or []}
     contract: dict[str, dict] = {}
@@ -43,10 +59,19 @@ def main() -> int:
         widgets = {}
         for node in nodes.values():
             x, y, w, h = node["bbox"]
-            if gx <= x and gy <= y and x + w <= gx + gw and y + h <= gy + gh:
+            contained = gx <= x and gy <= y and x + w <= gx + gw and y + h <= gy + gh
+            if contained or overlap_ratio(node["bbox"], group["bbox"]) >= 0.15:
                 role = node.get("name") or node.get("text") or node["id"]
                 role = re.sub(r"[^a-zA-Z0-9]+", "_", str(role)).strip("_") or node["id"]
-                widgets[role[:64]] = {"node": node["id"], "widget": widget_for(node), "bbox": node["bbox"]}
+                node_key = re.sub(r"[^a-zA-Z0-9]+", "_", str(node["id"])).strip("_") or "node"
+                base_key = role[:44] or "node"
+                key = f"{base_key}_{node_key[:18]}"[:64]
+                counter = 2
+                while key in widgets:
+                    suffix = f"_{counter}"
+                    key = f"{base_key[:64 - len(suffix)]}{suffix}"
+                    counter += 1
+                widgets[key] = {"node": node["id"], "widget": widget_for(node), "bbox": node["bbox"]}
         if not widgets:
             raise SystemExit(f"ERROR: group {group.get('kind')} has no widget mappings.")
         contract[component_name(group, index)] = {

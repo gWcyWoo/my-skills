@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 import subprocess
+import time
 
 
 def run(cmd: list[str]) -> None:
@@ -23,6 +24,7 @@ def main() -> int:
     parser.add_argument("--width", type=int)
     parser.add_argument("--height", type=int)
     parser.add_argument("--density", type=int, default=160)
+    parser.add_argument("--settle-seconds", type=float, default=5.0)
     args = parser.parse_args()
 
     out = Path(args.out)
@@ -34,6 +36,8 @@ def main() -> int:
         run(["adb", "-s", args.device, "shell", "wm", "size", f"{args.width}x{args.height}"])
         run(["adb", "-s", args.device, "shell", "wm", "density", str(args.density)])
     run(["flutter", "run", "-d", args.device, "--debug", "--no-resident"])
+    if args.settle_seconds > 0:
+        time.sleep(args.settle_seconds)
     if args.platform == "android":
         remote = "/sdcard/iff_actual.png"
         capture_command = f"adb -s {args.device} shell screencap -p {remote}"
@@ -54,6 +58,7 @@ def main() -> int:
             "device_id": args.device,
             "viewport": {"width": args.width, "height": args.height, "density": args.density},
             "setup_commands": setup_commands,
+            "settle_seconds": args.settle_seconds,
             "capture_command": capture_command,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "actual_path": str(out),

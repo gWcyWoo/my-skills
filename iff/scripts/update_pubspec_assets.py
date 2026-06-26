@@ -24,7 +24,7 @@ def main() -> int:
         return 0
 
     lines = text.splitlines()
-    flutter_idx = next((i for i, line in enumerate(lines) if line.strip() == "flutter:"), None)
+    flutter_idx = next((i for i, line in enumerate(lines) if line == "flutter:"), None)
     if flutter_idx is None:
         lines.extend(["", "flutter:", "  assets:", entry])
     else:
