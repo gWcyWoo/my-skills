@@ -254,7 +254,7 @@ def emit_text(node, x, y, w, h, reg: ColorRegistry, pos, end) -> str:
     return pos + f"Align(alignment: {box_align}, child: SizedBox(width: {m(w)}, child: {inner}))" + end
 
 
-def emit_node(node: dict, asset_prefix: str, nodes: dict, reg: ColorRegistry, artboard_origin) -> str | None:
+def emit_node(node: dict, asset_prefix: str, nodes: dict, reg: ColorRegistry, artboard_origin, nid: str, placed: dict) -> str | None:
     impl = node.get("implementation")
     if impl in SKIP_IMPL or is_boolean_operand(node.get("path", "")):
         return None
@@ -282,12 +282,19 @@ def emit_node(node: dict, asset_prefix: str, nodes: dict, reg: ColorRegistry, ar
     if impl in ASSET_IMPL:
         rot = 0  # 切图为预渲染最终朝向,不再旋转
 
+    # 记录脚本为该节点最终落位的归一化几何(已减画板原点 / 处理翻转),作为
+    # check_render_fidelity 的「设计期望」基准——真实渲染 getRect 须与此一致。
+    placed[nid] = [round(float(x), 2), round(float(y), 2), round(float(w), 2), round(float(h), 2)]
+
     rot_pre, rot_post = "", ""
     if abs(rot) > 0.5:
         rot_pre = f"Transform.rotate(angle: {-math.radians(rot):.5f}, child: "
         rot_post = ")"
-    pos = f"Positioned(left: {m(x)}, top: {m(y)}, width: {m(w)}, height: {m(h)}, child: " + rot_pre
-    end = rot_post + ")"
+    # 每个可见节点挂 ValueKey('iff:<节点id>'),让真实渲染可被 layout trace 按节点回溯
+    # (IMPL 不变量③:真实组件渲染 bbox/token vs render_plan 逐组件 diff 的前提)。
+    key_open = f"KeyedSubtree(key: const ValueKey('iff:{nid}'), child: "
+    pos = f"Positioned(left: {m(x)}, top: {m(y)}, width: {m(w)}, height: {m(h)}, child: " + key_open + rot_pre
+    end = rot_post + "))"
 
     if impl == "text":
         return emit_text(node, x, y, w, h, reg, pos, end)
@@ -430,14 +437,16 @@ def main() -> int:
     reg = ColorRegistry()
     band_widgets: dict[str, list[str]] = {name: [] for name, *_ in BANDS}
     root_base = []
+    placed: dict = {}  # nid -> 脚本落位的归一化几何(expected.json 基准)
     painted = skipped = chrome = 0
     for idx, (nid, node) in enumerate(nodes.items()):
         if nid in chrome_ids:  # IMPL-IMG-3:系统状态栏不绘制
             chrome += 1
             continue
-        widget = emit_node(node, a.asset_prefix, nodes, reg, artboard_origin)
+        widget = emit_node(node, a.asset_prefix, nodes, reg, artboard_origin, nid, placed)
         if widget is None:
             skipped += 1
+            placed.pop(nid, None)
             continue
         painted += 1
         bbox = node["bbox"]
@@ -581,7 +590,28 @@ class _PunchedRectPainter extends CustomPainter {{
     out.write_text(dart)
     colors_out = Path(a.colors_out) if a.colors_out else out.with_name(a.colors_import)
     colors_out.write_text(reg.emit_dart())
-    print(json.dumps({"out": str(out), "colors": str(colors_out),
+
+    # 设计期望 sidecar:每个落位节点的归一化几何 + 设计样式(颜色/字号/文案/圆角),
+    # 全部源自 render_plan(设计真值),供 check_render_fidelity 与真实渲染 trace 逐组件比对。
+    expected = {}
+    for nid in placed:
+        node = nodes[nid]
+        is_text = node.get("implementation") == "text"
+        expected[nid] = {
+            "bbox": placed[nid],
+            "impl": node.get("implementation"),
+            "text": node.get("text") if is_text else None,
+            "fontSize": node.get("fontSize") if is_text else None,
+            "weight": node.get("weight") if is_text else None,
+            "colorHex": fill_hex(node),
+            "radius": radius_value(effective_radius(node, nodes)),
+        }
+    expected_out = Path(str(out) + ".expected.json")
+    expected_out.write_text(json.dumps(
+        {"artboardWidth": a.artboard_width, "artboardHeight": a.artboard_height, "nodes": expected},
+        ensure_ascii=False, indent=2))
+
+    print(json.dumps({"out": str(out), "colors": str(colors_out), "expected": str(expected_out),
                       "painted": painted, "skipped": skipped, "tokens": len(reg.colors)}))
     return 0
 
