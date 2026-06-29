@@ -214,6 +214,23 @@ def main() -> int:
         asset_path = node.get("asset") or (manifest_asset.get("path") if isinstance(manifest_asset, dict) else None)
         mode = asset_strategy(str(asset_path)) if asset_path else implementation_for(node, text_layer_wrappers, set(covered_by_asset))
         required = mode in VISIBLE_IMPLEMENTATIONS
+        # 1D 描边分隔线(Figma Line / 零厚度 shapeLayer)bbox 的宽或高为 0。作为可见节点
+        # 必须有正的厚度才能被坐标画布渲染并通过 render_plan 的正 bbox 校验,否则一条设计
+        # 里真实存在的分隔线会被判为非法零尺寸。用其描边宽度(缺省 1 设计px)补齐缺失维度,
+        # 既忠实于"1px 细线"的设计语义,又不影响其它有正尺寸的节点。
+        if required and isinstance(bbox, list) and len(bbox) == 4 and (bbox[2] <= 0 or bbox[3] <= 0):
+            stroke = 1.0
+            for stroke_spec in (node.get("border") or []):
+                if isinstance(stroke_spec, dict):
+                    try:
+                        stroke = max(stroke, float(stroke_spec.get("width") or 0))
+                    except (TypeError, ValueError):
+                        pass
+            bbox = list(bbox)
+            if bbox[2] <= 0:
+                bbox[2] = stroke
+            if bbox[3] <= 0:
+                bbox[3] = stroke
         if node.get("exportable") and not asset_path:
             errors.append(f"exportable node missing asset path: {node['id']}")
         if mode.startswith("image") or mode == "svg" or mode == "asset":
