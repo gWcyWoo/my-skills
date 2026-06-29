@@ -242,6 +242,7 @@ python3 ~/.claude/skills/iFF/scripts/bind_data_slots.py --manifest spec_dir/comp
 ### 9. 真实运行截图
 命令(Android):
 ```bash
+# 非首屏的 feature 页加 --route /<feature-route> 直接启到该页,**不要改 main.dart 的 initialRoute**。
 python3 ~/.claude/skills/iFF/scripts/capture_runtime_screenshot.py --platform android --device emulator-5554 --out spec_dir/actual.png --manifest spec_dir/visual_manifest.json
 ```
 命令(iOS):
@@ -282,9 +283,12 @@ python3 ~/.claude/skills/iFF/scripts/make_repair_plan.py --diff spec_dir/diff_re
 # Track B 新门:
 python3 ~/.claude/skills/iFF/scripts/check_interaction_wiring.py --lib-root lib --test-root test --entry lib/main.dart --pubspec pubspec.yaml --contract spec_dir/interaction_contract.json --out spec_dir/wiring_report.json
 python3 ~/.claude/skills/iFF/scripts/check_api_integration.py --api-contract spec_dir/api_contract.json --lib-root lib --out spec_dir/api_integration_report.json
-# 结构化逐组件保真门(替代 golden-vs-golden;不变量③⑥):trace 真实上线页 vs render_plan 期望
-python3 ~/.claude/skills/iFF/scripts/gen_layout_trace_test.py --expected lib/<feature>/presentation/<canvas>.dart.expected.json --page-import package:<pkg>/<feature>/presentation/<online_page>.dart --page-type <OnlinePageWidget> --page-expr "<OnlinePageWidget(fixture: HomeVisualFixture.golden())>" --trace-out spec_dir/actual_layout_trace.json --out test/<feature>/<feature>_layout_trace_test.dart
-flutter test test/<feature>/<feature>_layout_trace_test.dart   # 写出真实渲染 trace
+# 结构化逐组件保真门(替代 golden-vs-golden;不变量③⑥):trace **真实上线页** vs render_plan 期望。
+# --page-type/--page-expr 必须是真实页面(注入**同源设计 fixture** 的构造),**不是孤立画布**——
+# 这样 SafeArea/Stack 坍塌等页面级包裹 bug(见 memory)才会被 getRect 抓到;--extra-imports 传 repo/fixture。
+# 多状态特性:每个状态各跑一次(--page-expr 注入该状态数据 + 对应 <canvas>.expected.json)。
+python3 ~/.claude/skills/iFF/scripts/gen_layout_trace_test.py --expected lib/<feature>/presentation/<canvas>.dart.expected.json --page-import package:<pkg>/<feature>/presentation/<online_page>.dart --extra-imports package:<pkg>/<feature>/data/<repo_or_fixture>.dart --page-type <OnlinePageWidget> --page-expr "<OnlinePageWidget(repository: Mock<Feature>Repository.design())>" --trace-out spec_dir/actual_layout_trace.json --out test/<feature>/<feature>_layout_trace_test.dart
+flutter test test/<feature>/<feature>_layout_trace_test.dart   # 泵到异步数据落位后,写出真实页渲染 trace
 python3 ~/.claude/skills/iFF/scripts/check_render_fidelity.py --trace spec_dir/actual_layout_trace.json --expected lib/<feature>/presentation/<canvas>.dart.expected.json --tokens spec_dir/tokens.json --out spec_dir/render_fidelity_report.json
 ```
 硬门: CSV 行仍是 `doing`;worker 已加载当前 iFF 规则且 compliance 校验通过;reference 是完整 artboard;actual 是真实模拟器截图(**组件上线页**,非 golden 静态画布);fixture 同源且取值源自设计稿展示值;交互 case 覆盖和 red/green 证据通过;多状态数量一致;`render_plan` 未使用整图冒充;页面结构由真实组件、文本、按钮、卡片、输入框、状态区域组成;**`check_render_fidelity` 通过(真实上线页逐组件:每节点 bbox≤2px、主色 RGB≤3、字号/圆角≤1px、文案 100%、token 100%;缺节点=Offstage/坍塌判失败)= 视觉验收的 PASS 门**;`visual_diff` 的像素 `ssim/pixelMismatch` 只作诊断,**不作 done 阻断**(跨引擎抗锯齿天花板,见 final_reminders);`repair_plan.json` 必须**存在**(像素诊断产物),但其 `summary.p0Count` **不作 done 阻断**——它由像素 diff 派生,p0 多为跨引擎字形 AA / 被排除的系统状态栏切图,属天花板;视觉是否达标只看 `check_render_fidelity`(若 `repair_plan` 出现**平坦区真实缺陷**类 p0,才回到单次 repair,但 AA/状态栏类 p0 一律不算);**`check_interaction_wiring` 通过(无 tested-but-unwired)**;**`check_api_integration` 通过(每端点有 repo 调用)**;test/analyze 通过。全部满足后才写 `status=done`、`actual_screenshot`、`visual_manifest`、`visual_report`。

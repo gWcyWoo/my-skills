@@ -29,7 +29,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 __PAGE_IMPORT__
-
+__EXTRA_IMPORTS__
 void main() {
   testWidgets('iff layout trace (real render vs render_plan)', (WidgetTester tester) async {
     const double dw = __DW__;
@@ -45,9 +45,12 @@ void main() {
       debugShowCheckedModeBanner: false,
       home: __PAGE_EXPR__,
     ));
-    await tester.pump(const Duration(milliseconds: 80));
-    // 真机外的 widget test 拉不到真实图片字节;固定尺寸布局的几何不受影响,
-    // 这里把 asset 解码异常排掉,保证 getRect 仍能拿到真实落位。
+    // 必须 trace 真实上线页(不变量②⑥:验收对象==上线对象),页面常异步加载数据后才
+    // 挂出可见层 —— 喂同源设计 fixture 时 Future 在下一个 microtask 完成,连泵几帧让它
+    // 渲染到位(同时把无真机图片字节的 asset 解码异常排掉,固定尺寸几何不受影响)。
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+    await tester.pump(const Duration(seconds: 1));
     while (tester.takeException() != null) {}
 
     const List<String> ids = <String>[__IDS__];
@@ -117,7 +120,12 @@ def main() -> int:
     ap.add_argument("--page-import", required=True,
                     help="dart import line target, e.g. package:app/features/home/presentation/home_page.dart")
     ap.add_argument("--page-type", required=True, help="widget class under test, e.g. HomeArtboardCanvas")
-    ap.add_argument("--page-expr", help="const-constructible widget expr (default: '<PageType>()')")
+    ap.add_argument("--page-expr", help="widget expr to pump as the REAL on-line page, injecting the "
+                    "same-source design fixture, e.g. \"HomePage(repository: MockHomeRepository.design())\" "
+                    "(default: '<PageType>()'). Trace the real page, not the canvas in isolation, so "
+                    "page-level wrapping bugs (SafeArea offset, Stack collapse) are caught.")
+    ap.add_argument("--extra-imports", default="",
+                    help="comma-separated extra dart imports the page-expr needs (repository/fixture)")
     ap.add_argument("--trace-out", required=True, help="absolute path the test writes the trace JSON to")
     ap.add_argument("--out", required=True, help="generated *_layout_trace_test.dart path")
     a = ap.parse_args()
@@ -127,10 +135,12 @@ def main() -> int:
     dw = expected.get("artboardWidth") or 750.0
     dh = expected.get("artboardHeight") or 5874.0
     page_expr = a.page_expr or f"{a.page_type}()"
+    extra = "".join(f"import '{p.strip()}';\n" for p in a.extra_imports.split(",") if p.strip())
 
     ids_dart = ", ".join(f"'{i}'" for i in ids)
     dart = (TEMPLATE
             .replace("__PAGE_IMPORT__", f"import '{a.page_import}';")
+            .replace("__EXTRA_IMPORTS__", extra)
             .replace("__DW__", repr(float(dw)))
             .replace("__DH__", repr(float(dh)))
             .replace("__PAGE_EXPR__", page_expr)

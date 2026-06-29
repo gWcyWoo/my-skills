@@ -24,6 +24,8 @@ def main() -> int:
     parser.add_argument("--width", type=int)
     parser.add_argument("--height", type=int)
     parser.add_argument("--density", type=int, default=160)
+    parser.add_argument("--route", help="named initial route to launch (flutter run --route), so a "
+                        "non-home feature page can be screenshotted WITHOUT mutating main.dart's initialRoute")
     parser.add_argument("--settle-seconds", type=float, default=5.0)
     args = parser.parse_args()
 
@@ -35,7 +37,10 @@ def main() -> int:
         setup_commands.append(f"adb -s {args.device} shell wm density {args.density}")
         run(["adb", "-s", args.device, "shell", "wm", "size", f"{args.width}x{args.height}"])
         run(["adb", "-s", args.device, "shell", "wm", "density", str(args.density)])
-    run(["flutter", "run", "-d", args.device, "--debug", "--no-resident"])
+    run_cmd = ["flutter", "run", "-d", args.device, "--debug", "--no-resident"]
+    if args.route:
+        run_cmd.append(f"--route={args.route}")
+    run(run_cmd)
     if args.settle_seconds > 0:
         time.sleep(args.settle_seconds)
     if args.platform == "android":
