@@ -401,8 +401,8 @@ def status_bar_node_ids(nodes: dict, artboard_width: float) -> set:
 _STAR_PAINTER_SRC = """
 /// 四角星(sparkle):设计为无切图的矢量黑星,这里按几何绘制(IMPL-IMG 缺图兜底)。
 class _SparkleStarPainter extends CustomPainter {
-  const _SparkleStarPainter({this.color = const Color(0xFF000000)});
-  final Color color;
+  const _SparkleStarPainter();
+  static const Color color = Color(0xFF000000);
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -420,14 +420,14 @@ class _SparkleStarPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant _SparkleStarPainter oldDelegate) => oldDelegate.color != color;
+  bool shouldRepaint(covariant _SparkleStarPainter oldDelegate) => false;
 }
 """
 
 _PUNCHED_PAINTER_SRC = """
 /// 圆角矩形挖椭圆洞:还原 Figma boolean-subtract(露出底层装饰,如卡片角部 leaf)。
 class _PunchedRect extends StatelessWidget {
-  const _PunchedRect({super.key, required this.color, required this.radius, required this.holes});
+  const _PunchedRect({required this.color, required this.radius, required this.holes});
 
   final Color color;
   final double radius;

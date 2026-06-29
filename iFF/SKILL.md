@@ -140,7 +140,11 @@ python3 ~/.claude/skills/iFF/scripts/check_design_artifacts.py --spec-dir spec_d
 ### 5. 生成同源 visual fixture
 命令:
 ```bash
-python3 ~/.claude/skills/iFF/scripts/make_visual_fixture.py --classification spec_dir/design_classification.json --api-contract apifox_contract.json --out lib/src/features/home/data/home_visual_fixture.dart
+# 同源设计 fixture:内容=设计稿展示值(消费 6.7 generate_canvas 各状态产出的 <canvas>.dart.slots.json
+# 种子),**故须在 6.7 各可见状态画布生成之后运行**;feature-agnostic,一状态一个 --slots。
+python3 ~/.claude/skills/iFF/scripts/make_visual_fixture.py --feature <feature> \
+  --slots <state>=lib/<feature>/presentation/<state>_canvas.dart.slots.json \
+  [--slots <state2>=...] --out lib/<feature>/data/<feature>_visual_fixture.dart
 ```
 输出: `visual_fixture.dart` 或 `visual_fixture.json`。
 硬门: App、widget test、visual test、preview/mock repository 都只能 import 同一份 fixture;测试里自己造数据失败;App shell 只返回一个默认状态失败;设计稿有 9 张卡片而 runtime fixture 少于 9 张失败。
@@ -274,7 +278,7 @@ python3 ~/.claude/skills/iFF/scripts/make_repair_plan.py --diff spec_dir/diff_re
 flutter test
 flutter analyze
 python3 ~/.claude/skills/iFF/scripts/check_visual_manifest.py spec_dir/visual_manifest.json
-python3 ~/.claude/skills/iFF/scripts/check_fixture_source.py
+python3 ~/.claude/skills/iFF/scripts/check_fixture_source.py --root .  # 自动探测 *VisualFixture 符号:test 与运行时须引用同一份(同源)
 python3 ~/.claude/skills/iFF/scripts/check_render_plan.py spec_dir/render_plan.json
 python3 ~/.claude/skills/iFF/scripts/check_design_artifacts.py --spec-dir spec_dir
 python3 ~/.claude/skills/iFF/scripts/check_implementation_plan.py --plan spec_dir/implementation_plan.json --spec-dir spec_dir
