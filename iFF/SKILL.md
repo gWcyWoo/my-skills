@@ -150,10 +150,13 @@ python3 ~/.claude/skills/iFF/scripts/make_visual_fixture.py --classification spe
 ```bash
 printf '%s' "$ROW_INTERACTION" > spec_dir/interaction.txt
 python3 ~/.claude/skills/iFF/scripts/parse_interactions.py --input spec_dir/interaction.txt --out spec_dir/interaction_contract.json
+# 契约完整性门(不变量④:每条交互规则都要覆盖):被丢进 ignoredItems 里、却带"触发+效果"信号的句子
+# 必须被提取成规则,或显式登记到契约的 acknowledgedNonRules——否则 100% 覆盖只是"残缺清单的 100%"。
+python3 ~/.claude/skills/iFF/scripts/check_interaction_completeness.py --contract spec_dir/interaction_contract.json --out spec_dir/interaction_completeness_report.json
 python3 ~/.claude/skills/iFF/scripts/make_interaction_tests_plan.py --contract spec_dir/interaction_contract.json --api-contract apifox_contract.json --out spec_dir/interaction_test_plan.json
 ```
-输出: `interaction_contract.json`、`interaction_test_plan.json`;每条交互规则都有稳定 `INT-xxx` id,每条规则生成 `HAPPY`/`BOUNDARY`/`FAILURE` 三类测试 case id。
-硬门: `interaction` 非空但无法解析触发动作或期望结果时,该行 `status=error`;不得让 worker 自由解释。生成的 case id 必须进入测试名或测试注释,否则 done 前覆盖审计失败。
+输出: `interaction_contract.json`、`interaction_test_plan.json`、`interaction_completeness_report.json`;每条交互规则都有稳定 `INT-xxx` id,每条规则生成 `HAPPY`/`BOUNDARY`/`FAILURE` 三类测试 case id。
+硬门: `interaction` 非空但无法解析触发动作或期望结果时,该行 `status=error`;不得让 worker 自由解释。**`check_interaction_completeness` 必须通过**(无未提取的规则状句子);生成的 case id 必须进入测试名或测试注释,否则 done 前覆盖审计失败。
 
 ### 6.5 计划阶段:对齐设计稿与当前工程
 命令:
@@ -276,6 +279,7 @@ python3 ~/.claude/skills/iFF/scripts/check_render_plan.py spec_dir/render_plan.j
 python3 ~/.claude/skills/iFF/scripts/check_design_artifacts.py --spec-dir spec_dir
 python3 ~/.claude/skills/iFF/scripts/check_implementation_plan.py --plan spec_dir/implementation_plan.json --spec-dir spec_dir
 python3 ~/.claude/skills/iFF/scripts/check_implementation_map.py --render-plan spec_dir/render_plan.json --implementation-map spec_dir/implementation_map.json
+python3 ~/.claude/skills/iFF/scripts/check_interaction_completeness.py --contract spec_dir/interaction_contract.json --out spec_dir/interaction_completeness_report.json
 python3 ~/.claude/skills/iFF/scripts/check_interaction_coverage.py --plan spec_dir/interaction_test_plan.json --test-root test --evidence spec_dir/interaction_test_evidence.json
 python3 ~/.claude/skills/iFF/scripts/check_worker_compliance.py --manifest spec_dir/worker_compliance.json --skill-dir ~/.claude/skills/iFF
 python3 ~/.claude/skills/iFF/scripts/visual_diff.py --reference spec_dir/reference.png --actual spec_dir/actual.png --layout spec_dir/layout_contract.json --out spec_dir/diff_report.json --heatmap spec_dir/diff_heatmap.png

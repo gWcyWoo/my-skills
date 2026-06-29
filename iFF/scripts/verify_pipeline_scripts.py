@@ -46,6 +46,7 @@ REQUIRED = [
     "make_component_manifest.py",
     "bind_data_slots.py",
     "check_interaction_wiring.py",
+    "check_interaction_completeness.py",
     "check_api_integration.py",
     # Structured per-component render fidelity (replaces golden-vs-golden): trace the REAL
     # render of the keyed online page and diff it against render_plan-derived expectations.

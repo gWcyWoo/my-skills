@@ -128,6 +128,7 @@
 
 ## DATA 数据驱动槽位
 - **IMPL-DATA-1** 动态槽 = 字段 + 变换 + 出现条件;来源 `data_slot_bindings.json`,`needsModelBinding` 每条须模型按交互规则确认(如 INT-010 `level_money`→`max_money` 回退)。
+- **IMPL-DATA-1b 槽位广度(凡接口字段皆动态)**:`make_component_manifest` 的正则只自动标出数字/金额/日期类动态文本;**凡是取值来自 OAS 数据字段的可见文本——包括纯文本(产品名/标题/状态文案/问候语/姓名等)——都必须被确认为 `dynamic_text_slot`**(在 `component_manifest.json` 里 `confirmedByModel=true` 并补绑定),由 `generate_canvas` 走 `slotText` 注入。**只有真正的 UI chrome(按钮文案、分区标题、固定 copy)才保持静态字面量**。把接口数据字段(如卡片产品名、状态)当静态画死=数据未驱动,违反不变量④。
 - **IMPL-DATA-2** 文本值走 DTO,不写字面量;格式化(₦千分位/日期/百分比)在领域层,组件只呈现。
 - **IMPL-DATA-3** 动态槽**先钉死设计宽度**(暂不放宽 flex);变长真数据裁切的取舍验证后再定。
 
