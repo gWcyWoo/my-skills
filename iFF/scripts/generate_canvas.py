@@ -217,7 +217,7 @@ ALIGN_MAP = {"center": "TextAlign.center", "right": "TextAlign.right",
              "justified": "TextAlign.justify", "justify": "TextAlign.justify"}
 
 
-def emit_text(node, x, y, w, h, reg: ColorRegistry, pos, end) -> str:
+def emit_text(node, x, y, w, h, reg: ColorRegistry, pos, end, nid: str, slot_ids: set) -> str:
     txt = esc(str(node.get("text", "")))
     size = node.get("fontSize") or 14
     base_argb = hex_to_argb_int(fill_hex(node) or "#000000")
@@ -242,7 +242,9 @@ def emit_text(node, x, y, w, h, reg: ColorRegistry, pos, end) -> str:
                          f"color: {reg.ref(rc)}))")
         inner = f"Text.rich(TextSpan(children: [{', '.join(spans)}]), textAlign: {text_align}, softWrap: true)"
     else:
-        inner = (f"Text('{txt}', textAlign: {text_align}, softWrap: true, overflow: TextOverflow.visible, "
+        # 动态文本槽:从注入的 slotText 取值,缺省回退设计展示值(不变量①④⑦);静态文案保持字面量。
+        txt_arg = f"slotText['{nid}'] ?? '{txt}'" if nid in slot_ids else f"'{txt}'"
+        inner = (f"Text({txt_arg}, textAlign: {text_align}, softWrap: true, overflow: TextOverflow.visible, "
                  f"style: TextStyle(fontFamily: 'SF Pro Text', fontSize: {m(float(size))}, "
                  f"fontWeight: {wt}, color: {reg.ref(base_argb)}{ls_expr}))")
 
@@ -254,7 +256,7 @@ def emit_text(node, x, y, w, h, reg: ColorRegistry, pos, end) -> str:
     return pos + f"Align(alignment: {box_align}, child: SizedBox(width: {m(w)}, child: {inner}))" + end
 
 
-def emit_node(node: dict, asset_prefix: str, nodes: dict, reg: ColorRegistry, artboard_origin, nid: str, placed: dict) -> str | None:
+def emit_node(node: dict, asset_prefix: str, nodes: dict, reg: ColorRegistry, artboard_origin, nid: str, placed: dict, slot_ids: set) -> str | None:
     impl = node.get("implementation")
     if impl in SKIP_IMPL or is_boolean_operand(node.get("path", "")):
         return None
@@ -297,7 +299,7 @@ def emit_node(node: dict, asset_prefix: str, nodes: dict, reg: ColorRegistry, ar
     end = rot_post + "))"
 
     if impl == "text":
-        return emit_text(node, x, y, w, h, reg, pos, end)
+        return emit_text(node, x, y, w, h, reg, pos, end, nid, slot_ids)
 
     if impl in ASSET_IMPL:
         asset = node.get("asset")
@@ -404,6 +406,7 @@ def main() -> int:
     ap.add_argument("--colors-import", default="app_colors.dart")
     ap.add_argument("--asset-prefix", default="assets/images/")
     ap.add_argument("--classification", help="design_classification.json — authoritative artboard dims")
+    ap.add_argument("--component-manifest", help="component_manifest.json — dynamic_text_slot node ids become data-driven")
     ap.add_argument("--artboard-width", type=float, default=750.0)
     ap.add_argument("--artboard-height", type=float, default=5874.0)
     a = ap.parse_args()
@@ -419,6 +422,16 @@ def main() -> int:
 
     rp = json.loads(Path(a.render_plan).read_text())
     nodes = rp["nodes"]
+
+    # 动态文本槽节点 id:这些 text 节点的展示值由注入的 slotText 决定(数据驱动),
+    # 其余文案保持字面量(静态 chrome)。来源 component_manifest.dynamicSlots(不变量①④)。
+    slot_ids: set = set()
+    if a.component_manifest and Path(a.component_manifest).is_file():
+        cm = json.loads(Path(a.component_manifest).read_text())
+        for comp in cm.get("components", []):
+            for s in comp.get("dynamicSlots", []) or []:
+                if s.get("node"):
+                    slot_ids.add(s["node"])
     artboard_origin = (0.0, 0.0)
     artboard_root_id = None
     for nid, n in nodes.items():
@@ -453,7 +466,7 @@ def main() -> int:
         if nid in chrome_ids:  # IMPL-IMG-3:系统状态栏不绘制
             chrome += 1
             continue
-        widget = emit_node(node, a.asset_prefix, nodes, reg, artboard_origin, nid, placed)
+        widget = emit_node(node, a.asset_prefix, nodes, reg, artboard_origin, nid, placed, slot_ids)
         if widget is None:
             skipped += 1
             placed.pop(nid, None)
@@ -473,10 +486,14 @@ def main() -> int:
         band_classes.append(f"""
 /// {desc}。
 class _Home{name} extends StatelessWidget {{
-  const _Home{name}({{required this.u}});
+  const _Home{name}({{required this.u, required this.slotText}});
 
   /// u:关系换算响应单位 = 屏宽 / 设计宽度(IMPL-LAYOUT-1)。
   final double u;
+
+  /// 动态文本槽取值(节点id -> 展示值);上层用同源 fixture / 真实 DTO 注入,
+  /// 缺省回退到设计稿展示值,保证数据未到位时仍逐像素还原(IMPL-DATA / 不变量①⑦)。
+  final Map<String, String> slotText;
 
   @override
   Widget build(BuildContext context) {{
@@ -488,7 +505,7 @@ class _Home{name} extends StatelessWidget {{
     );
   }}
 }}""")
-        band_children.append(f"          Positioned.fill(child: _Home{name}(u: u)),")
+        band_children.append(f"          Positioned.fill(child: _Home{name}(u: u, slotText: slotText)),")
 
     base_body = "\n".join(root_base) or "        // (无根背景)"
     rel_import = a.colors_import
@@ -501,10 +518,14 @@ import 'package:flutter/material.dart';
 
 import '{rel_import}';
 
-/// 首页设计稿响应式画布。整张稿按设计宽度等比映射到当前屏宽,纵向可滚动浏览
-/// 全部状态。这里只负责视觉还原;数据、交互、跳转由上层页面注入。
+/// 首页设计稿响应式画布(数据驱动可见层本体,不是静态 golden)。整张稿按设计宽度等比
+/// 映射到当前屏宽;几何/样式由脚本从 render_plan/tokens 喂入,动态文本由 [slotText] 注入。
 class HomeArtboardCanvas extends StatelessWidget {{
-  const HomeArtboardCanvas({{super.key}});
+  const HomeArtboardCanvas({{super.key, this.slotText = const <String, String>{{}}}});
+
+  /// 动态文本槽取值(节点id -> 展示值)。同源 fixture / 真实 DTO 经此注入;
+  /// 缺省回退设计稿展示值(不变量①④⑦:可见层数据驱动、切数据即变、fixture 源自设计)。
+  final Map<String, String> slotText;
 
   /// 设计稿原始宽高(像素)。仅用于推导响应单位 u,是关系换算的唯一基准,
   /// 不作为任何控件的固定尺寸(IMPL-LAYOUT-2)。
@@ -621,7 +642,15 @@ class _PunchedRectPainter extends CustomPainter {{
         {"artboardWidth": a.artboard_width, "artboardHeight": a.artboard_height, "nodes": expected},
         ensure_ascii=False, indent=2))
 
+    # 设计种子 fixture:动态槽节点 id -> 设计稿展示值(不变量⑦)。同源 fixture 的默认内容就是它;
+    # 真实 repository/DTO 用真接口字段覆盖这些键(不变量④),覆盖同值时可见层零变化。
+    slot_seed = {nid: nodes[nid].get("text", "") for nid in placed
+                 if nid in slot_ids and nodes[nid].get("implementation") == "text"}
+    slots_out = Path(str(out) + ".slots.json")
+    slots_out.write_text(json.dumps(slot_seed, ensure_ascii=False, indent=2))
+
     print(json.dumps({"out": str(out), "colors": str(colors_out), "expected": str(expected_out),
+                      "slots": str(slots_out), "slotCount": len(slot_seed),
                       "painted": painted, "skipped": skipped, "tokens": len(reg.colors)}))
     return 0
 

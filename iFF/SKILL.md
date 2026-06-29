@@ -183,9 +183,13 @@ worker 必须**先加载 `iFF/implementation_rules.md`(权威源)**并在 `worke
 命令:
 ```bash
 # 1) 编译可见层 + 颜色 token(响应式;资产前缀走 assets/images/,IMPL-ASSET-2)
+# 先产组件清单(只需 render_plan + classification),供 generate_canvas 标记动态文本槽:
+python3 ~/.claude/skills/iFF/scripts/make_component_manifest.py --render-plan spec_dir/render_plan.json --classification spec_dir/design_classification.json --out spec_dir/component_manifest.json
 python3 ~/.claude/skills/iFF/scripts/generate_canvas.py --render-plan spec_dir/render_plan.json \
-  --classification spec_dir/design_classification.json \
+  --classification spec_dir/design_classification.json --component-manifest spec_dir/component_manifest.json \
   --out lib/<feature>/presentation/home_artboard_canvas.dart --colors-import app_colors.dart --asset-prefix assets/images/
+# 产物含:可见层 dart(动态槽 = Text(slotText['<id>'] ?? '设计值'))、<out>.expected.json(保真基准)、
+# <out>.slots.json(设计种子 fixture:槽节点id->设计展示值,不变量⑦)。上层页面/同源 fixture 用 slots.json 初始化。
 # 2) 资产复制到 assets/images/ 并在 pubspec 注册(IMPL-ASSET-2)
 python3 ~/.claude/skills/iFF/scripts/copy_assets.py --manifest spec_dir/assets_manifest.json --target assets/images/
 # 3) 设计字体真打包(否则 Android 回退 Roboto,文字逐像素全错);SF Pro 用本机 SFNS.ttf
