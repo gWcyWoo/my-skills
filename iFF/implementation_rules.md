@@ -120,6 +120,27 @@
 - **IMPL-INFRA-2** 本地存储 key 集中管理,不散落。
 - **IMPL-INFRA-3** 持有连接/拦截器/缓存/全局状态的基础设施不每次临时创建;Provider/单例/统一入口复用,保留测试注入与 reset。
 
+## CMPB 组件合成(Track B 上线页)
+- **IMPL-CMPB-1** 上线页**可见层本体 = `generate_canvas` 产出的带 `ValueKey('iff:<节点id>')` 数据驱动坐标画布**(几何/样式由脚本从 `render_plan`/`tokens` 喂入);**不是静态 golden、不挂 preview 充数、不作"几何标尺"旁置**;严禁用 `Offstage` 把数据驱动组件藏起来,可见层必须真实挂在对应路由并随数据变化。
+- **IMPL-CMPB-2** 共享视觉原语(按钮/金额/胶囊/header…)抽公共;按态卡片各自文件但内部**组合原语**,不复制视觉(C1 折中)。
+- **IMPL-CMPB-3** 可见像素由 `generate_canvas` 脚本从 `render_plan`/`tokens` 喂入,**模型禁止手写 `Positioned`/颜色/圆角/字号或靠眼睛调**(调不对=脚本没喂进该值,**改 `generate_canvas.py` 不改 app**);模型只参数化数据/事件;保真由 `check_render_fidelity` 对**真实渲染 trace** 逐组件(bbox≤2px/主色 RGB≤3/字号·圆角≤1px/文案·token 100%/无缺节点)保证,**非 golden-vs-golden、非裸像素 SSIM**。
+- **IMPL-CMPB-4** 组件 typed props + 业务默认值 + 中文注释(作用/默认值语义/何时覆盖/错配影响)。
+
+## DATA 数据驱动槽位
+- **IMPL-DATA-1** 动态槽 = 字段 + 变换 + 出现条件;来源 `data_slot_bindings.json`,`needsModelBinding` 每条须模型按交互规则确认(如 INT-010 `level_money`→`max_money` 回退)。
+- **IMPL-DATA-2** 文本值走 DTO,不写字面量;格式化(₦千分位/日期/百分比)在领域层,组件只呈现。
+- **IMPL-DATA-3** 动态槽**先钉死设计宽度**(暂不放宽 flex);变长真数据裁切的取舍验证后再定。
+
+## API 接口对接
+- **IMPL-API-1** DTO 由 Apifox 真 OAS codegen,字段以 OAS 为准,禁手搓与后端漂移。
+- **IMPL-API-2** Repository 真 HTTP + mock **同源**(同 DTO 形);可注入单例(IMPL-INFRA-3),保留测试注入与 reset。
+- **IMPL-API-3** 每个声明端点必须有 repo 调用点(`check_api_integration`);loading/error/empty/轮询/禁截图按交互规则接。
+
+## WIRE 交互接线
+- **IMPL-WIRE-1** 每条交互规则的领域逻辑必须接到**运行时调用点**(组件事件/页面编排/repository),不能只被测试引用(`check_interaction_wiring`)。
+- **IMPL-WIRE-2** 组件只暴露视觉+事件入口;跳转/校验/链路编排在页面层(IMPL-LAYER-2)。
+- **IMPL-WIRE-3** intent 携带链路所需参数(pid/catch_stage/route/notice),页面据此编排,不二次猜测。
+
 ## TEST 测试
 - **IMPL-TEST-1** `flutter_test` 单元+组件测试,`*_test.dart`。
 - **IMPL-TEST-2** 断言聚焦可观察行为。

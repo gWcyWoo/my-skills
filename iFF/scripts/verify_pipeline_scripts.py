@@ -40,6 +40,17 @@ REQUIRED = [
     "check_interaction_coverage.py",
     "make_worker_prompt.py",
     "check_worker_compliance.py",
+    # Track B: component synthesis + interaction wiring + real API integration.
+    "reconcile_feature.py",
+    "normalize_api_contract.py",
+    "make_component_manifest.py",
+    "bind_data_slots.py",
+    "check_interaction_wiring.py",
+    "check_api_integration.py",
+    # Structured per-component render fidelity (replaces golden-vs-golden): trace the REAL
+    # render of the keyed online page and diff it against render_plan-derived expectations.
+    "gen_layout_trace_test.py",
+    "check_render_fidelity.py",
 ]
 
 
