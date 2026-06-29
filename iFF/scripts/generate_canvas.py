@@ -339,6 +339,15 @@ def emit_node(node: dict, asset_prefix: str, nodes: dict, reg: ColorRegistry, ar
         return (pos + f"_PunchedRect(color: {reg.ref(hex_to_argb_int(hexc, opacity))}, "
                 f"radius: {m(r)}, holes: [{hole_list}])" + end)
 
+    # 无切图矢量图标(Figma 默认名 "Vector"):render_plan 只有 bbox+fill,通用 shape 会画成纯色方块(错,
+    # 如返回箭头被画成黑块)。瘦高深色小矢量按几何画 '<' 返回 chevron(IMPL-IMG 缺图兜底,同 sparkle star);
+    # 其它小号无切图矢量给透明占位(节点仍 keyed/有 bbox 过 render_fidelity,但不再画错方块;真实图标应作切图导出)。
+    if (name.lower() == "vector" and hexc and not grad and not b
+            and w < 80 and h < 80 and radius_value(effective_radius(node, nodes)) <= 1):
+        if h >= w * 1.2:
+            return pos + f"CustomPaint(painter: _ChevronPainter(color: {reg.ref(hex_to_argb_int(hexc, opacity))}))" + end
+        return pos + "const SizedBox.expand()" + end
+
     rad = radius_expr(effective_radius(node, nodes))
     if rad:
         deco.append(f"borderRadius: {rad}")
@@ -458,6 +467,34 @@ class __PunchedRectPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant __PunchedRectPainter oldDelegate) => false;
+}
+"""
+
+_CHEVRON_PAINTER_SRC = """
+/// 无切图瘦高矢量图标(典型:返回箭头)的几何兜底,画一个 '<' chevron(IMPL-IMG 缺图兜底)。
+class _ChevronPainter extends CustomPainter {
+  const _ChevronPainter({required this.color});
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final double w = size.width, h = size.height;
+    final Paint p = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = w * 0.18
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
+      ..isAntiAlias = true;
+    final Path path = Path()
+      ..moveTo(w * 0.72, h * 0.12)
+      ..lineTo(w * 0.28, h * 0.5)
+      ..lineTo(w * 0.72, h * 0.88);
+    canvas.drawPath(path, p);
+  }
+
+  @override
+  bool shouldRepaint(covariant _ChevronPainter oldDelegate) => oldDelegate.color != color;
 }
 """
 
@@ -583,7 +620,9 @@ class _Home{name} extends StatelessWidget {{
     _widget_src = base_body + "".join(band_classes)
     used_star = "_SparkleStarPainter(" in _widget_src
     used_punched = "_PunchedRect(" in _widget_src
-    painters = (_STAR_PAINTER_SRC if used_star else "") + (_PUNCHED_PAINTER_SRC if used_punched else "")
+    painters = ((_STAR_PAINTER_SRC if used_star else "")
+                + (_PUNCHED_PAINTER_SRC if used_punched else "")
+                + (_CHEVRON_PAINTER_SRC if "_ChevronPainter(" in _widget_src else ""))
     # dart:math 只被 sparkle star 画笔用到(旋转角已在 Python 侧算成字面量);未用到就不导入,
     # 否则 analyze 报 unused_import。
     math_import = "import 'dart:math' as math;\n" if used_star else ""
