@@ -349,4 +349,9 @@ P1 — 工作队列:**只选 status 为空**的行,每批 N(默认 2);选中**�
 P1 — 单行顺序:确认视觉策略 → 本 skill 脚本取稿/下载完整 cover → **Apifox 读契约(运行时依赖,须配 Apifox MCP)** → 生成 scene/tokens/assets_manifest/groups/layout_contract/render_plan/fixture/interaction_contract/interaction_test_plan → 读项目 → 按交互测试计划设计测试(接口用例用真实契约 mock)→ 坐标编译实现 UI → 接口接入+mock 渲染 → 真实设备截图 diff → 单次 repair 复验 → 交互覆盖/视觉/manifest 自检。
 P1 — 运行时外部依赖:**Apifox MCP**(读接口契约)、Lanhu 网络/API 访问、Flutter 设备/模拟器;真跑/测试前需在目标环境就绪。
 P2 — `spec_dir` 缓存命中且包含 `reference.png` 才跳过取稿(幂等)。
-</final_reminders>
+P1 — 可见层工具链回归自测(改完即跑):任何对 `generate_canvas.py` / `gen_layout_trace_test.py` /
+`check_render_fidelity.py` 的改动,改完**必须**跑 `python3 ~/.claude/skills/iFF/scripts/selftest_canvas.py
+--project <flutter工程>`——它用 `iFF/selftest/` 的合成 reference 走完整链(生成画布 → flutter analyze 干净
+→ 生成 trace 测试 → flutter test → check_render_fidelity 逐节点过),覆盖 text/金额/圆角 shape/渐变/
+瘦高 Vector→'<'、矮宽 Vector→'v' chevron/输入值文本等易回归节点类型。绿了才提交。这是为根除"改一处编译/
+运行回归被下一轮 worker 撞上"(曾致 R5/R7 训练)而固化的纪律。
