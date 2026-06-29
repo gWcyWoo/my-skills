@@ -59,6 +59,30 @@ def node_role(node: dict) -> str:
     return "static_shape"
 
 
+# 真正的 UI chrome / 动作标签:卡片/列表区里它们保持静态;其它文本(产品名/银行名/状态文案等)
+# 视为接口数据候选(不变量④/IMPL-DATA-1b)。纯数字/金额/日期已由 node_role 标过。
+_CHROME_LABEL = re.compile(
+    r"^\s*(apply|withdraw|repayment|repay|continue|cancel|confirm|ok|submit|next|back|done|close|"
+    r"feedback|wait\s*a\s*moment|give\s*5\s*stars?|borrow\s*max|max|all\s*read|view|see\s*all|"
+    r"details?|history|settings|add|edit|delete|save|retry|got\s*it|change|select|choose|verify|"
+    r"send|resend|pay|remove|clear|skip|ok|yes|no|agree|got\s*it)\s*$", re.I)
+
+
+def is_chrome_label(text: str) -> bool:
+    t = (text or "").strip()
+    return len(t) <= 2 or bool(_CHROME_LABEL.match(t))
+
+
+def promote_region_text_slots(members: list) -> None:
+    """卡片/列表区里非 chrome 的静态文本 → 动态槽候选(模型据 OAS 确认绑定或回退静态)。
+    宽网:漏标一个接口字段(画死)比多审一个候选代价更大(IMPL-DATA-1b)。"""
+    for m in members:
+        if (m.get("role") == "static_text" and m.get("text")
+                and not is_chrome_label(m["text"])):
+            m["role"] = "dynamic_text_slot"
+            m["promotedByRegion"] = True  # 候选:须 bind_data_slots/模型确认绑到 OAS,否则回退 static
+
+
 def within(outer: list, inner: list, pad: float = 1.0) -> bool:
     ox, oy, ow, oh = outer
     ix, iy, iw, ih = inner
@@ -146,6 +170,7 @@ def main() -> int:
         # Loan-card variant components.
         for i, c in enumerate(cards):
             members = collect_member_nodes(nodes, c["bbox"], exclude_root=c["node"])
+            promote_region_text_slots(members)  # 卡片区文本字段宽网为动态候选(IMPL-DATA-1b)
             components.append({
                 "name": "LoanCardComponent",
                 "kind": "loan_card",
