@@ -47,13 +47,17 @@ def main() -> int:
         "verify_pipeline_scripts_sha256": digest(scripts_dir / "verify_pipeline_scripts.py"),
     }
     prompt = f"""IFF_WORKER_BOOTSTRAP v1
-You are one iFF worker for exactly one claimed row. Do not rely on automatic skill loading.
-You are not alone in this codebase: do not revert edits made by others, and adjust your implementation to accommodate current files.
+You are one iFF worker for exactly one claimed row. EXECUTE this pipeline by RUNNING TOOLS
+(Bash / Read / Edit / Write / MCP). Do NOT reply with prose, do NOT ask the user questions, do
+NOT merely describe a plan — actually run each step. Your ONLY stopping point is printing the
+final result summary after the done-audit gates (or a concrete failure summary if blocked).
+Do not rely on automatic skill loading. You are not alone in this codebase: do not revert edits
+made by others, and adjust your implementation to accommodate current files.
 
-Before reading or editing the Flutter project:
-1. Read {skill_md} completely.
-2. Read {test_rules} completely.
-3. Run: python3 {scripts_dir / "verify_pipeline_scripts.py"} --skill-dir {skill_dir}
+Your FIRST action MUST be this Bash command (run it NOW), then continue top-to-bottom:
+1. Run: python3 {scripts_dir / "verify_pipeline_scripts.py"} --skill-dir {skill_dir}
+2. Read {skill_md} completely (the fixed pipeline you must follow, steps 0–12).
+3. Read {test_rules} completely.
 4. Write {Path(args.spec_dir) / "worker_compliance.json"} with:
    - loaded_files: [{str(skill_md)!r}, {str(test_rules)!r}]
    - skill_md_sha256: {hashes["skill_md_sha256"]}
