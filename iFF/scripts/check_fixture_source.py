@@ -12,8 +12,12 @@ import argparse
 import re
 from pathlib import Path
 
-SYMBOL = re.compile(r"^\s*(?:class|mixin|enum)\s+(\w+)|^\s*(?:const|final)\s+(?:[\w<>, ]+\s+)?(\w+)\s*=",
-                    re.M)
+# 允许 class 前的修饰符(abstract/final/sealed/base/interface/mixin),否则
+# `abstract final class XxxVisualFixture` 这种声明会被漏检(make_visual_fixture 正是这么发的)。
+SYMBOL = re.compile(
+    r"^\s*(?:(?:abstract|final|sealed|base|interface|mixin)\s+)*(?:class|mixin|enum|extension)\s+(\w+)"
+    r"|^\s*(?:const|final)\s+(?:[\w<>, ]+\s+)?(\w+)\s*=",
+    re.M)
 
 
 def is_skip(path: Path) -> bool:
