@@ -85,6 +85,17 @@ void main() {
         rec['colorArgb'] = t.style?.color?.toARGB32();
         rec['text'] = t.data ?? t.textSpan?.toPlainText();
       }
+      // 表单输入值由真实 TextField 承载(IMPL-FORM-2):它渲染 EditableText 而非 Text,
+      // 这里读其当前文本/样式,使输入值节点同样可被逐组件保真校验。
+      if (rec['text'] == null) {
+        final Finder ef = find.descendant(of: f.first, matching: find.byType(EditableText));
+        if (ef.evaluate().isNotEmpty) {
+          final EditableText e = tester.widget<EditableText>(ef.first);
+          rec['text'] = e.controller.text;
+          rec['fontSize'] = e.style.fontSize;
+          rec['colorArgb'] = e.style.color.toARGB32();
+        }
+      }
       final Finder df = find.descendant(of: f.first, matching: find.byType(DecoratedBox));
       if (df.evaluate().isNotEmpty) {
         final DecoratedBox d = tester.widget<DecoratedBox>(df.first);

@@ -76,7 +76,11 @@
 
 ## FORM 表单输入与选择
 - **IMPL-FORM-1** 输入框与选择框职责拆开,不塞同一复杂组件。
-- **IMPL-FORM-2** 输入框用原生 `TextField`/`TextFormField` 的 `InputDecoration`/`labelText`/`floatingLabelBehavior`/`OutlineInputBorder`;不包 `InkWell`/`GestureDetector` 模拟聚焦。
+- **IMPL-FORM-2 表单 = 坐标画布(框/标签)+ 真实输入控件(值)**:坐标画布(generate_canvas)负责并**只**负责输入框**边框 + 静态 label** 的可见像素(保真源);**输入的"值"是真实可编辑控件**,挂 `ValueKey('iff:<值节点id>')` 透明叠加在该值节点 bbox×u 上:
+  - 文本输入用原生 `TextField`/`TextFormField`,但 **`InputDecoration` 必须折叠**(`border: InputBorder.none`、无 `labelText`/`filled`/`contentPadding` 复制),否则会和画布的框/标签**双重渲染**破坏 render_fidelity;**不包 `InkWell`/`GestureDetector` 模拟聚焦**。
+  - 该 `TextField` **显示真实输入值**(初值=同源设计值/接口回填),用户输入即可见;`check_render_fidelity` 与 trace 在该值节点上**读 TextField 的当前文本**(非画布静态 Text)——所以值节点在画布侧不再画静态 Text,改由输入控件承载值像素。
+  - 选择类(性别/证件类型/日期)用 tap 唤起 dialog/`showDatePicker`(picker-only),选中值同样回写到该值节点的展示控件。
+  - 无设计值节点的字段(如某些占位输入),其输入控件直接渲染可见文本。
 - **IMPL-FORM-3** 显示不全允许折行;输入时过滤换行符;长 label 优先浮动到边框。
 
 ## TOKEN 颜色与样式
