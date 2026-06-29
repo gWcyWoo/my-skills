@@ -344,9 +344,12 @@ def emit_node(node: dict, asset_prefix: str, nodes: dict, reg: ColorRegistry, ar
     # 其它小号无切图矢量给透明占位(节点仍 keyed/有 bbox 过 render_fidelity,但不再画错方块;真实图标应作切图导出)。
     if (name.lower() == "vector" and hexc and not grad and not b
             and w < 80 and h < 80 and radius_value(effective_radius(node, nodes)) <= 1):
-        if h >= w * 1.2:
-            return pos + f"CustomPaint(painter: _ChevronPainter(color: {reg.ref(hex_to_argb_int(hexc, opacity))}))" + end
-        return pos + "const SizedBox.expand()" + end
+        chev = reg.ref(hex_to_argb_int(hexc, opacity))
+        if h >= w * 1.2:  # 瘦高 → 返回 '<' chevron
+            return pos + f"CustomPaint(painter: _ChevronPainter(color: {chev}))" + end
+        if w >= h * 1.2:  # 矮宽 → 下拉/选择框 'v' chevron
+            return pos + f"CustomPaint(painter: _ChevronPainter(color: {chev}, down: true))" + end
+        return pos + "const SizedBox.expand()" + end  # 方形未知小矢量:透明占位(不画错方块)
 
     rad = radius_expr(effective_radius(node, nodes))
     if rad:
@@ -473,8 +476,9 @@ class __PunchedRectPainter extends CustomPainter {
 _CHEVRON_PAINTER_SRC = """
 /// 无切图瘦高矢量图标(典型:返回箭头)的几何兜底,画一个 '<' chevron(IMPL-IMG 缺图兜底)。
 class _ChevronPainter extends CustomPainter {
-  const _ChevronPainter({required this.color});
+  const _ChevronPainter({required this.color, this.down = false});
   final Color color;
+  final bool down;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -482,19 +486,28 @@ class _ChevronPainter extends CustomPainter {
     final Paint p = Paint()
       ..color = color
       ..style = PaintingStyle.stroke
-      ..strokeWidth = w * 0.18
+      ..strokeWidth = (down ? h : w) * 0.18
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round
       ..isAntiAlias = true;
-    final Path path = Path()
-      ..moveTo(w * 0.72, h * 0.12)
-      ..lineTo(w * 0.28, h * 0.5)
-      ..lineTo(w * 0.72, h * 0.88);
+    final Path path = Path();
+    if (down) {
+      path
+        ..moveTo(w * 0.18, h * 0.32)
+        ..lineTo(w * 0.5, h * 0.68)
+        ..lineTo(w * 0.82, h * 0.32);
+    } else {
+      path
+        ..moveTo(w * 0.72, h * 0.12)
+        ..lineTo(w * 0.28, h * 0.5)
+        ..lineTo(w * 0.72, h * 0.88);
+    }
     canvas.drawPath(path, p);
   }
 
   @override
-  bool shouldRepaint(covariant _ChevronPainter oldDelegate) => oldDelegate.color != color;
+  bool shouldRepaint(covariant _ChevronPainter oldDelegate) =>
+      oldDelegate.color != color || oldDelegate.down != down;
 }
 """
 
