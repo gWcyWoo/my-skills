@@ -93,7 +93,7 @@ void main() {
           final EditableText e = tester.widget<EditableText>(ef.first);
           rec['text'] = e.controller.text;
           rec['fontSize'] = e.style.fontSize;
-          rec['colorArgb'] = e.style.color.toARGB32();
+          rec['colorArgb'] = e.style.color?.toARGB32();
         }
       }
       final Finder df = find.descendant(of: f.first, matching: find.byType(DecoratedBox));

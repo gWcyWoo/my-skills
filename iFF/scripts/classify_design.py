@@ -70,20 +70,17 @@ def main() -> int:
     if not tall and not wide:
         design_type = "screen"
         reason = "artboard is a single device viewport"
-    elif tall and len(page_groups) >= 2:
+    elif tall and states and len(page_groups) >= 2:
+        # 仅当检测到真实状态标记(apply_status 等 STATE_WORDS)且有多个整页块,才是堆叠多态板。
+        # 否则一张很长的画板就是一张可滚动的长单屏(长表单/长列表)——绝不凭空 state_1..N 造状态。
         design_type = "variant_board"
-        reason = "long artboard stacking multiple full-page states"
-        if not states:
-            states = [f"state_{i + 1}" for i in range(len(page_groups))]
-    elif tall and len(groups) >= 8:
-        design_type = "component_sheet"
-        reason = "tall catalog of many independent components (no full-page states)"
-    elif len(page_groups) >= 2:
+        reason = "long artboard stacking multiple real-state full pages"
+    elif wide and len(page_groups) >= 2:
         design_type = "flow_board"
-        reason = "multiple page-like screens in one artboard"
+        reason = "side-by-side page-like screens in one wide artboard"
     else:
         design_type = "screen"
-        reason = "single page-like artboard"
+        reason = "single (possibly long/scrollable) page"
 
     result = {
         "type": design_type,
