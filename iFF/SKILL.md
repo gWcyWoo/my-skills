@@ -184,6 +184,7 @@ worker 必须**先加载 `iFF/implementation_rules.md`(权威源)**并在 `worke
 ```bash
 # 1) 编译可见层 + 颜色 token(响应式;资产前缀走 assets/images/,IMPL-ASSET-2)
 python3 ~/.claude/skills/iFF/scripts/generate_canvas.py --render-plan spec_dir/render_plan.json \
+  --classification spec_dir/design_classification.json \
   --out lib/<feature>/presentation/home_artboard_canvas.dart --colors-import app_colors.dart --asset-prefix assets/images/
 # 2) 资产复制到 assets/images/ 并在 pubspec 注册(IMPL-ASSET-2)
 python3 ~/.claude/skills/iFF/scripts/copy_assets.py --manifest spec_dir/assets_manifest.json --target assets/images/

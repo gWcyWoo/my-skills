@@ -403,9 +403,19 @@ def main() -> int:
     ap.add_argument("--colors-out", help="app_colors.dart path (default: alongside --out)")
     ap.add_argument("--colors-import", default="app_colors.dart")
     ap.add_argument("--asset-prefix", default="assets/images/")
+    ap.add_argument("--classification", help="design_classification.json — authoritative artboard dims")
     ap.add_argument("--artboard-width", type=float, default=750.0)
     ap.add_argument("--artboard-height", type=float, default=5874.0)
     a = ap.parse_args()
+
+    # 画板尺寸以设计分类为准(不同设计稿高度不同);只有未提供 classification 时才用默认值,
+    # 避免把某一稿的高度(如旧 5874)写死到所有稿。
+    if a.classification and Path(a.classification).is_file():
+        art = json.loads(Path(a.classification).read_text()).get("artboard") or {}
+        if art.get("width"):
+            a.artboard_width = float(art["width"])
+        if art.get("height"):
+            a.artboard_height = float(art["height"])
 
     rp = json.loads(Path(a.render_plan).read_text())
     nodes = rp["nodes"]
