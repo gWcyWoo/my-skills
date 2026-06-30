@@ -16,7 +16,7 @@
 ## 阶段 0 取稿 & 分类(5)
 | 脚本 | 消费 | 产出 | 验它的门 |
 |---|---|---|---|
-| `reconcile_feature` | lib-root, title | feature_match.json | — |
+| `reconcile_feature` | lib-root, title | **reconcile_decision.json**(模型读它定归属) | — |
 | `fetch` | url, cookie | **raw.json** + 切图 | — |
 | `write` | raw.json | spec.md(人读) | — |
 | `download_cover` | url, cookie | **reference.png** | — |
@@ -85,7 +85,9 @@
 - `classify_blocker` — 自进化路由器(失败→①自改/②强契约/③升级/④天花板);**尚未接主流程**。
 
 ## 断链/漏注册自查规则
-1. 任一脚本的 **产出 artifact 必须有下游消费**(本表"消费"列出现),否则是死产物。
-2. 任一被消费的 artifact 必须有 **上游产出**,否则 worker 会读到空。
+> **消费/产出方包含"模型"**,不只脚本:`implementation_map.json` 由模型写、被 `check_implementation_map` 门消费;
+> `repair_plan.json` / `data_slot_bindings.json` 由模型读。判死链前先确认不是"模型产/模型消费"。
+1. 任一脚本的 **产出 artifact 必须有下游消费**(脚本或模型),否则是死产物。
+2. 任一被消费的 artifact 必须有 **上游产出**(脚本或模型),否则 worker 会读到空。
 3. 阶段 0–8 的每个**核心产物**(scene/render_plan/canvas/contract/api_contract…)必须有**至少一道门**验它。
 4. 所有非辅助脚本必须在 `verify_pipeline_scripts.py` REQUIRED 中(本次就抓到 generate_canvas 漏注册)。
