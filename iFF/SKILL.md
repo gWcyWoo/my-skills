@@ -181,9 +181,10 @@ python3 ~/.claude/skills/iFF/scripts/check_implementation_plan.py --plan spec_di
 ### 6.6 注入项目实现规范到 CLAUDE.md(确定性,P0)
 落地工程前必须把实现规范注入目标工程 `CLAUDE.md`,让所有 agent(含本 worker)统一遵守:
 ```bash
-python3 ~/.claude/skills/iFF/scripts/sync_project_rules.py --rules ~/.claude/skills/iFF/implementation_rules.md --project-root .
+python3 ~/.claude/skills/iFF/scripts/sync_project_rules.py --rules ~/.claude/skills/iFF/implementation_rules.md --memory ~/.claude/skills/iFF/evolution/case_memory.md --project-root .
 ```
 worker 必须**先加载 `iFF/implementation_rules.md`(权威源)**并在 `worker_compliance.json` 记录,所有可见层实现按 `IMPL-*` 规则执行。
+注入会把 `evolution/case_memory.md`(B 类判断先例)一并写进 CLAUDE.md;worker 在 归属/⑥交互绑定/⑦数据绑定 前**必须先读案例记忆**,命中 signature 就按其 decision 做(看 why 判适用性),并在产物里记录命中的 CASE-id(供 evolution 子 agent 累计 `seen`)。
 
 ### 6.7 脚本生成响应式画布 + 颜色 token + 字体(确定性,P0)
 可见层生成是**确定性的,必须脚本化**——禁止模型手写。`generate_canvas.py` 走**关系换算**:每个尺寸/位置都是「设计像素 × u」,`u = LayoutBuilder.maxWidth / 设计宽度`(`IMPL-LAYOUT-1`),设计宽度下 1:1 还原(供视觉 QA),真机按比例自适应;颜色全抽到 `app_colors.dart`(`IMPL-TOKEN`),不写死宽高/`scale`(`IMPL-LAYOUT-2`),不加 `TextStyle.height`(`IMPL-LAYOUT-4`),按区域拆 widget(`IMPL-COMP-1`),中文注释(`IMPL-DOC`)。

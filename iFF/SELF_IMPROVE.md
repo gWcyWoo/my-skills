@@ -1,58 +1,50 @@
-# iFF 自我进化操作规程(self-improvement loop)
+# iFF 自我进化操作规程(每张设计跑完即进化)
 
-> 动机:对"任意设计稿一次扇出"不能靠多跑训练轮(本会话 12 轮、26 次手动根因→修→自测→提交,且修复
-> 本身反复引回归)。这套规程把那个**元循环自动化**,但有两条铁的安全边界:
-> **① 不能静默回归**(语料自测)· **② 不能静默放宽不变量**(路由器强制升级)。
-> 现状:安全网(corpus self-test)+ 路由器(classify_blocker)已建并验证;`apply_script_fix` 编排与
-> 两个策略决定待人拍板(见末尾 ⛳)。
+> 目标:每跑完一张设计,skill 产出一个「让下次更好」的 PR——要么收紧一条脚本,要么加一条案例记忆,
+> 要么登记一个边界。两条铁的安全边界:**① 不能静默回归**(corpus 自测)· **② 不能静默放宽不变量**(router 强制升级)。
+> 进化是「为下次」,不回头改已跑完的任务。**所有改动走 PR,人审合入才生效**(默认不自动合)。
 
-## 循环(每次 worker 跑完一张设计)
-```
-worker 跑 → 结构化失败记录(已在产:{visual,interaction,data,blockers[],manual_judgements[]})
-  → classify_blocker.py 路由每条失败/绕过 → 按出口分流:
-       ① AUTO_FIX_SCRIPT   → 见下"自改脚本纪律"(可自动)
-       ② STRENGTHEN_CONTRACT→ 收紧契约/门(parse/completeness/bind 的信号词、IMPL-* 规则),模型填空
-       ③ ESCALATE          → 冻结,带证据升级给人(任何会动不变量的修复)
-       ④ RECORD_CEILING    → 记 ceilings(必须带 probe,否则 NEEDS_PROBE 退回)
-  → 若全部是 ①/④(且 ④ 有 probe)→ autoEvolvable=true,自动进化
-  → 出现 ②/③/NEEDS_PROBE → classify_blocker 退出非零,循环暂停等人
-```
+## 何时、由谁
+每张设计的 worker 跑完(产出失败记录 `{blockers[], manual_judgements[], 命中的 CASE-id, gate 结果}`)→
+orchestrator **spawn 一个 evolution 子 agent**,在 **skill 仓的 git worktree** 里干活(不碰当前任务、不碰 `main`)。
 
-## ① 自改脚本纪律(determinism 失败,唯一允许 skill 改自己代码的路)
-铁律:**每个确定性修复必须把"会触发它的最小用例"沉淀成永久回归 fixture**,否则不许提交。
-1. 在 `evolution/regression/<NNNN_concern>/` 放一个**最小、单一关注点**的 fixture:`render_plan.json` +
-   `classification.json`(+ `meta.json` 记 origin/exercises/assert)。最小+单概念是硬要求——R11 的回归正是
-   因为"双 chevron 在同一 ref 里盖住了单分支 warning"。
-2. **红-before**:fixture 在**未打补丁**的脚本上必须 FAIL(`git show HEAD:<script>` 取旧版跑该 fixture)。
-3. 写补丁(模型改脚本)。
-4. **绿-after + 全量回归**:`python3 scripts/selftest_canvas.py --project <flutter工程>` —— 整个 corpus
-   全绿(generate_canvas→flutter analyze 无 warning→trace→check_render_fidelity 逐节点过)。
-5. 红-before ∧ 绿-after ∧ 全量绿 → 才允许 commit(commit 信息记 origin 设计 + corpus case id)。
+## 子 agent 流程
+1. **读失败记录 + 跑 router**:`classify_blocker.py --failure <record>` → 每条失败分 A/B/C/天花板。
+2. **建 worktree + 分支**:`git worktree add ../iff-evo-<design> -b iff-evo-<design> main`(基于最新 main 或当前迭代分支)。
+3. **按类处理**:
+   - **A 确定性**(脚本没喂对/没处理):改脚本 + 在 `evolution/regression/<NNNN>/` 放**最小、单关注点** fixture
+     → **红-before**(`git show HEAD:<script>` 跑旧版必 FAIL)→ **绿-after + 全量 corpus 绿**(`selftest_canvas.py`)→ 才提交。
+   - **B 判断**(绑错字段/漏抽规则/语义归属):往 `evolution/case_memory.md` 加/改一条先例
+     (`signature / decision / why / from / seen`)。**只来自被纠正的误判**。见下「seen 与毕业」。
+   - **C 边界**(动不变量,如全屏背景图):**不自动改**,登记到升级清单 + `evolution/ceilings.md`(须带 probe),PR 里标 `NEEDS-HUMAN`。
+4. **提交 PR**:`open_pr.py --branch iff-evo-<design> --title ... --body ...`
+   (host 自适应:github→gh/web,gitlab→glab/push-option,未知→push+URL,**绝不写死 gh**)。
+5. **清理**:`git worktree remove`。一张设计一个 PR。
 
-## ② 强化契约(NL 判断滑过门)
-不改脚本逻辑,改"逼模型把判断落成可验证证据"的约束:`check_interaction_completeness` 信号词、
-`bind_data_slots` 的 `needsModelBinding`、`make_component_manifest` chrome 守卫、`implementation_rules` 某条。
-门只能保证"每条判断都接到且可证",判断对错由跨数据/语义回归兜(见⛳决策2)。
+## B 类:seen 计数与毕业(N=3)
+- worker 命中某 CASE 且**应用后过门** → 该 CASE `seen += 1`(确认复用,非裸匹配)。
+- 某次判断与已有 CASE **冲突** = 反例 → **改写该 CASE、`seen` 清零、不毕业**。
+- `seen ≥ 3` 且零反例 → **毕业**:evolution 子 agent **优先改脚本**(如 `bind_data_slots` 主动喂对),
+  改不了**才退而加 `check_*`**(挡误判);毕业后**从 case_memory.md 删除该 CASE**。
+  → 即:案例记忆是确定性规则的孵化器,稳定的判断最终沉淀成代码,记忆不无限膨胀。
 
-## ③ 升级(会动不变量——绝不自动)
-`classify_blocker` 的 INVARIANT-touch 守卫已把这类强制路由到 ESCALATE(放宽阈值 / 允许整图铺底 /
-放行 Offstage / 重开 golden / 加 analysis_options exclude 等关键词)。**skill 永不自行放宽不变量**——
-这是不变量⑤在元层面的落地(严禁为过门放宽真实缺陷判定)。带证据交人决定。
+## 案例记忆怎么被消费
+`sync_project_rules.py --memory evolution/case_memory.md` 在 worker 启动时把记忆注入工程 CLAUDE.md
+(check-if-present / inject-if-absent,空记忆跳过)。worker 在 归属 / ⑥交互绑定 / ⑦数据绑定 前**先读**,
+命中 signature 就按 decision 做(看 why 判适用性),并在产物记录命中的 CASE-id 供累计 `seen`。
 
-## ④ 天花板(环境/数据物理限)
-记 `evolution/ceilings.md`,**必须带 probe**(MissingPluginException / 端点不在 OAS / 跨引擎抗锯齿 /
-无切图 / 真机状态栏)。无 probe = NEEDS_PROBE,退回当 ①/② 重路由(防"偷懒造天花板",我自己把 申请5
-误判成天花板就是反例)。
+## 安全边界(为什么不会越改越坏)
+- **回归**:A 类每次自改**必须**新增「会触发它」的最小 fixture,全量 corpus 必须绿——corpus 覆盖度 = 自改脚本的安全上限(R5/R7/R11 的教训)。
+- **不变量**:`classify_blocker` 的 INVARIANT-touch 守卫把「放宽阈值/允许整图铺底/放行 Offstage/重开 golden/加 analysis_options exclude」强制路由到 ESCALATE,**skill 永不自行放宽不变量**(不变量⑤的元层落地)。
+- **人审**:PR 默认不自动合,合入前 skill 不变——自改不可能静默上线。
 
-## 收敛信号(替代"连续 3 张干净")
-不再靠跑通固定语料,而是:**回归 corpus 只增不减 + 最近 N 张全新设计零 ① 类(确定性)失败 +
-零静默放宽不变量**。即"新设计不再产生新的确定性 bug",才是 skill 真的稳了。
+## 已建组件
+- `scripts/classify_blocker.py` — router(A/B/C/天花板 + 强制升级)。
+- `scripts/selftest_canvas.py` + `evolution/regression/*` — corpus 回归自测(语料驱动)。
+- `scripts/open_pr.py` — host 自适应 PR/MR 提交。
+- `evolution/case_memory.md` + `sync_project_rules.py --memory` — B 类记忆 + 注入。
+- `evolution/ceilings.md` — 天花板登记(带 probe)。
 
-## 已建 vs 待建
-- ✅ 安全网:`scripts/selftest_canvas.py`(corpus 驱动)+ `evolution/regression/{0001_full,0002_backonly}`。
-- ✅ 路由器:`scripts/classify_blocker.py`(4 出口 + INVARIANT-touch 强制升级,已在 R11/R12/R9 验证)。
-- ⛳ 待建/待决:
-  - `apply_script_fix.py` 编排(红-before/绿-after/全量绿;**是否自动 commit 还是关键脚本需人 gate** = 决策1)。
-  - **决策2(NL 对错)**:是否加一道"语义回归门"——切 mock 值看可见层/语义是否按预期变(抓"绑错字段")。
-  - **R12 不变量①边界**:全屏背景图(其上有真实数据驱动内容)允许当 backdrop 渲染,还是仍按整图铺底禁?
-  - evolution 主循环接到 worker 收尾(`failures/` 落盘 → classify → 分流)。
+## 收敛信号(替代「连续 3 张干净」)
+**corpus 只增 + case_memory 持续毕业成脚本 + 最近 N 张全新设计零 A 类失败、零静默放宽不变量**——
+即新设计不再产生新的确定性 bug,B 类判断越来越多被记忆/脚本接住。
