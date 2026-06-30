@@ -72,9 +72,14 @@ THEN:
        • C 边界 / ESCALATE / NEEDS_PROBE → do NOT auto-change; record in evolution/ceilings.md (with a probe)
                      and mark the PR body `NEEDS-HUMAN`. NEVER relax an invariant to make a gate pass.
   5. Commit inside the worktree (imperative messages; reference the origin design + any corpus case id).
-  6. Open the PR host-agnostically:
-       python3 {skill}/scripts/open_pr.py --branch {branch} --target {a.base_branch} \\
-         --title "iFF evo: {a.design_name}" --body "<what this design taught the skill: A fixes / B cases / C escalations>"
+  6. Open the PR — ROUTER IS THE MERGE GATE (read /tmp/iff_route_{slug}.json):
+       • autoEvolvable=true (only AUTO_FIX/RECORD_CEILING — NO ESCALATE/NEEDS_PROBE/REVIEW) AND full
+         corpus green → pass --auto-merge (opens PR then merges; A is proven by red/green+corpus, B
+         case-memory is advisory & self-correcting, so neither needs a human).
+       • ANY ESCALATE/NEEDS_PROBE/REVIEW present → DO NOT pass --auto-merge; leave the PR open, body
+         marked NEEDS-HUMAN. Invariant-touching changes are never auto-merged.
+       python3 {skill}/scripts/open_pr.py --branch {branch} --target {a.base_branch} [--auto-merge] \\
+         --title "iFF evo: {a.design_name}" --body "<A fixes / B cases / C escalations; NEEDS-HUMAN if any>"
   7. Clean up: git -C {skill}/.. worktree remove {worktree}
 
 HARD RULES:
