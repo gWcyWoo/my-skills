@@ -52,6 +52,10 @@ REQUIRED = [
     # render of the keyed online page and diff it against render_plan-derived expectations.
     "gen_layout_trace_test.py",
     "check_render_fidelity.py",
+    # Core visible-layer generator + project-rule injection — were missing from the preflight,
+    # so a deletion of the single most important script would have gone undetected.
+    "generate_canvas.py",
+    "sync_project_rules.py",
 ]
 
 
