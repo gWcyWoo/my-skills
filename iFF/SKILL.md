@@ -59,7 +59,7 @@ iFF 在 MAIN session 运行,是**编排者**:被外部 `goal` 指令调起(goal 
 <pipeline>
 ## 固定流水线(P0)
 iFF 是设计稿编译器 + 模型补全业务逻辑 + 真机截图 diff + 单次 repair 复验。模型不直接“看图写 UI”;模型只读 `scene.json`、`groups.json`、`tokens.json`、`assets_manifest.json`、`layout_contract.json`、`render_plan.json`、`interaction_contract.json`、`interaction_test_plan.json`、`visual_fixture`、`diff_report.json`、`repair_plan.json` 来写和修代码。
-当前 `raw.json` 的主数据是 `figma_json.artboard`;复杂稿必须走 Figma JSON 专用编译器,不得再用 generic JSON walk + bbox/name 启发式作为主路径。旧 `export_scene.py`/`group_layout.py`/`make_layout_contract.py` 仅做兼容入口,检测到 `figma_json` 时会委托到 Figma 专用脚本。
+当前 `raw.json` 的主数据是 `figma_json.artboard`;一律走 Figma JSON 专用编译器 `export_figma_scene.py` / `group_figma_layout.py` / `make_figma_layout_contract.py`,不得用 generic JSON walk + bbox/name 启发式。
 	所有确定性环节必须由本 skill 目录脚本保证,脚本唯一合法目录是 `~/.claude/skills/iFF/scripts/`;禁止引用 `fd/scripts`、项目本地 `scripts/` 或临时脚本。确定性环节包括:worker prompt 生成/合规校验、设计获取/cover 下载、分类、Figma scene/tokens/assets_manifest 导出、Figma hierarchy 分组、Figma layout contract、render plan、设计产物总审计、fixture 生成、interaction contract/test plan、交互覆盖审计、资产复制/pubspec 注册、真机截图/manifest、视觉 diff、repair plan、manifest/fixture/render plan 审计。
 
 ### 脚本预检
