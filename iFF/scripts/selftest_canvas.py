@@ -28,13 +28,24 @@ from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent
 SELFTEST = SCRIPTS.parent / "selftest"
-REF_CLS = SELFTEST / "ref_classification.json"
-# Two references, because a fix can be masked by another path in the same reference:
-# the full one exercises both '<' and 'v' chevrons (so the chevron `down` param looked "used"),
-# while a real back-arrow-only design (no dropdown) is what tripped the unused_element_parameter
-# regression. Run BOTH so single-branch regressions are caught.
-REF_PLANS = [("full", SELFTEST / "ref_render_plan.json"),
-             ("backonly", SELFTEST / "ref_render_plan_backonly.json")]
+# Corpus-driven: each accumulated failure becomes a permanent regression fixture (a dir under
+# evolution/regression/ with render_plan.json + classification.json [+ meta.json]). Run ALL of them.
+# This is the load-bearing mechanism of the self-improving skill: a fix's failing case is added here
+# (red-before / green-after), and it can never silently regress because the whole corpus is re-run.
+# A fix can be masked by ANOTHER path in the SAME fixture (R11: a fixture with both '<' and 'v'
+# chevrons hid the back-'<'-only unused_element_parameter), so corpus entries must be MINIMAL +
+# single-concern, and analyze fails on warnings (not just errors).
+CORPUS_DIR = SCRIPTS.parent / "evolution" / "regression"
+
+
+def discover_corpus():
+    """Each subdir of evolution/regression/ with render_plan.json + classification.json is a case."""
+    entries = []
+    for d in sorted(p for p in CORPUS_DIR.iterdir() if p.is_dir()) if CORPUS_DIR.is_dir() else []:
+        rp, cls = d / "render_plan.json", d / "classification.json"
+        if rp.is_file() and cls.is_file():
+            entries.append((d.name, rp, cls))
+    return entries
 
 
 def run(cmd, cwd=None, capture=True):
@@ -46,9 +57,9 @@ def fail(stage: str, detail: str) -> int:
     return 1
 
 
-def _check_ref(proj: Path, pkg: str, tag: str, ref_plan: Path, keep: bool):
-    """Run the full chain for one reference. Returns (ok: bool, present: int, fail_detail: str)."""
-    cls_name = "Selftest" + tag.capitalize() + "Canvas"
+def _check_ref(proj: Path, pkg: str, tag: str, ref_plan: Path, ref_cls: Path, keep: bool):
+    """Run the full chain for one corpus case. Returns (ok: bool, present: int, fail_detail: str)."""
+    cls_name = "Selftest" + "".join(ch for ch in tag.title() if ch.isalnum()) + "Canvas"
     work = proj / "lib" / f"_iff_selftest_{tag}"
     testdir = proj / "test" / f"_iff_selftest_{tag}"
     trace_out = proj / ".dart_tool" / f"iff_selftest_trace_{tag}.json"
@@ -61,7 +72,7 @@ def _check_ref(proj: Path, pkg: str, tag: str, ref_plan: Path, keep: bool):
         canvas = work / "selftest_canvas.dart"
         colors = work / "app_colors.dart"
         r = run([sys.executable, str(SCRIPTS / "generate_canvas.py"),
-                 "--render-plan", str(ref_plan), "--classification", str(REF_CLS),
+                 "--render-plan", str(ref_plan), "--classification", str(ref_cls),
                  "--class-name", cls_name, "--out", str(canvas),
                  "--colors-out", str(colors), "--colors-import", "app_colors.dart"])
         if r.returncode != 0:
@@ -125,14 +136,17 @@ def main() -> int:
         return fail("setup", "could not read package name from pubspec.yaml")
     pkg = m.group(1)
 
-    for tag, ref_plan in REF_PLANS:
-        ok, present, detail = _check_ref(proj, pkg, tag, ref_plan, a.keep)
+    corpus = discover_corpus()
+    if not corpus:
+        return fail("setup", f"no regression cases under {CORPUS_DIR}")
+    for tag, ref_plan, ref_cls in corpus:
+        ok, present, detail = _check_ref(proj, pkg, tag, ref_plan, ref_cls, a.keep)
         if not ok:
-            return fail(f"reference '{tag}'", detail)
+            return fail(f"corpus case '{tag}'", detail)
         print(f"  [{tag}] ok — {present} nodes rendered, analyze clean, fidelity pass")
-    print("SELFTEST OK: visible-layer toolchain green on all reference designs "
-          "(text/amount/shape/gradient/back-'<'/dropdown-'v' chevron/input-value; both full and "
-          "back-only). Safe to commit visible-layer changes.")
+    print(f"SELFTEST OK: visible-layer toolchain green on all {len(corpus)} regression corpus "
+          f"case(s). Safe to commit visible-layer changes. (Add a fixture under evolution/regression/ "
+          f"for every new failure — red-before/green-after — so it can never silently regress.)")
     return 0
 
 
