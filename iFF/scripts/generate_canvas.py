@@ -346,7 +346,7 @@ def emit_node(node: dict, asset_prefix: str, nodes: dict, reg: ColorRegistry, ar
             and w < 80 and h < 80 and radius_value(effective_radius(node, nodes)) <= 1):
         chev = reg.ref(hex_to_argb_int(hexc, opacity))
         if h >= w * 1.2:  # 瘦高 → 返回 '<' chevron
-            return pos + f"CustomPaint(painter: _ChevronPainter(color: {chev}))" + end
+            return pos + f"CustomPaint(painter: _ChevronPainter(color: {chev}, down: false))" + end
         if w >= h * 1.2:  # 矮宽 → 下拉/选择框 'v' chevron
             return pos + f"CustomPaint(painter: _ChevronPainter(color: {chev}, down: true))" + end
         return pos + "const SizedBox.expand()" + end  # 方形未知小矢量:透明占位(不画错方块)
@@ -476,7 +476,7 @@ class __PunchedRectPainter extends CustomPainter {
 _CHEVRON_PAINTER_SRC = """
 /// 无切图瘦高矢量图标(典型:返回箭头)的几何兜底,画一个 '<' chevron(IMPL-IMG 缺图兜底)。
 class _ChevronPainter extends CustomPainter {
-  const _ChevronPainter({required this.color, this.down = false});
+  const _ChevronPainter({required this.color, required this.down});
   final Color color;
   final bool down;
 
