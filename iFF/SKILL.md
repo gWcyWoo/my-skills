@@ -26,7 +26,7 @@ iFF 在 MAIN session 运行,是**编排者**:被外部 `goal` 指令调起(goal 
 
 ## 执行架构:扇出实现 + 扇入集成(已确认)
 **并行硬约束**:工程共享改动点(`pubspec.yaml` 依赖/资产、路由/导航表、DI、主题、l10n、`build_runner`、`flutter analyze`)**不能并行写**,否则互相踩踏。故:
-- **公共组件(串行解析,扇出前)**:跨行共享的导航头/底部 tab 等区域,由 main 在扇出前统一解析(检测 → 查注册表 → 缺失则串行实现 + 登记,见 instructions 2.5);worker 对公共组件**只读复用**(挂载已登记 widget),严禁在扇出中创建/修改公共组件文件;公共组件区域的视觉缺陷不占 worker 单次修复预算,记录后留到串行扇入统一处理。
+- **公共组件(串行解析,扇出前)**:跨行共享的导航头/底部 tab 等区域,由 main 在扇出前统一解析(检测 → 查注册表 → 缺失则并行实现 + 串行收口登记,见 instructions 2.5);worker 对公共组件**只读复用**(挂载已登记 widget),严禁在扇出中创建/修改公共组件文件;公共组件区域的视觉缺陷不占 worker 单次修复预算,记录后留到串行扇入统一处理。
 - **扇出(画板级三段式;R1 实测教训:行级扇出让 1 个 worker 串行磨 8-11 张板,54min/页)**:
   - **①fetch-worker(每行一个,行间并行)**:对本行每张板依次跑固定流水线 0-3 步脚本(取稿/scene/tokens/assets_manifest/groups → `lanhu/specs/<feature>/<board>/`),纯脚本执行、不读产物、不做判断;返回每板取稿成败。之后 main 跑 detect/建缺失公共组件(串行)/重跑 detect/预拉 OAS(见 instructions 2.5)。
   - **②board-worker(每板一个,全部并行;视觉编译单元)**:输入 = 本板 spec_dir + 公共组件 local 文件;产出 = 本板 `<state>_canvas.dart(+expected/slots)`、trace 测试文件、`artifact_digest.json`、本板 implementation_map 片段、本板保真准备。**只写本板专属文件**(R1 产物已证明各板 canvas/expected/slots/trace 天然不相交);禁写 page/selector/fixture/路由/pubspec;**不跑任何 `flutter test`**(测试调用预算全部归 assembly)。
@@ -55,7 +55,7 @@ iFF 在 MAIN session 运行,是**编排者**:被外部 `goal` 指令调起(goal 
 <instructions>
 1. **接收 goal**:从外部 `goal` 指令拿到目标 + 验收标准 + 目标表格路径。
 2. **读表 + 认领**:解析 CSV/Excel,挑 **status 为空**的行,每批取 **N 行(默认 2)**;**立即回写这几行 status=`doing`**(认领,防重复处理 / 支持断点续跑)。
-2.5. **预取稿 + 批内公共组件解析(扇出前)**:main 用 `make_worker_prompt.py --mode fetch` 给每个选中行 spawn 一个 **fetch-worker**(行间并行),它对本行每张板跑固定流水线 0-3 步脚本(main 自己**不跑取稿、不读产物**)→ 全部返回后 main 跑 `detect_shared_components.py --spec-dirs <各行spec_dir> --registry <工程>/.iff/shared_components.json --out <工程>/.iff/batch_shared_components.json`(同时写各行 `spec_dir/shared_components.local.json`)→ 对每个 `status=missing` 的公共组件:**串行逐个** spawn 专用 shared-component worker,以 `best_asset_source` 行的机器产物 + `pooled_assets`(跨行资产池化:A 页缺切图的 icon 可用 B 页同位置切图)实现该组件到工程共享 widget 目录(此时无并行,允许写共享文件与 pubspec 资产注册),组件**可见层必须由 `generate_canvas.py` 从源行该 group 子树生成**(key=源行 node id,产出组件自己的 `*.expected.json`——这是消费页逐页校验的基准),`flutter analyze` 干净 + 组件 widget 测试通过后 `register_shared_component.py` 登记,**必须带** `--from-batch`(存源行 canonical 节点序)与 `--component-expected <组件expected.json>`(存组件 keyed 期望节点),`assets_incomplete` 时必须带 `--assets-incomplete` 显式记录,禁止静默近似→ **重跑 detect 刷新 local 文件**(候选全部转 `reuse`)后才生成 worker prompt 并扇出。本步骤同时**预拉各行 OAS**(main 调 Apifox MCP 存 `spec_dir/oas.json`,worker 缓存命中即免拉,省 worker 内 1.5-3 分钟网络等待)并跑 `make_board_index.py --specs-dir lanhu/specs --out .iff/board_index.json`(交互锚定的确定性索引)。无公共组件候选时仅预取稿+预拉 OAS+建索引后直接扇出。
+2.5. **预取稿 + 批内公共组件解析(扇出前)**:main 用 `make_worker_prompt.py --mode fetch` 给每个选中行 spawn 一个 **fetch-worker**(行间并行),它对本行每张板跑固定流水线 0-3 步脚本(main 自己**不跑取稿、不读产物**)→ 全部返回后 main 跑 `detect_shared_components.py --spec-dirs <各行spec_dir> --registry <工程>/.iff/shared_components.json --out <工程>/.iff/batch_shared_components.json`(同时写各行 `spec_dir/shared_components.local.json`)→ 对 `status=missing` 的公共组件分两段:**实现并行**——每组件 spawn 一个专用 shared-component worker(同一条消息全部发起),以 `best_asset_source` 行的机器产物 + `pooled_assets`(跨行资产池化:A 页缺切图的 icon 可用 B 页同位置切图)实现该组件到工程共享 widget 目录;实现阶段各 worker **只写自家 widget dart + 组件测试文件 + 拷自家资产文件,禁碰 pubspec/注册表、禁跑 `flutter analyze`/`flutter test`**(analyze/test 编译整个 lib 树,兄弟组件半成品文件会造成假红);组件**可见层必须由 `generate_canvas.py` 从源行该 group 子树生成**(key=源行 node id,产出组件自己的 `*.expected.json`——这是消费页逐页校验的基准)。**收口串行**——全部 worker 返回后 main 在一致的树上验门:逐个 `update_pubspec_assets.py` 注册资产 → **一次** `flutter analyze` 干净 + **一次** `flutter test`(覆盖本批全部共享组件 widget 测试)→ 逐个 `register_shared_component.py` 登记,**必须带** `--from-batch`(存源行 canonical 节点序)与 `--component-expected <组件expected.json>`(存组件 keyed 期望节点),`assets_incomplete` 时必须带 `--assets-incomplete` 显式记录,禁止静默近似;任一组件验门失败只登记通过的、失败组件按 missing 上报 → **重跑 detect 刷新 local 文件**(候选全部转 `reuse`)后才生成 worker prompt 并扇出。本步骤同时**预拉各行 OAS**(main 调 Apifox MCP 存 `spec_dir/oas.json`,worker 缓存命中即免拉,省 worker 内 1.5-3 分钟网络等待)并跑 `make_board_index.py --specs-dir lanhu/specs --out .iff/board_index.json`(交互锚定的确定性索引)。无公共组件候选时仅预取稿+预拉 OAS+建索引后直接扇出。
 3. **扇出(画板级,Claude Code Agent 工具)**:**必须真并行——同一条消息一次性发起全部 `Agent` 调用;严禁串行等待(R1 实测行级串行 54min/页)。唯一互斥资源是设备窗口(9-11),由 `device_lock.py` 串行化。**
    - **3a. board-worker + contract-worker 全并行**(同一条消息发起:board 每板一个 `--mode board`,contract 每 feature 一个 `--mode contract`):board = compliance → digest → 本板 canvas/expected/slots(6.7)→ trace 测试文件生成 → 本板 implementation_map 片段,只写本板专属文件,不跑 flutter test;contract = 步骤 6 系列(交互契约+完整性门+状态机+锚定+api_contract+test plan,含模型填边/锚定确认),只写 feature 级契约文件,不跑任何 flutter 命令。
    - **3b. assembly-worker 每 feature 一个**(该 feature 的板 worker 与 contract worker 全部返回后,`--mode assembly`):selector/page/fixture/slot 绑定 → 消费步骤 6 产物(验 --check 通过,不重算)→ prefill 计划+填 modelFields → TDD red 一次/green 一次 → 数据接入(8.x)→ 持锁截图+diff+单次 repair(9-11)→ 审计(12,trace,feature 级一次)。多 feature 的 assembly 之间并行(共享文件按 feature 隔离,工程级共享仍留扇入)。
@@ -91,17 +91,19 @@ python3 ~/.claude/skills/iFF/scripts/check_worker_compliance.py --manifest spec_
 输出: `worker_prompt.md`、`worker_compliance.json`。
 硬门: main 不得手写短 prompt 直接 spawn worker;worker 未证明读取当前 `iFF/SKILL.md`、`iFF/test_rules.md`、未通过 pipeline scripts 预检、或 hash 与当前 skill 不一致时,该 worker 结果作废并重跑;不得进入扇入。
 
-### 批内公共组件解析(main 侧,串行,扇出前;worker 不执行本节)
+### 批内公共组件解析(main 侧,扇出前;实现并行、收口串行;行 worker 不执行本节)
 命令:
 ```bash
 # 各选中行先按步骤 1→3 产出 scene/groups(spec_dir 缓存,worker 后续命中即跳过),然后:
 python3 ~/.claude/skills/iFF/scripts/detect_shared_components.py --spec-dirs <row1_spec_dir> <row2_spec_dir> --registry .iff/shared_components.json --out .iff/batch_shared_components.json
-# 对 status=missing 的组件:串行实现(best_asset_source 行产物 + pooled_assets)+ analyze/widget 测试通过后登记:
+# 对 status=missing 的组件:并行实现(best_asset_source 行产物 + pooled_assets;各 worker 只写自家文件,
+# 禁碰 pubspec/注册表、禁跑 analyze/test)→ 全部返回后串行收口:pubspec 资产注册 + 一次 analyze +
+# 一次 flutter test(全部组件 widget 测试)在一致的树上通过后,逐个登记:
 python3 ~/.claude/skills/iFF/scripts/register_shared_component.py --registry .iff/shared_components.json --signature <sig> --name <WidgetClass> --widget-path lib/<共享widget目录>/<file>.dart --asset <已注册资产路径> --source-spec-dir <best_asset_source> --from-batch .iff/batch_shared_components.json --component-expected lib/<共享widget目录>/<canvas>.dart.expected.json
 # 登记后重跑 detect 刷新各行 spec_dir/shared_components.local.json(候选全部 reuse)再生成 worker prompt
 ```
 输出: `.iff/shared_components.json`(工程级注册表:signature → widget/资产,随工程提交)、`.iff/batch_shared_components.json`(本批解析:reuse/missing、`best_asset_source`、`pooled_assets`、`assets_incomplete`)、各行 `spec_dir/shared_components.local.json`(步骤 4 `--shared` 的输入)。
-硬门: 公共组件的创建/修改只允许发生在本串行步骤或串行扇入,扇出中的 worker 对公共组件只读;同一 signature 不得对应两个不同 widget(`register_shared_component.py` 冲突即报错);`assets_incomplete`(icon 在任何行都无切图)必须显式登记并在扇入总结上报,禁止用 Material 默认图标或近似图形静默顶替;`make_worker_prompt.py` 必须在本步骤之后运行(否则 local 文件不会注入 worker prompt);组件 signature 匹配只认 `detect_shared_components.py`(componentId 优先,结构哈希兜底),禁止模型凭名字/截图判断"是同一个组件"。
+硬门: 公共组件的创建/修改只允许发生在本步骤或串行扇入,扇出中的行 worker 对公共组件只读;**并行实现阶段的组件 worker 禁碰 pubspec/注册表、禁跑 analyze/test——这些全部属串行收口**(在一致的树上验门,避免半成品互踩假红);同一 signature 不得对应两个不同 widget(`register_shared_component.py` 冲突即报错);`assets_incomplete`(icon 在任何行都无切图)必须显式登记并在扇入总结上报,禁止用 Material 默认图标或近似图形静默顶替;`make_worker_prompt.py` 必须在本步骤之后运行(否则 local 文件不会注入 worker prompt);组件 signature 匹配只认 `detect_shared_components.py`(componentId 优先,结构哈希兜底),禁止模型凭名字/截图判断"是同一个组件"。
 
 ### 0a. 归属判定(Track B 入口,新页面 / 状态变体 / 复用)
 命令:
@@ -392,7 +394,7 @@ P0 — 第一版坐标编译:固定 artboard 根节点,用 `FittedBox` 或固定
 P0 — 保真量化门(结构化,不靠裸像素 SSIM,不变量③⑤):PASS 门 = `check_render_fidelity.py` 对**真实上线页渲染 trace** 逐组件达标——每可见节点 bbox 偏移 ≤ 2 logical px、主色 RGB 差 ≤ 3、字号/圆角误差 ≤ 1px、文案 100% 命中、token 100% 命中、无缺失(Offstage/坍塌)节点、**asset 区域形状达标(`--diff-report` 通道:区域 pixelMismatch ≤ 0.10,专治"位置/颜色对但图标字形错")**。像素 `SSIM`/`pixelMismatch`(`visual_diff.py`)**只作诊断**,受跨引擎抗锯齿天花板(~0.87 窗口SSIM / ~3% 真实差异,见下条)限制,**不作 done 阻断、严禁为过门放宽阈值**;真实缺陷修完仍有像素残差属天花板,据实记录。
 P0 — 视觉一致性门:每行 green 后必须用完整设计 `reference.png` 与运行时 `actual.png` 对比;没有 `reference.png` 不得实现,没有真实设备 `actual.png` 不得 `done`;“截图一致”验收只认 emulator/simulator 运行截图,任何从 reference 派生出来的 actual 都是无效证据;主要布局、资产、颜色、字号、圆角、间距、首屏层级明显不一致时,必须根据 `repair_plan.json` 修改一次并重新截图复验;复验达标才允许 CSV 写 `done`,复验仍不达标写 `error` 并进入下一需求;不得用 Material 默认图标、占位盒子、近似卡片替代设计稿已导出的资产;main 扇入后必须重新截图验收,发现差异也只能单次修正实现。
 P0 — 并行扇出只写各自 feature 文件夹,**绝不并行改共享文件**(pubspec/路由/DI/codegen/analyze 一律留到串行扇入一次性做)。
-P0 — 公共组件复用:跨行共享区域(导航头/底部 tab/跨行同 signature 分组)先检测、先查注册表,**能复用绝不重画**;检测(`detect_shared_components.py`,componentId 优先、结构哈希兜底)与登记(`register_shared_component.py`)必须脚本化,禁止模型凭名字/截图判断"是同一个组件";公共组件的创建/修改只能发生在串行阶段(扇出前 2.5 或扇入),worker 只读挂载已登记 widget;`covered_by_shared_component` 区域不进画布;同一 signature 两个实现 = 错误;`assets_incomplete`(icon 无任何切图来源)必须显式登记并上报,禁止 Material 默认图标或近似图形静默顶替。
+P0 — 公共组件复用:跨行共享区域(导航头/底部 tab/跨行同 signature 分组)先检测、先查注册表,**能复用绝不重画**;检测(`detect_shared_components.py`,componentId 优先、结构哈希兜底)与登记(`register_shared_component.py`)必须脚本化,禁止模型凭名字/截图判断"是同一个组件";公共组件的创建/修改只能发生在 2.5(实现可并行,pubspec/analyze/test/登记必须串行收口)或串行扇入,行 worker 只读挂载已登记 widget;`covered_by_shared_component` 区域不进画布;同一 signature 两个实现 = 错误;`assets_incomplete`(icon 无任何切图来源)必须显式登记并上报,禁止 Material 默认图标或近似图形静默顶替。
 P0 — 单行 **TDD**:先写测试跑出 red 再实现;测试源 = UI 理解 + `interaction_test_plan.json`;**交互描述每条都要覆盖 HAPPY/BOUNDARY/FAILURE**,case id 必须写进测试名或注释;测试只落本 feature test 目录;`interaction_test_evidence.json` 必须记录 red/green 命令和 exit_code。
 P0 — iFF 只定**流程**,不定实现细节:架构/目录/命名/资产·路由·状态·接口口径,一律由 subagent **读当前工程(目录+相关代码+工程规则文件)后随项目实现**,绝不自创或硬编码某套架构。
 P0 — 视觉实现红线:无论目标是否写“截图一致”,都禁止把设计稿截图、完整 artboard、reference 派生图作为组件可见层、背景图、`Image.asset`、`DecorationImage`、整图铺底或透明热区覆盖;交互热区可以叠加在真实视觉节点上,但不能替代视觉节点;验收只看真实 Flutter 页面/组件渲染结果与设计稿的一致性,必须组件逐层实现、截图比对、按 `repair_plan.json` 单次修复并复验。
