@@ -21,7 +21,7 @@
 - 绝不用 `skip` / `solo` / 注释掉断言 / 伪造结果 来制造红或绿。
 - red 阶段只写**测试 + 空桩**;若某红测试只能靠写生产代码才能转绿,那属于 green 阶段。
 - 每行必须写 `spec_dir/interaction_test_evidence.json`,记录 red/green 命令、exit_code 和每个 interaction case id 的测试映射;red 的 exit_code 必须非 0,green 的 exit_code 必须为 0。
-- **调用预算(硬)**:red 证据 = 对本 feature 测试目录的**一次** `flutter test test/<feature>` 调用(全部新测试在同一次里红);green 同理**一次**;done 审计再全量**一次**(含 trace 测试)。全行程 `flutter test` ≤ 3 次;**禁止逐 case、逐文件反复起 `flutter test`**——每次调用冷启 JIT 编译 20-40s,是实测单页耗时(40min)的第二大浪费。修复后的复跑合并进下一次预算内调用,不单独加跑。
+- **调用预算(硬)**:red 证据 = 对本 feature 测试目录的**一次** `flutter test test/<feature>` 调用(全部新测试在同一次里红);green 同理**一次**;done 审计对 `test/<feature>` 再**一次**(含 trace 测试;**全仓回归由 main 串行扇入批级统一跑一次,不占本预算、不由 worker 跑**)。全行程 `flutter test` ≤ 3 次;**禁止逐 case、逐文件反复起 `flutter test`**——每次调用冷启 JIT 编译 20-40s,是实测单页耗时(40min)的第二大浪费。修复后的复跑合并进下一次预算内调用,不单独加跑。
 - 测试名陈述**契约(行为)**,不陈述实现;锁定既有行为的守护用例要显式标注。
 
 ## 隔离与确定性
