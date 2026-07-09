@@ -71,7 +71,14 @@ rexec() {
   # 撤销)会被 set -e 误杀,且后果危险(撤销失败 → ufw 被自动 disable)。
   # 防"假绿"的正确做法:关键写入在该 step 末尾显式校验(如 'test -s <文件> && grep ...'),见 install_nginx。
   if [ "${DPT_BOOT:-root}" = root ]; then
-    ssh -S "$DPT_CTRL" "root@$DPT_HOST" "bash -s" <<<"$*"
+    # 特权 master 分支:master 由 connect.sh 以 DPT_BOOTUSER 建立。
+    # 引导用户是 root → 命令直接以 root 跑;非 root(如 ubuntu)→ 经同一 socket `sudo` 提权。
+    local bu="${DPT_BOOTUSER:-root}"
+    if [ "$bu" = root ]; then
+      ssh -S "$DPT_CTRL" "root@$DPT_HOST" "bash -s" <<<"$*"
+    else
+      ssh -S "$DPT_CTRL" "$bu@$DPT_HOST" "sudo bash -s" <<<"$*"
+    fi
   else
     ssh -o BatchMode=yes -o ConnectTimeout=8 -i "$DPT_KEY" -p "$DPT_PORT" \
         "$DPT_USER@$DPT_HOST" "sudo bash -s" <<<"$*"
@@ -81,7 +88,12 @@ rexec() {
 # rexec_in "<远端命令>" —— 把本函数的 stdin 作为「远端命令」的 stdin(用于 chpasswd 等)。
 rexec_in() {
   if [ "${DPT_BOOT:-root}" = root ]; then
-    ssh -S "$DPT_CTRL" "root@$DPT_HOST" "$*"
+    local bu="${DPT_BOOTUSER:-root}"
+    if [ "$bu" = root ]; then
+      ssh -S "$DPT_CTRL" "root@$DPT_HOST" "$*"
+    else
+      ssh -S "$DPT_CTRL" "$bu@$DPT_HOST" "sudo $*"
+    fi
   else
     ssh -o BatchMode=yes -o ConnectTimeout=8 -i "$DPT_KEY" -p "$DPT_PORT" \
         "$DPT_USER@$DPT_HOST" "sudo $*"

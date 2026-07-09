@@ -8,10 +8,14 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 . "$ROOT/lib/common.sh"
 
-PROFILE="${1:?用法: connect.sh <profile> <host> <user> <port>}"
+PROFILE="${1:?用法: connect.sh <profile> <host> <user> <port> [boot-user]}"
 HOST="${2:?缺少 host}"
 USER_="${3:?缺少 user}"
 PORT="${4:-22}"
+# boot-user —— 建立特权 master 时用哪个登录用户。默认 root(root 直登);
+# 若服务器禁 root 直登(如云 Ubuntu),传 ubuntu 等有 NOPASSWD sudo 的用户,
+# rexec 会经同一 socket 走 `sudo` 提权。记入 dpt.conf 供后续脚本沿用。
+BOOTUSER="${5:-root}"
 
 DIR="$HOME/.ssh/$PROFILE"
 install -d -m700 "$DIR"
@@ -29,6 +33,7 @@ export DPT_USER='$USER_'
 # 之后(如旧的 99-),cloud-init 的 PasswordAuthentication yes 会先被读到并胜出,
 # 我们写的 no 形同虚设。故用 00- 前缀确保本加固 drop-in 最先被读、稳压 cloud-init。
 export DPT_DROPIN='/etc/ssh/sshd_config.d/00-dpt-hardening.conf'
+export DPT_BOOTUSER='$BOOTUSER'
 EOF
 chmod 600 "$CONF"
 . "$CONF"
@@ -36,8 +41,8 @@ chmod 600 "$CONF"
 section "建立特权连接(profile: $PROFILE)"
 # 不预先打印"请输入密码"——那会诱使你在 ssh 就绪前输入,导致明文回显。
 # 让 ssh 自己弹原生密码提示(届时输入不回显)。
-printf '正在连接 root@%s:%s —— 等 ssh 弹出 "password:" 提示再输入(输入不回显)...\n' "$HOST" "$PORT"
-if ssh -M -S "$DIR/ctrl.sock" -o ControlPersist=1h -o ConnectTimeout=10 -fN -p "$PORT" "root@$HOST"; then
+printf '正在连接 %s@%s:%s —— 等 ssh 弹出 "password:" 提示再输入(输入不回显)...\n' "$BOOTUSER" "$HOST" "$PORT"
+if ssh -M -S "$DIR/ctrl.sock" -o ControlPersist=1h -o ConnectTimeout=10 -fN -p "$PORT" "$BOOTUSER@$HOST"; then
   printf '建立 root 连接... done\n'
   printf '凭据目录: %s\n' "$DIR"
   printf '已就绪 —— 回到 Claude,后续阶段由 skill 驱动(全程不再输密码)。\n'

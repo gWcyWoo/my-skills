@@ -16,10 +16,11 @@ run "rootless 前置包(uidmap/dbus-user-session/slirp4netns/fuse-overlayfs)" re
 
 run "Docker 官方 apt 源(GPG + 按代号)+ 落盘校验" rexec "
   install -d -m755 /etc/apt/keyrings /etc/apt/sources.list.d
-  curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+  np=\$(. /etc/os-release; case \$ID in ubuntu) echo ubuntu;; *) echo debian;; esac)
+  curl -fsSL https://download.docker.com/linux/\$np/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
   chmod a+r /etc/apt/keyrings/docker.gpg
   cn=\$(. /etc/os-release; echo \$VERSION_CODENAME); arch=\$(dpkg --print-architecture)
-  printf 'deb [arch=%s signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian %s stable\n' \"\$arch\" \"\$cn\" > /etc/apt/sources.list.d/docker.list
+  printf 'deb [arch=%s signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/%s %s stable\n' \"\$arch\" \"\$np\" \"\$cn\" > /etc/apt/sources.list.d/docker.list
   test -s /etc/apt/sources.list.d/docker.list && grep -q download.docker.com /etc/apt/sources.list.d/docker.list"
 
 # 跨境 + 包多 → 脱离会话装(同'长操作脱离控制连接'铁律)

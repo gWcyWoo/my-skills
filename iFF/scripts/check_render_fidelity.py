@@ -16,6 +16,9 @@ Per node (tolerances from the goal):
   - color:     per-channel |actual - expected| <= color_tol (RGB).
   - radius:    |actual - expected| <= size_tol px.
   - token:     (when --tokens given) the rendered color must be one of the design tokens (100% hit).
+  - asset_shape: (when --diff-report given) an icon/asset REGION whose raw pixel mismatch
+                 exceeds --asset-mismatch-tol failed to render the actual glyph (bbox/color
+                 checks are blind to shape; the flat-region pixel channel is not).
 
 Exit non-zero if any node fails any applicable check. The report lists every failing node with the
 expected vs observed values and the category, so repair is mechanical and design-anchored.
@@ -61,6 +64,11 @@ def main() -> int:
     ap.add_argument("--trace", required=True, help="actual_layout_trace.json (real render)")
     ap.add_argument("--expected", required=True, help="generate_canvas *.expected.json (design truth)")
     ap.add_argument("--tokens", help="tokens.json — gate that rendered colors are design tokens")
+    ap.add_argument("--diff-report", help="visual_diff diff_report.json — gate icon/asset REGION shape: "
+                                          "an asset region whose raw pixelMismatch exceeds --asset-mismatch-tol "
+                                          "is a real flat-region defect (wrong glyph/icon), far above the "
+                                          "cross-engine anti-aliasing floor, and fails the gate")
+    ap.add_argument("--asset-mismatch-tol", type=float, default=0.10)
     ap.add_argument("--bbox-tol", type=float, default=2.0)
     ap.add_argument("--color-tol", type=float, default=3.0)
     ap.add_argument("--size-tol", type=float, default=1.0)
@@ -129,12 +137,27 @@ def main() -> int:
                                  "expected": exp["radius"], "observed": act["radius"],
                                  "delta": round(d, 2), "tol": a.size_tol})
 
+    # icon/asset region shape gate: bbox+color cannot see a wrong glyph drawn at the
+    # right place in the right dominant color — the pixel diff's per-asset-region
+    # mismatch can. AA-only residue stays ~<5%; a wrong icon is typically >30%.
+    if a.diff_report and Path(a.diff_report).is_file():
+        diff = json.loads(Path(a.diff_report).read_text(encoding="utf-8"))
+        for issue in diff.get("assetIssues") or []:
+            mismatch = float(issue.get("pixelMismatch") or 0)
+            if mismatch > a.asset_mismatch_tol:
+                failures.append({"node": issue.get("node"), "category": "asset_shape",
+                                 "impl": issue.get("widget"), "role": issue.get("role"),
+                                 "observed": round(mismatch, 4), "tol": a.asset_mismatch_tol,
+                                 "detail": "asset region pixel mismatch beyond AA floor — "
+                                           "wrong/missing icon glyph or unregistered asset"})
+
     by_cat = {}
     for f in failures:
         by_cat[f["category"]] = by_cat.get(f["category"], 0) + 1
     ok = len(failures) == 0
     report = {
         "ok": ok,
+        "assetShapeChecked": bool(a.diff_report and Path(a.diff_report).is_file()),
         "expectedNodes": len(expected),
         "checkedNodes": checked,
         "failureCount": len(failures),

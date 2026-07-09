@@ -1,0 +1,80 @@
+# .gitlab-ci.yml —— dDP 静态前端 CI(宿主 node 直编 + rsync dist;runner 无 docker / 无 sudo)。
+# 由 dDP render_ci_static 生成,copy 进【前端仓库】根。构建时把服务器侧 apps/<fe>/.env 拷为
+# .env.__MODE__.local(Vite 最高优先级,压过仓库内任何 .env.*)注入 VITE_API_BASE_URL(同源 api 前缀)。
+# 静态文件 nginx 直读磁盘 → rsync 即生效,无 reload;健康失败自动回滚上一版 dist。
+stages: [build, deploy]
+
+default:
+  interruptible: true
+
+variables:
+  GIT_DEPTH: "20"
+
+.dpt_fe_build:
+  stage: build
+  resource_group: "$APP_NAME-$CI_COMMIT_BRANCH"
+  timeout: 15m
+  script:
+    - 'echo "[build] $(node -v)/$(npm -v) | branch=$CI_COMMIT_BRANCH sha=$CI_COMMIT_SHORT_SHA"'
+    - echo "[build 1/3] 注入服务器侧 .env(最高优先级 .local,压过仓库内 .env.*)"
+    - test -r "$APP_DIR/.env"
+    - cp "$APP_DIR/.env" ".env.${VITE_MODE}.local"
+    - echo "[build 2/3] npm ci(干净依赖)"
+    - npm ci
+    - echo "[build 3/3] $BUILD_CMD → dist/"
+    - $BUILD_CMD
+    - test -f dist/index.html
+  artifacts:
+    paths: [dist/]
+    expire_in: 1h
+
+.dpt_fe_deploy:
+  stage: deploy
+  resource_group: "$APP_NAME-$CI_COMMIT_BRANCH"
+  timeout: 10m
+  script:
+    - echo "[deploy 1/3] 备份当前 dist(供回滚)"
+    - rm -rf "$CI_PROJECT_DIR/.prev"; mkdir -p "$CI_PROJECT_DIR/.prev"
+    - rsync -a "$APP_DIR/dist/" "$CI_PROJECT_DIR/.prev/"
+    - echo "[deploy 2/3] rsync dist → $APP_DIR/dist(静态即时生效,无需 reload)"
+    - rsync -rltD --delete --delay-updates --omit-dir-times --no-owner --no-group --chmod=D755,F644 "$CI_PROJECT_DIR/dist/" "$APP_DIR/dist/"
+    - |
+      echo "[deploy 3/3] 健康检查(前端 / 应 2xx;$APP_API_PREFIX/ 探后端存活,2xx/3xx/4xx=活)"
+      ok=0
+      for i in $(seq 1 10); do
+        fe="$(curl -sk -o /dev/null -w '%{http_code}' "$APP_HEALTH_URL" || echo 000)"
+        be="$(curl -sk -o /dev/null -w '%{http_code}' "${APP_HEALTH_URL%/}$APP_API_PREFIX/" || echo 000)"
+        echo "health: fe=$fe be=$be"
+        case "$fe" in 2*) case "$be" in 2*|3*|4*) ok=1; break ;; esac ;; esac
+        sleep 3
+      done
+      if [ "$ok" != 1 ]; then
+        echo "[rollback] 健康失败 → 还原上一版 dist"
+        rsync -rltD --delete --omit-dir-times --no-owner --no-group --chmod=D755,F644 "$CI_PROJECT_DIR/.prev/" "$APP_DIR/dist/"
+        exit 1
+      fi
+    - 'echo "[deploy] done branch=$CI_COMMIT_BRANCH sha=$CI_COMMIT_SHORT_SHA"'
+
+# ---------- 分支 __BRANCH__ → 前端 __NAME__(runner tag: __TAG__)----------
+build___JOB__:
+  extends: .dpt_fe_build
+  tags: ["__TAG__"]
+  variables:
+    APP_NAME: "__NAME__"
+    APP_DIR: "__APP_DIR__"
+    VITE_MODE: "__MODE__"
+    BUILD_CMD: "__BUILD_CMD__"
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "__BRANCH__"'
+
+deploy___JOB__:
+  extends: .dpt_fe_deploy
+  tags: ["__TAG__"]
+  needs: ["build___JOB__"]
+  variables:
+    APP_NAME: "__NAME__"
+    APP_DIR: "__APP_DIR__"
+    APP_HEALTH_URL: "__HEALTH_URL__"
+    APP_API_PREFIX: "__API_PREFIX__"
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "__BRANCH__"'

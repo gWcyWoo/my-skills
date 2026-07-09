@@ -1,0 +1,43 @@
+# dDP SPA+API 合并 vhost —— 单公网端口:/ → Vue 静态 dist(SPA);__API_PREFIX__/ → 剥前缀 → php-fpm。
+# 后端 fpm 只留 127.0.0.1:__PORT__,无独立公网端口;前端构建时 VITE_API_BASE_URL=__API_PREFIX__(同源)。
+# 明文 HTTP(IP 直连、无域名);公网暴露前请确认已放行 ufw + 云安全组 __LISTEN__。
+server {
+    listen __LISTEN__ default_server;
+    listen [::]:__LISTEN__ default_server;
+    server_name _;
+
+    include snippets/security-headers.conf;
+    include snippets/deny-dotfiles.conf;
+
+    root __FE_ROOT__;
+    index index.html;
+    client_max_body_size 20m;
+
+    location = /nginx-health {
+        access_log off;
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
+    # ---- 前端:Vue SPA 静态 ----
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # ---- 后端:__API_PREFIX__/* 剥前缀 → ThinkPHP(路由与独立部署时完全一致)----
+    location __API_PREFIX__/ {
+        include snippets/ratelimit.conf;
+        rewrite ^__API_PREFIX__(/.*)$ $1 break;
+        include fastcgi_params;
+        fastcgi_pass 127.0.0.1:__PORT__;
+        fastcgi_param SCRIPT_FILENAME /var/www/__BE_NAME__/public/index.php;
+        fastcgi_param SCRIPT_NAME /index.php;
+        fastcgi_param DOCUMENT_ROOT /var/www/__BE_NAME__/public;
+        fastcgi_param PATH_INFO $uri;
+        fastcgi_param REQUEST_URI $uri$is_args$args;
+        fastcgi_param QUERY_STRING $query_string;
+        fastcgi_param X-Forwarded-Proto $scheme;
+        fastcgi_hide_header X-Powered-By;
+    }
+    location = __API_PREFIX__ { return 302 __API_PREFIX__/; }
+}

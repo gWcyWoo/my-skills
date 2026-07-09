@@ -3,7 +3,7 @@
 > **迁移自 原 `tc`(general/unit/integration)并适配 Flutter + 自主批处理**:已剥离 tc 的交互 gate / STOP / `test-writer` / plan 评审(iFF 全自动、无用户 gate),保留其实质纪律,补 Flutter 测试惯例。每个 subagent 对自己这一行的 feature 按本规则走 TDD(red → green → refactor)。
 
 ## 测试来源(两源)
-1. **设计结构 → widget 测试**:从 `scene.json`、`layout_contract.json`、`render_plan.json`、`tokens.json`、`assets_manifest.json`(+ `ui_notes`)理解 UI,断言真实组件、关键文案、状态区域、资产节点和交互热区存在;断言可观察结果,不把 `spec.md` 当视觉来源。
+1. **设计结构 → widget 测试**:从 `artifact_digest.json`、`component_manifest.json`、`data_slot_bindings.json`、`tokens.json`、`groups.json`(+ `ui_notes`)理解 UI(大 JSON 禁整读,按 node id 窗口查,见 SKILL.md 阅读纪律),断言真实组件、关键文案、状态区域、资产节点和交互热区存在;断言可观察结果,不把 `spec.md` 当视觉来源。
 2. **交互规则 → widget/integration 测试**:先用 `parse_interactions.py` + `make_interaction_tests_plan.py` 把 `interaction` 编译为 `interaction_contract.json` 和 `interaction_test_plan.json`;`interaction` 里**每一条交互描述都要覆盖 HAPPY / BOUNDARY / FAILURE**。每个测试必须在测试名或注释中包含 plan 里的 case id(如 `INT-001-HAPPY`),供 `check_interaction_coverage.py` 审计。涉及接口的交互:把 `api` 作为 **mock 依赖**(按接口契约伪造),断言「触发 →(mock 接口)→ 状态/渲染/导航」的可观察结果;不断言调用次数/内部顺序(除非顺序本身是契约)。
 
 ## 分层职责(单元 与 widget/集成 等同重要,只有合起来才证明正确)
@@ -21,6 +21,7 @@
 - 绝不用 `skip` / `solo` / 注释掉断言 / 伪造结果 来制造红或绿。
 - red 阶段只写**测试 + 空桩**;若某红测试只能靠写生产代码才能转绿,那属于 green 阶段。
 - 每行必须写 `spec_dir/interaction_test_evidence.json`,记录 red/green 命令、exit_code 和每个 interaction case id 的测试映射;red 的 exit_code 必须非 0,green 的 exit_code 必须为 0。
+- **调用预算(硬)**:red 证据 = 对本 feature 测试目录的**一次** `flutter test test/<feature>` 调用(全部新测试在同一次里红);green 同理**一次**;done 审计再全量**一次**(含 trace 测试)。全行程 `flutter test` ≤ 3 次;**禁止逐 case、逐文件反复起 `flutter test`**——每次调用冷启 JIT 编译 20-40s,是实测单页耗时(40min)的第二大浪费。修复后的复跑合并进下一次预算内调用,不单独加跑。
 - 测试名陈述**契约(行为)**,不陈述实现;锁定既有行为的守护用例要显式标注。
 
 ## 隔离与确定性

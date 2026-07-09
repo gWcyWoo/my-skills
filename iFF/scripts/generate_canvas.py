@@ -26,7 +26,7 @@ import re
 from pathlib import Path
 
 BOOL_KW = re.compile(r"subtract|union|intersect|exclude|boolean", re.I)
-SKIP_IMPL = {"covered_by_asset", "covered_by_text", "hidden"}
+SKIP_IMPL = {"covered_by_asset", "covered_by_text", "covered_by_shared_component", "hidden"}
 ASSET_IMPL = {"image_png", "image_webp", "svg", "asset", "image", "image_fill"}
 
 
@@ -240,7 +240,11 @@ def emit_text(node, x, y, w, h, reg: ColorRegistry, pos, end, nid: str, slot_ids
             spans.append(f"TextSpan(text: '{esc(str(r.get('content', '')))}', style: TextStyle("
                          f"fontFamily: 'SF Pro Text', fontSize: {m(float(rsize))}, fontWeight: {wt}, "
                          f"color: {reg.ref(rc)}))")
-        inner = f"Text.rich(TextSpan(children: [{', '.join(spans)}]), textAlign: {text_align}, softWrap: true)"
+        # overflow: visible 与下方纯文本分支保持一致——文本节点被 render_plan bbox 定成固定高度
+        # Positioned,多色胶囊/chip 文案(如 "Loan Term:\n91-360 days")按设计两行时下降部会略超框;
+        # 缺省 TextOverflow.clip 会把 'days' 的 'y' 尾巴裁成 'davs'(固定高度+裁切,违反 final_reminders)。
+        # 胶囊背景由画布另画,文案悬浮其上不裁切,故显式 visible 让下降部/溢出照常绘制。
+        inner = f"Text.rich(TextSpan(children: [{', '.join(spans)}]), textAlign: {text_align}, softWrap: true, overflow: TextOverflow.visible)"
     else:
         # 动态文本槽:从注入的 slotText 取值,缺省回退设计展示值(不变量①④⑦);静态文案保持字面量。
         txt_arg = f"slotText['{nid}'] ?? '{txt}'" if nid in slot_ids else f"'{txt}'"

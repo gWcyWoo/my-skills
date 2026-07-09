@@ -32,8 +32,13 @@ run_all() {
     printf '未发现已部署 app(~/dpt-docker-framework/apps 为空)—— 跳过容器/PHP/可用性检查。\n'
   else
     for app in $apps; do
-      dDC_container  "$app"
-      dDC_php        "$app"
+      # app 形态分派:有 compose.yaml = php 容器 app;无 = 静态前端(nginx 直发 dist,设计上无容器)。
+      if rexec_user "test -f \$HOME/dpt-docker-framework/apps/$app/compose.yaml" >/dev/null 2>&1; then
+        dDC_container  "$app"
+        dDC_php        "$app"
+      else
+        dDC_static     "$app"
+      fi
       dDC_availability "$app"
     done
   fi

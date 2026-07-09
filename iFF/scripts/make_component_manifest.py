@@ -34,7 +34,7 @@ _DYNAMIC_TEXT = re.compile(
 )
 _ASSET_IMPL = {"image", "image_png", "image_webp", "image_fill", "svg", "asset"}
 _SHAPE_IMPL = {"shape", "oval_shape", "gradient_shape", "vector_shape", "shape_container"}
-_NON_VISIBLE = {"covered_by_asset", "covered_by_text", "hidden"}
+_NON_VISIBLE = {"covered_by_asset", "covered_by_text", "covered_by_shared_component", "hidden"}
 
 # Loan cards are >=300 tall in this design family; 150-300 tall full-width rows are
 # support/list rows, not loan cards, and fall through to the bottom region.

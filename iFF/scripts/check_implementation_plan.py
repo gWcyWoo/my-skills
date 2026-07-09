@@ -109,7 +109,7 @@ def count_render_nodes(spec_dir: Path) -> dict[str, int]:
             counts["image"] += 1
         elif implementation in {"shape", "oval_shape", "gradient_shape", "vector_shape", "shape_container"}:
             counts["shape"] += 1
-        elif implementation in {"covered_by_asset", "covered_by_text"}:
+        elif implementation in {"covered_by_asset", "covered_by_text", "covered_by_shared_component"}:
             counts["covered"] += 1
         if implementation in {"image_png", "image_webp", "image", "svg", "asset"}:
             counts["atomicAsset"] += 1
@@ -143,6 +143,12 @@ def main() -> int:
     for key in REQUIRED_PLAN_KEYS:
         if key not in plan:
             errors.append(f"missing top-level key: {key}")
+
+    # prefill_implementation_plan.py leaves "__MODEL__" placeholders for the judgment
+    # fields; an unfilled placeholder means the model skipped its part of the plan.
+    todo_count = plan_path.read_text(encoding="utf-8").count("__MODEL__")
+    if todo_count:
+        errors.append(f"{todo_count} unfilled __MODEL__ placeholder(s) — fill every modelFields entry first")
 
     inventory = plan.get("artifactInventory")
     for artifact in REQUIRED_ARTIFACTS:

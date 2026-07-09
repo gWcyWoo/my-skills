@@ -26,9 +26,19 @@ variables:
       else
         echo "[build] composer.json 无 scripts.test —— 跳过测试"
       fi
-    - composer install --no-dev --prefer-dist --no-interaction --optimize-autoloader      # 仅生产依赖 + 优化 autoload
+    - composer install --no-dev --prefer-dist --no-interaction --optimize-autoloader --no-scripts   # 仅生产依赖;--no-scripts 后手动跑 think 后装(对齐 ntest)
+    - |
+      # ThinkPHP 后装(条件化:非 think 项目自动跳过):service:discover 写 vendor/services.php,
+      # vendor:publish 发布包配置到 config/(二者均入 artifacts);Lang.php 为项目自带补丁,存在才覆盖。
+      if [ -f think ]; then
+        php think service:discover
+        php think vendor:publish
+        [ -f extend/utils/src/think/Lang.php ] && cp extend/utils/src/think/Lang.php vendor/topthink/framework/src/think/Lang.php || true
+      else
+        echo "[build] 非 ThinkPHP 项目(无 think 入口)—— 跳过后装"
+      fi
   artifacts:
-    paths: [vendor/]             # shell executor 在 deploy 前会 git clean 删 vendor/,必须经 artifacts 传给 deploy
+    paths: [vendor/, config/]    # shell executor 在 deploy 前会 git clean 删 vendor/,必须经 artifacts 传给 deploy;config/ 承载 vendor:publish 产物
     expire_in: 1h
 
 .dpt_deploy:
@@ -38,11 +48,11 @@ variables:
   script:
     - echo "[deploy] 备份当前 src(供回滚)"
     - rm -rf "$CI_PROJECT_DIR/.prev"; mkdir -p "$CI_PROJECT_DIR/.prev"
-    - rsync -a --delete --exclude runtime/ --exclude .env --exclude .git --exclude .reload-trigger --exclude .reload-done "$APP_SRC/" "$CI_PROJECT_DIR/.prev/"
+    - rsync -a --delete --exclude runtime/ --exclude '.env*' --exclude .git --exclude .reload-trigger --exclude .reload-done "$APP_SRC/" "$CI_PROJECT_DIR/.prev/"
     - echo "[deploy] rsync build → src(保留 .env / runtime;归一化权限供 rootless 容器只读挂载读取)"
     # rootless:容器以映射 uid 经 world 位读 src,--chmod 归一化保证可读;.env 排除(由 cage_app 单独管属主/权限)。
     # --no-owner/--no-group + --omit-dir-times:runner 非 src/. 属主,保留属主/目录时间会失败(rsync code 23),只交付内容。
-    - rsync -rltD --delete --delay-updates --omit-dir-times --no-owner --no-group --chmod=D755,F644 --exclude runtime/ --exclude .env --exclude .git --exclude .reload-trigger --exclude .reload-done "$CI_PROJECT_DIR/" "$APP_SRC/"
+    - rsync -rltD --delete --delay-updates --omit-dir-times --no-owner --no-group --chmod=D755,F644 --exclude runtime/ --exclude '.env*' --exclude .git --exclude .reload-trigger --exclude .reload-done "$CI_PROJECT_DIR/" "$APP_SRC/"
     - |
       echo "[deploy] 触发优雅 reload,并【等其落地】再做健康检查(避免抢跑旧 opcache 代码 → 假阳性)"
       prev="$(stat -c %Y "$APP_SRC/.reload-done" 2>/dev/null || echo 0)"
@@ -58,7 +68,7 @@ variables:
       echo "[deploy] 健康检查(【仅 5xx / 无响应判失败】;2xx/3xx/4xx 均视为应用已存活,适配 API 的 401/403/404)"
       ok=0
       for i in $(seq 1 20); do
-        code="$(curl -sk -o /dev/null -w '%{http_code}' -H "Host: $APP_DOMAIN" https://127.0.0.1/ || echo 000)"
+        code="$(curl -sk -o /dev/null -w '%{http_code}' -H "Host: $APP_DOMAIN" "$APP_HEALTH_URL" || echo 000)"
         echo "health: $code"
         case "$code" in
           2*|3*|4*) ok=1; break ;;                   # 应用已响应(含 401/403/404)→ 存活
@@ -68,7 +78,7 @@ variables:
       done
       if [ "$ok" != 1 ]; then
         echo "[rollback] 健康失败(持续 5xx / 无响应)→ 回滚 src 并重新 reload"
-        rsync -rltD --delete --omit-dir-times --no-owner --no-group --chmod=D755,F644 --exclude runtime/ --exclude .env --exclude .git --exclude .reload-trigger --exclude .reload-done "$CI_PROJECT_DIR/.prev/" "$APP_SRC/"
+        rsync -rltD --delete --omit-dir-times --no-owner --no-group --chmod=D755,F644 --exclude runtime/ --exclude '.env*' --exclude .git --exclude .reload-trigger --exclude .reload-done "$CI_PROJECT_DIR/.prev/" "$APP_SRC/"
         touch "$APP_SRC/.reload-trigger"
         exit 1
       fi

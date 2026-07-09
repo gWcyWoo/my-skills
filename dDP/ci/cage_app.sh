@@ -17,14 +17,21 @@ SRC="$FW/apps/$NAME/src"
 section "权限笼 + reload 监听: $NAME"
 
 # ---- ACL 笼(root)----
-run "祖先链仅 x(可穿不可枚举)" rexec "
+run "祖先链仅 x(gitlab-runner CI + www-data 宿主 nginx 边缘,可穿不可枚举)" rexec "
   set -e
-  setfacl -m u:gitlab-runner:x '$HOME_DIR' '$FW' '$FW/apps' '$FW/apps/$NAME'
+  setfacl -m u:gitlab-runner:x -m u:www-data:x '$HOME_DIR' '$FW' '$FW/apps' '$FW/apps/$NAME'
 "
-run "src 给 gitlab-runner rwX(含默认 ACL)" rexec "
+run "src ACL:CI 写 + 容器 php-fpm 读 + 宿主 nginx 读(含默认 ACL,CI 新建文件继承)" rexec "
   set -e
-  setfacl -R -m  u:gitlab-runner:rwX '$SRC'
-  setfacl -R -d -m u:gitlab-runner:rwX '$SRC'
+  # 加固机(opt 家 750 / umask 027)下,src 下 other::--- 会挡死两个'other'身份的读者:
+  #   ① rootless 容器 www —— 宿主 uid = subuid_base + 32(容器内 33 的映射),读代码执行;
+  #   ② 宿主 nginx(www-data)—— 读 docroot(src/public)做静态 / try_files。
+  # 二者都非属主非组 → 必须显式授 ACL(access + default,default 供 CI 新建的 public/ 等继承)。
+  base=\$(grep '^$DPT_USER:' /etc/subuid | head -1 | cut -d: -f2)
+  [ -n \"\$base\" ] || { echo '无法解析 $DPT_USER 的 subuid base'; exit 1; }
+  www=\$(( base + 32 ))
+  setfacl -R -m  u:gitlab-runner:rwX -m u:\$www:rX -m u:www-data:rX '$SRC'
+  setfacl -R -d -m u:gitlab-runner:rwX -m u:\$www:rX -m u:www-data:rX '$SRC'
 "
 # [REVIEW:fix] rootless userns:容器内 33 → 宿主 uid = subuid_base + 32(实测 opt 100000 → 100032)。
 # .env 属主设为该映射 uid + 0400 → 容器(app)可读;opt/gitlab-runner 非属主读不到;
@@ -37,7 +44,9 @@ run ".env:容器可读 + 拒 CI(rootless 映射属主 0400 + ACL)" rexec "
   [ -f '$SRC/.env' ] || : > '$SRC/.env'
   chown \"\$www\":\"\$www\" '$SRC/.env'
   chmod 0400 '$SRC/.env'
-  setfacl -m u:gitlab-runner:--- '$SRC/.env'
+  # 只允许容器 www 读 .env(它是属主);src 默认 ACL 会让 .env 继承 gitlab-runner/www-data 的 rX,
+  # 必须显式拒 —— 否则 CI(gitlab-runner)或宿主 nginx(www-data)能读到生产密钥。
+  setfacl -m u:gitlab-runner:--- -m u:www-data:--- '$SRC/.env'
 "
 
 # ---- opt 侧 reload 监听(systemd --user)----

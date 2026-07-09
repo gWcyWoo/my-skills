@@ -23,19 +23,33 @@ run "启动 full-upgrade(systemd-run 瞬态单元,--no-block 脱离会话,日志
   systemd-run --unit=dpt-upgrade --collect --no-block \
     /bin/bash -c 'DEBIAN_FRONTEND=noninteractive apt-get -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold full-upgrade >/var/log/dpt-upgrade.log 2>&1'"
 
-# 轮询升级单元完成(最多约 10 分钟)
-step "等待升级完成(轮询 dpt-upgrade)"
-for _ in $(seq 1 120); do
+# 轮询升级单元完成(最多约 20 分钟)。
+# 关键:full-upgrade 会反复重启 sshd(socket 激活),rexec 每轮新开的 ssh 会被拒 → 返回空。
+# 空结果 = 连接抖动,NOT 单元结束 —— 只在 ActiveState 确定为 inactive/failed 时才跳出,
+# 否则(active/activating/'')继续等。误把 '' 当结束会导致升级还在跑就误判 FAILED。
+step "等待升级完成(轮询 dpt-upgrade;升级期 sshd 重启致连接抖动属正常)"
+st=""
+for _ in $(seq 1 240); do
   st="$(rexec "systemctl show -p ActiveState --value dpt-upgrade 2>/dev/null" | tr -d '[:space:]')"
-  case "$st" in inactive|failed|'') break;; esac
+  case "$st" in inactive|failed) break;; esac
   sleep 5
 done
-ok
+case "$st" in
+  inactive|failed) ok;;
+  *) printf 'FAILED\n  └─ 限期内升级单元未结束(末次状态 %s);请查 systemctl status dpt-upgrade 与 /var/log/dpt-upgrade.log。\n' "${st:-离线}"; exit 1;;
+esac
 
-res="$(rexec "systemctl show -p Result --value dpt-upgrade 2>/dev/null" | tr -d '[:space:]')"
+# 单元已结束(inactive⟺命令退 0⟺success;failed⟺非 0)。刚结束时 sshd 可能仍在收尾重启,
+# 读 Result 容空重试;若始终读不到但 ActiveState 已是 inactive,即视为成功(读不到≠失败)。
+res=""
+for _ in $(seq 1 12); do
+  res="$(rexec "systemctl show -p Result --value dpt-upgrade 2>/dev/null" | tr -d '[:space:]')"
+  [ -n "$res" ] && break
+  sleep 5
+done
 show "升级结果" "systemctl show -p Result dpt-upgrade"
-if [ "$res" = success ]; then
-  printf '  → 实际 success ✓\n'
+if [ "$res" = success ] || { [ -z "$res" ] && [ "$st" = inactive ]; }; then
+  printf '  → 实际 %s ✓\n' "${res:-inactive/已正常结束}"
 else
   printf '  → 实际 %s(详见 /var/log/dpt-upgrade.log)| FAILED\n' "${res:-未知}"
   rexec "tail -n 20 /var/log/dpt-upgrade.log 2>/dev/null" | sed 's/^/  └─ /'

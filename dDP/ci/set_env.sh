@@ -53,8 +53,10 @@ printf '  → %s  属主 %s:%s / 0400 ✓\n' "$DEST" "$uid" "$gid"
 printf '[3/5] 备份服务器当前 .env(sudo;属主非 opt)\n'
 ts="$(rexec 'date +%Y%m%d%H%M%S')"
 oldsz="$(rexec "stat -c %s '$DEST' 2>/dev/null || echo NA")"
-rexec "cp -a '$DEST' '$DEST.bak.$ts' 2>/dev/null || true" >/dev/null 2>&1
-printf '  → 原大小 %s 字节;备份 → %s ✓\n' "$oldsz" "$DEST.bak.$ts"
+# 备份放 src 外(app 目录):src 里的 .env.bak.* 会让 CI 的 rsync 备份步 Permission denied(code 23)——此坑已踩。
+BAK="${DEST%/src/.env}/.env.bak.$ts"
+rexec "cp -a '$DEST' '$BAK' 2>/dev/null || true" >/dev/null 2>&1
+printf '  → 原大小 %s 字节;备份 → %s ✓\n' "$oldsz" "$BAK"
 
 printf '[4/5] 写入 .env(本地内容管道直传服务器,不显示)+ 触发优雅 reload\n'
 if cat "$LOCAL" | ssh "${SSH_OPTS[@]}" "$DPT_USER@$DPT_HOST" \
@@ -73,7 +75,7 @@ code="$(rexec "dom=\$(sed -n 's/^[[:space:]]*server_name[[:space:]]\{1,\}\([^;]*
 printf '  → 服务器 .env = %s 字节(原 %s),属主 %s\n' "$newsz" "$oldsz" "$newown"
 printf '  → 容器健康 = %s;站点 HTTP = %s\n' "${health:-未知}" "${code:-未知}"
 if [ "${newsz:-0}" -gt 0 ]; then
-  printf '\n✅ 完成 —— %s 的 .env 已就位(内容全程未进对话)。回滚:服务器上 sudo cp -a %s.bak.%s %s\n' "$NAME" "$DEST" "$ts" "$DEST"
+  printf '\n✅ 完成 —— %s 的 .env 已就位(内容全程未进对话)。回滚:服务器上 sudo cp -a %s %s\n' "$NAME" "$BAK" "$DEST"
 else
   fail "服务器 .env 仍为 0 字节,写入异常"
 fi

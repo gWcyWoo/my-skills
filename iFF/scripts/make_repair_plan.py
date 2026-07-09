@@ -350,6 +350,10 @@ def main() -> int:
     parser.add_argument("--layout", required=True)
     parser.add_argument("--render-plan", required=True)
     parser.add_argument("--out", required=True)
+    parser.add_argument("--top-out", help="small model-facing digest (summary + topAction + first actions of the "
+                                          "top P0 category); the full plan can reach 177KB and must stay "
+                                          "script-consumed")
+    parser.add_argument("--top-actions", type=int, default=8, help="how many actions the digest carries")
     parser.add_argument("--implementation-map")
     parser.add_argument("--actual-trace")
     args = parser.parse_args()
@@ -407,6 +411,21 @@ def main() -> int:
         "actions": actions,
     }
     dump_json(report, args.out)
+    if args.top_out:
+        top_category = (top or {}).get("category")
+        same_category = [a for a in actions if a.get("category") == top_category][: args.top_actions]
+        dump_json(
+            {
+                "summary": report["summary"],
+                "diagnosticWarnings": report["diagnosticWarnings"],
+                "categoryCounts": report["categoryCounts"],
+                "stopGate": report["stopGate"],
+                "topAction": top,
+                "topCategoryActions": same_category,
+                "fullPlan": args.out,
+            },
+            args.top_out,
+        )
     p0_count = report["summary"]["p0Count"]
     print(f"repair_plan raw_actions={len(raw_actions)} actions={len(actions)} p0={p0_count} out={args.out}")
     return 0

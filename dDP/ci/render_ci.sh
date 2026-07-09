@@ -31,6 +31,11 @@ HOME_DIR="$(rexec_user 'printf %s "$HOME"')"; [ -n "$HOME_DIR" ] || fail "无法
 APP_SRC="$HOME_DIR/dpt-docker-framework/apps/$NAME/src"
 DOMAIN="$(rexec "sed -n 's/^[[:space:]]*server_name[[:space:]]\{1,\}\([^;]*\);.*/\1/p' /etc/nginx/conf.d/$NAME.conf 2>/dev/null | awk '{print \$1}' | head -1")"
 [ -n "$DOMAIN" ] || DOMAIN="<your-domain>"
+# 探测 vhost 监听端口 + scheme → 健康检查 URL(标准 443/TLS+域名 vs 自定义端口纯 HTTP+IP 直连)。
+LISTEN_LINE="$(rexec "grep -m1 -E '^[[:space:]]*listen[[:space:]]+[0-9]' /etc/nginx/conf.d/$NAME.conf 2>/dev/null")"
+LPORT="$(printf '%s' "$LISTEN_LINE" | sed -n 's/.*listen[[:space:]]\{1,\}\([0-9]\{1,\}\).*/\1/p')"; [ -n "$LPORT" ] || LPORT=443
+if printf '%s' "$LISTEN_LINE" | grep -q ssl; then SCHEME=https; else SCHEME=http; fi
+HEALTH_URL="$SCHEME://127.0.0.1:$LPORT/"
 JOB="$(printf '%s' "$BRANCH" | tr -c 'A-Za-z0-9_' '_')"       # 分支名 → 合法 job 名(release/1.0 → release_1_0)
 
 OUTDIR="./audit/ci"
@@ -40,10 +45,11 @@ mkdir -p "$OUTDIR"                                            # 本地产物目�
 render_branch() {
   sed -e "s|__NAME__|$NAME|g" -e "s|__BRANCH__|$BRANCH|g" -e "s|__JOB__|$JOB|g" \
       -e "s|__APP_SRC__|$APP_SRC|g" -e "s|__DOMAIN__|$DOMAIN|g" -e "s|__TAG__|$TAG|g" \
+      -e "s|__HEALTH_URL__|$HEALTH_URL|g" \
       "$ROOT/ci/templates/gitlab-ci.branch.tmpl"
 }
 
-section "渲染 .gitlab-ci.yml($NAME,分支 $BRANCH → $DOMAIN,runner tag $TAG,模式 $MODE)"
+section "渲染 .gitlab-ci.yml($NAME,分支 $BRANCH → $DOMAIN,健康检查 $HEALTH_URL,runner tag $TAG,模式 $MODE)"
 if [ "$MODE" = --append ]; then
   [ -f "$OUT" ] || fail "追加失败:$OUT 不存在。请先不带 --append 跑一次,生成整段文件,再追加分支。"
   grep -qE "^build_$JOB:" "$OUT" && fail "分支 $BRANCH 的块(build_$JOB)已在 $OUT 中,勿重复追加(需更新请删旧块或重跑 full)。"

@@ -16,6 +16,8 @@ done <<'EOF'
 lib/common.sh
 lib/run_checks.sh
 system/script/list_fw_ports.sh
+system/script/list_listeners.sh
+system/script/close_listener.sh
 system/script/performance.sh
 system/script/upgrade.sh
 system/script/security_enhance.sh

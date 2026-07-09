@@ -17,10 +17,20 @@ run "加 sury(php)+ gitlab-runner 官方源" rexec "
   install -d -m755 /etc/apt/keyrings
   DEBIAN_FRONTEND=noninteractive apt-get update -y >/dev/null 2>&1
   DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends curl ca-certificates gnupg lsb-release apt-transport-https >/dev/null 2>&1
-  curl -fsSL https://packages.sury.org/php/apt.gpg -o /etc/apt/keyrings/sury-php.gpg
-  echo \"deb [signed-by=/etc/apt/keyrings/sury-php.gpg] https://packages.sury.org/php/ \$(lsb_release -sc) main\" > /etc/apt/sources.list.d/sury-php.list
+  np=\$(. /etc/os-release; echo \$ID)
+  if [ \"\$np\" = ubuntu ]; then
+    # Ubuntu:sury 的 debian 仓库无 ubuntu dist → 用 Launchpad PPA ppa:ondrej/php(同一维护者,含 php7.4)。
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends software-properties-common >/dev/null 2>&1
+    add-apt-repository -y ppa:ondrej/php >/dev/null 2>&1
+  else
+    # Debian:sury。keyring 必须世界可读,否则 _apt 读不到 → NO_PUBKEY。
+    curl -fsSL https://packages.sury.org/php/apt.gpg -o /etc/apt/keyrings/sury-php.gpg
+    chmod 0644 /etc/apt/keyrings/sury-php.gpg
+    echo \"deb [signed-by=/etc/apt/keyrings/sury-php.gpg] https://packages.sury.org/php/ \$(lsb_release -sc) main\" > /etc/apt/sources.list.d/sury-php.list
+  fi
   curl -fsSL https://packages.gitlab.com/install/repositories/runner/gitlab-runner/script.deb.sh | bash >/dev/null 2>&1
-  test -s /etc/apt/sources.list.d/sury-php.list && grep -q sury /etc/apt/sources.list.d/sury-php.list
+  DEBIAN_FRONTEND=noninteractive apt-get update -y >/dev/null 2>&1
+  apt-cache policy php${MM}-cli 2>/dev/null | grep -qE 'Candidate: [0-9]'
 "
 
 run "启动安装(脱离会话,php$MM + acl/rsync/gitlab-runner)" rexec "

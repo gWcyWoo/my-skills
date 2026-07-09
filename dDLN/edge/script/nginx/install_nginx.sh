@@ -15,12 +15,14 @@ run "装前置(curl/gnupg/ca-certificates)" rexec "DEBIAN_FRONTEND=noninteractiv
 run "导入 nginx.org 签名密钥" rexec "
   install -d -m755 /usr/share/keyrings
   curl -fsSL https://nginx.org/keys/nginx_signing.key | gpg --dearmor -o /usr/share/keyrings/nginx-archive-keyring.gpg
+  chmod 644 /usr/share/keyrings/nginx-archive-keyring.gpg
   test -s /usr/share/keyrings/nginx-archive-keyring.gpg"
 
 run "写 apt 源(stable,按发行代号)+ pin 优先 nginx.org(并校验落盘)" rexec "
   install -d -m755 /etc/apt/sources.list.d /etc/apt/preferences.d
   cn=\$(. /etc/os-release; echo \$VERSION_CODENAME)
-  printf 'deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] http://nginx.org/packages/debian %s nginx\n' \"\$cn\" > /etc/apt/sources.list.d/nginx.list
+  np=\$(. /etc/os-release; case \$ID in ubuntu) echo ubuntu;; *) echo debian;; esac)
+  printf 'deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] http://nginx.org/packages/%s %s nginx\n' \"\$np\" \"\$cn\" > /etc/apt/sources.list.d/nginx.list
   printf 'Package: *\nPin: origin nginx.org\nPin-Priority: 900\n' > /etc/apt/preferences.d/99nginx
   test -s /etc/apt/sources.list.d/nginx.list && grep -q nginx.org /etc/apt/sources.list.d/nginx.list"
 

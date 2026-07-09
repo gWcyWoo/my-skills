@@ -22,5 +22,6 @@ COPY www.conf /usr/local/etc/php-fpm.d/www.conf
 WORKDIR /var/www/__NAME__
 # 运行期可写目录:建挂载点并置属主 33:33。命名卷 __NAME__-runtime 首挂时从镜像层 copy-up
 # 继承此属主 → 容器内 www-data(33:33)可写。chown 在 build 期(root),运行期零新增权限。
-RUN mkdir -p /var/www/__NAME__/runtime && chown 33:33 /var/www/__NAME__/runtime
+RUN mkdir -p /var/www/__NAME__/runtime && chown 33:33 /var/www/__NAME__/runtime; \
+    chmod 0644 /usr/local/etc/php/conf.d/99-dpt.ini /usr/local/etc/php-fpm.d/www.conf
 CMD ["php-fpm"]

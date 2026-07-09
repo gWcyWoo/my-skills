@@ -46,8 +46,8 @@ dDC_firewall() {
     'ufw status 2>/dev/null | grep -qi "Status: active" || { echo "ufw 未 active"; exit 1; }'
   chk r "ufw 默认拒绝入站" "默认收敛,白名单放行" \
     'ufw status verbose 2>/dev/null | grep -qiE "deny \(incoming\)" || { echo "默认入站策略非 deny:$(ufw status verbose 2>/dev/null | grep -i Default)"; exit 1; }'
-  chk r "无意外对外监听端口" "仅暴露必要端口(ssh/443)" \
-    'p=$(ss -tlnH 2>/dev/null | awk "{print \$4}" | grep -vE "127\.0\.0\.1|\[::1\]|127\.0\.0\.5" | grep -oE "[0-9]+\$" | sort -un | grep -vE "^(443|80|'"$DPT_PORT"'|5355)\$"); [ -z "$p" ] || { echo "对外监听到非预期端口:$(echo $p)"; exit 1; }'
+  chk r "无意外对外监听端口" "仅暴露必要端口(ssh/80/443 + nginx vhost 声明的 listen)" \
+    'ok=$(grep -hE "^[[:space:]]*listen[[:space:]]+[0-9]" /etc/nginx/conf.d/*.conf /etc/nginx/nginx.conf 2>/dev/null | grep -oE "[0-9]+" | sort -un | paste -sd"|" -); p=$(ss -tlnH 2>/dev/null | awk "{print \$4}" | grep -vE "127\.0\.0\.1|\[::1\]|127\.0\.0\.5" | grep -oE "[0-9]+\$" | sort -un | grep -vE "^(443|80|'"$DPT_PORT"'|5355${ok:+|$ok})\$"); [ -z "$p" ] || { echo "对外监听到非预期端口:$(echo $p)(预期=ssh/80/443/nginx listen:${ok:-无})"; exit 1; }'
 }
 
 # ---------- 系统 / 内核 / 日志 ----------
@@ -143,6 +143,18 @@ dDC_php() {
     'docker exec '"$c"' grep -qE "^clear_env[[:space:]]*=[[:space:]]*yes" '"$pool"' || { echo "clear_env 非 yes"; exit 1; }'
 }
 
+# ---------- 静态前端(每 app,无容器:nginx 直发 dist)----------
+dDC_static() {
+  local n="$1"
+  section "静态前端 $n — 交付 + 挂载(无容器,设计如此)"
+  chk u "$n dist 已交付" "静态产物存在(index.html)" \
+    'test -f $HOME/dpt-docker-framework/apps/'"$n"'/dist/index.html || { echo "dist/index.html 不存在(待 CI 交付)"; exit 1; }'
+  chk r "$n vhost 已挂载" "nginx 引用该前端 dist" \
+    'grep -q "apps/'"$n"'/dist" /etc/nginx/conf.d/*.conf 2>/dev/null || { echo "conf.d 无引用 apps/'"$n"'/dist 的 vhost"; exit 1; }'
+  chk r "$n dist 属主/权限可读" "nginx(www-data)可经 world 位读取" \
+    'f=$(getent passwd '"$DPT_USER"' | cut -d: -f6)/dpt-docker-framework/apps/'"$n"'/dist/index.html; p=$(stat -c %a "$f" 2>/dev/null); case "$p" in *4|*5|*6|*7) : ;; *) echo "index.html 权限 $p(other 位不可读)"; exit 1;; esac'
+}
+
 # ---------- nginx 边缘 ----------
 dDC_nginx() {
   section "nginx 边缘"
@@ -165,16 +177,28 @@ dDC_nginx() {
 }
 
 # ---------- 可用性(每 app,端到端 GET)----------
+# 从该 app 实际 vhost 推导 端口/协议/路径 再探测:
+#   vhost = conf.d/<n>.conf,或内容引用该 app 的 *.conf(只认 nginx 真加载的 *.conf,不吃 .bak/替换备份);
+#   端口/协议 = 首条 listen(含 ssl 与否);路径 = 自有 vhost(root 指向本 app)为 /,
+#   否则为承载它的 location 前缀(如 SPA 合并 vhost 里后端的 /api/)。
 dDC_availability() {
   local n="$1"
   section "可用性 — $n 站点(端到端)"
-  chk r "$n 站点 HTTPS 可访问(非 5xx/非空入口)" "php web 站点真实可用" '
-    vh=$(ls /etc/nginx/conf.d/'"$n"'.conf 2>/dev/null || grep -rl "apps/'"$n"'/src/public" /etc/nginx/conf.d/ 2>/dev/null | head -1)
-    [ -n "$vh" ] || { echo "未找到 '"$n"' 的 nginx vhost"; exit 1; }
-    sn=$(awk "/server_name/{print \$2}" "$vh" | head -1 | tr -d ";")
-    [ -n "$sn" ] || { echo "vhost 无 server_name"; exit 1; }
-    body=$(curl -sk -H "Host: $sn" --max-time 8 https://127.0.0.1/ 2>/dev/null)
-    code=$(curl -sk -H "Host: $sn" -o /dev/null -w "%{http_code}" --max-time 8 https://127.0.0.1/ 2>/dev/null)
-    echo "$body" | grep -qi "No input file specified" && { echo "$sn → 入口缺失(public/index.php 未部署,No input file specified);代码待 CI 交付"; exit 1; }
-    case "$code" in 5??|000|"") echo "$sn → HTTP ${code:-无响应}(5xx/无响应=应用不可用)"; exit 1;; *) : ;; esac   # 2xx/3xx/4xx=应用在响应(API 的 401/403/404 算存活,与 dDP 部署健康门一致)'
+  chk r "$n 站点可访问(非 5xx/非空入口)" "web 站点真实可用" '
+    vh=$(ls /etc/nginx/conf.d/'"$n"'.conf 2>/dev/null || grep -lE "apps/'"$n"'/|/var/www/'"$n"'/" /etc/nginx/conf.d/*.conf 2>/dev/null | head -1)
+    [ -n "$vh" ] || { echo "未找到 '"$n"' 的 nginx vhost(conf.d/*.conf 无引用)"; exit 1; }
+    ll=$(grep -m1 -E "^[[:space:]]*listen[[:space:]]+[0-9]" "$vh")
+    lp=$(echo "$ll" | grep -oE "[0-9]+" | head -1)
+    [ -n "$lp" ] || { echo "$vh 无 listen 端口"; exit 1; }
+    scheme=http; echo "$ll" | grep -q ssl && scheme=https
+    path=/
+    if ! grep -qE "^[[:space:]]*root[[:space:]].*apps/'"$n"'/" "$vh"; then
+      path=$(grep -B8 "/var/www/'"$n"'/" "$vh" | grep -m1 -oE "location [^ ]+/" | awk "{print \$2}")
+      [ -n "$path" ] || path=/
+    fi
+    url="$scheme://127.0.0.1:$lp$path"
+    body=$(curl -sk --max-time 8 "$url" 2>/dev/null)
+    code=$(curl -sk -o /dev/null -w "%{http_code}" --max-time 8 "$url" 2>/dev/null)
+    echo "$body" | grep -qi "No input file specified" && { echo "$url → 入口缺失(public/index.php 未部署,No input file specified);代码待 CI 交付"; exit 1; }
+    case "$code" in 5??|000|"") echo "$url → HTTP ${code:-无响应}(5xx/无响应=应用不可用)"; exit 1;; *) : ;; esac   # 2xx/3xx/4xx=应用在响应(API 的 401/403/404 算存活,与 dDP 部署健康门一致)'
 }

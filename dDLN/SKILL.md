@@ -169,6 +169,15 @@ S6. 跑 `bash .../system/script/security_enhance.sh <profile> --allow "<保留+�
     - 结尾 `安全加固完成`→继续。
     - ufw 启用后证书复验失败而 `exit 1`→停;报告 **dead-man's-switch 将在 120s 内自动 `ufw disable` 恢复登录**,提示查放行端口/云安全组后重跑(脚本幂等)。
 
+**S6b–S6d — 对外监听审计(不能静默留着开;ufw 只管"放行清单",本步查"谁在监听").**
+本步把实际在 **非 loopback**(0.0.0.0/::/公网 IP)监听、却**不在允许集**(SSH + ufw 放行端口)的服务全捞出来,逐项问用户是否关闭 —— 绝不静默留着一个对外监听。
+S6b. 跑 `bash .../system/script/list_listeners.sh <profile>`(只读)→ 每行 `port|bind|process`;输出 `NONE`=无意外对外监听,跳过本步。
+S6c. **逐项**把意外对外监听项(端口/绑定/进程)列给用户,用 AskUserQuestion 问**每一项**是否关闭 + 方式(展示现状让用户定,绝不替用户默认关关键服务):
+    - **MTA**(postfix/exim,如 `25|0.0.0.0|master`)→ `postfix-loopback`(绑 loopback,仍能发件、不再对外收)。
+    - **systemd-resolve 的 LLMNR/mDNS**(如 `5355|...|systemd-resolve`)→ `resolved-llmnr-off`(通常无用,可关)。
+    - **其它服务** → `stop-unit <unit>`(彻底停用禁用),或**保留**(如 nginx:80 作 HTTP→HTTPS 跳转、ufw 已挡外部时)。
+S6d. 对用户选"关闭"的每一项跑 `bash .../system/script/close_listener.sh <profile> <mode> [unit]` 执行;全部处理完**重跑 `list_listeners.sh`** 复核并转述结果(理想:只剩用户明确保留的项)。
+
 **Phase S4 — 收尾.**
 S7. 跑 `bash .../system/close/close_check.sh <profile>`;`❌`→逐条列出 FAILED 行。
 S8. 报告:升级结果、swap/BBR、加固通过项;提醒 NOPASSWD sudo 仍待最后模块撤销。system 模块无 root 通道,无需 `disconnect`。

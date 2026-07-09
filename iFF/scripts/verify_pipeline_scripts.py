@@ -53,6 +53,24 @@ REQUIRED = [
     # so a deletion of the single most important script would have gone undetected.
     "generate_canvas.py",
     "sync_project_rules.py",
+    # Shared-component reuse: cross-row detection + project registry, so nav
+    # headers / bottom tab bars are implemented once and mounted everywhere.
+    "detect_shared_components.py",
+    "register_shared_component.py",
+    "merge_shared_expected.py",
+    # Speed/token discipline: device mutex for true-parallel fan-out, artifact digest
+    # replacing whole-file reads, machine-prefilled implementation plan.
+    "device_lock.py",
+    "summarize_spec_artifacts.py",
+    "prefill_implementation_plan.py",
+    # Visual/interaction/efficiency round 2: deterministic done gate, interaction
+    # grounding (board index + anchors), state machine, cross-page flow graph.
+    "check_done_gate.py",
+    "make_board_index.py",
+    "resolve_interaction_anchors.py",
+    "make_state_machine.py",
+    "update_flow_graph.py",
+    "make_journey_map.py",
 ]
 
 

@@ -106,8 +106,16 @@ def main() -> int:
             if lib_root in r.parents:
                 tested.add(r)
 
-    # 4) tested but unreachable from entry.
-    unwired = sorted(p for p in tested if p not in reachable)
+    # 4) tested but unreachable from entry. Test-side doubles (visual fixtures and
+    # mock repositories) are DESIGNED to be test/preview-only — same-source with the
+    # runtime data (check_fixture_source guards that), so runtime unreachability is
+    # their correct state, not a wiring defect. Counting them made ok=False noise
+    # that got ignored, which then masked real unwired domain logic.
+    def is_test_double(p) -> bool:
+        name = p.name.lower()
+        return "fixture" in name or "mock" in name
+    unwired = sorted(p for p in tested if p not in reachable and not is_test_double(p))
+    excluded_doubles = sorted(p for p in tested if p not in reachable and is_test_double(p))
 
     rel = lambda p: str(p.relative_to(lib_root.parent)) if lib_root.parent in p.parents else str(p)
     int_rules = 0
@@ -124,6 +132,7 @@ def main() -> int:
         "testedUnitCount": len(tested),
         "interactionRuleCount": int_rules,
         "unwired": [rel(p) for p in unwired],
+        "excludedTestDoubles": [rel(p) for p in excluded_doubles],
         "ok": not unwired,
     }
     if args.out:

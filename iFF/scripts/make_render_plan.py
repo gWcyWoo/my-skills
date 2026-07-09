@@ -173,6 +173,8 @@ def main() -> int:
     parser.add_argument("--scene", required=True)
     parser.add_argument("--assets", required=True)
     parser.add_argument("--layout", required=True)
+    parser.add_argument("--shared", help="shared_components.local.json from detect_shared_components.py; "
+                                         "status=reuse groups are excluded from the canvas")
     parser.add_argument("--out", required=True)
     args = parser.parse_args()
 
@@ -201,18 +203,48 @@ def main() -> int:
         and any((by_id.get(child_id) or {}).get("text") for child_id in node.get("children") or [])
     }
 
+    # Regions resolved to a registered shared component: the page canvas must not
+    # re-draw them; the verified shared widget is mounted at the group bbox instead.
+    shared_roots: dict[str, dict] = {}
+    covered_by_shared: dict[str, str] = {}
+    if args.shared:
+        shared_local = load_json(args.shared)
+        for comp in shared_local.get("components") or []:
+            root_id = str(comp.get("group_node") or "")
+            if not root_id or comp.get("status") != "reuse":
+                continue
+            if root_id not in by_id:
+                raise SystemExit(f"ERROR: shared component group node not in scene: {root_id}")
+            shared_roots[root_id] = comp
+            covered_by_shared[root_id] = root_id
+            for descendant_id in collect_descendants(root_id, by_id):
+                covered_by_shared[descendant_id] = root_id
+
     max_area = max(n["bbox"][2] * n["bbox"][3] for n in nodes)
     plan = {
         "nodes": {},
         "assetStrategy": "webP > png; svg only for simple vectors",
         "visibleImplementations": sorted(VISIBLE_IMPLEMENTATIONS),
+        "sharedComponents": [
+            {
+                "signature": comp.get("signature"),
+                "name": comp.get("name"),
+                "widget_path": comp.get("widget_path"),
+                "group_node": root_id,
+                "bbox": (by_id.get(root_id) or {}).get("bbox"),
+            }
+            for root_id, comp in sorted(shared_roots.items())
+        ],
     }
     errors = []
     for node in nodes:
         bbox = node["bbox"]
         manifest_asset = assets.get(node["id"]) if isinstance(assets, dict) else None
         asset_path = node.get("asset") or (manifest_asset.get("path") if isinstance(manifest_asset, dict) else None)
-        mode = asset_strategy(str(asset_path)) if asset_path else implementation_for(node, text_layer_wrappers, set(covered_by_asset))
+        if node["id"] in covered_by_shared:
+            mode = "covered_by_shared_component"
+        else:
+            mode = asset_strategy(str(asset_path)) if asset_path else implementation_for(node, text_layer_wrappers, set(covered_by_asset))
         required = mode in VISIBLE_IMPLEMENTATIONS
         # 1D 描边分隔线(Figma Line / 零厚度 shapeLayer)bbox 的宽或高为 0。作为可见节点
         # 必须有正的厚度才能被坐标画布渲染并通过 render_plan 的正 bbox 校验,否则一条设计
@@ -231,7 +263,7 @@ def main() -> int:
                 bbox[2] = stroke
             if bbox[3] <= 0:
                 bbox[3] = stroke
-        if node.get("exportable") and not asset_path:
+        if node.get("exportable") and not asset_path and mode != "covered_by_shared_component":
             errors.append(f"exportable node missing asset path: {node['id']}")
         if mode.startswith("image") or mode == "svg" or mode == "asset":
             if not asset_path:
@@ -272,8 +304,15 @@ def main() -> int:
             "visible": bool(node.get("effectiveVisible", True) and node.get("visible", True)),
             "required": required,
             "renderMode": "absolute_positioned" if required else None,
-            "coveredBy": covered_by_asset.get(node["id"]) if mode == "covered_by_asset" else None,
-            "reason": render_reason(node, mode, covered_by_asset),
+            "coveredBy": (covered_by_asset.get(node["id"]) if mode == "covered_by_asset"
+                          else covered_by_shared.get(node["id"]) if mode == "covered_by_shared_component"
+                          else None),
+            "reason": (
+                "region rendered by shared component "
+                f"{(shared_roots.get(covered_by_shared[node['id']]) or {}).get('name') or covered_by_shared[node['id']]}"
+                if mode == "covered_by_shared_component"
+                else render_reason(node, mode, covered_by_asset)
+            ),
             "sourceSchema": scene.get("sourceSchema"),
             "widgetTraceRequired": True,
         }
