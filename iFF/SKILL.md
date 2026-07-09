@@ -49,12 +49,12 @@ iFF 在 MAIN session 运行,是**编排者**:被外部 `goal` 指令调起(goal 
 每个 subagent 对自己这一行,必须逐步执行 `<pipeline>`。不得跳步、合并步骤、只读自然语言 `spec.md`、凭截图自由发挥,或在缺少任一固定输出时继续实现。若本段与 `<pipeline>` 冲突,以 `<pipeline>` 为准。
 
 - **全自主**:无用户 gate/STOP;以"测试确实先 red 过"为硬证据自证。
-- **选行**:每批读 **N 行**(默认 N=2)**status 为空**的行;选中后**立即把这几行 status 改为 `doing`**(认领、防重、可断点续);文件层面已隔离,无需功能依赖分析。
+- **选行**:每批读 **N 行**(默认 N=4;设备池 <2 台时退回 N=2——设备 I/O 是唯一互斥点,单设备下更大的批只是在排队)**status 为空**的行;选中后**立即把这几行 status 改为 `doing`**(认领、防重、可断点续);文件层面已隔离,无需功能依赖分析。
 </context>
 
 <instructions>
 1. **接收 goal**:从外部 `goal` 指令拿到目标 + 验收标准 + 目标表格路径。
-2. **读表 + 认领**:解析 CSV/Excel,挑 **status 为空**的行,每批取 **N 行(默认 2)**;**立即回写这几行 status=`doing`**(认领,防重复处理 / 支持断点续跑)。
+2. **读表 + 认领**:解析 CSV/Excel,挑 **status 为空**的行,每批取 **N 行(默认 4;设备池 <2 台退回 2)**;**立即回写这几行 status=`doing`**(认领,防重复处理 / 支持断点续跑)。
 2.5. **预取稿 + 批内公共组件解析(扇出前)**:main 用 `make_worker_prompt.py --mode fetch` 给每个选中行 spawn 一个 **fetch-worker**(行间并行),它对本行每张板跑固定流水线 0-3 步脚本(main 自己**不跑取稿、不读产物**)→ 全部返回后 main 跑 `detect_shared_components.py --spec-dirs <各行spec_dir> --registry <工程>/.iff/shared_components.json --out <工程>/.iff/batch_shared_components.json`(同时写各行 `spec_dir/shared_components.local.json`)→ 对 `status=missing` 的公共组件分两段:**实现并行**——每组件 spawn 一个专用 shared-component worker(同一条消息全部发起),以 `best_asset_source` 行的机器产物 + `pooled_assets`(跨行资产池化:A 页缺切图的 icon 可用 B 页同位置切图)实现该组件到工程共享 widget 目录;实现阶段各 worker **只写自家 widget dart + 组件测试文件 + 拷自家资产文件,禁碰 pubspec/注册表、禁跑 `flutter analyze`/`flutter test`**(analyze/test 编译整个 lib 树,兄弟组件半成品文件会造成假红);组件**可见层必须由 `generate_canvas.py` 从源行该 group 子树生成**(key=源行 node id,产出组件自己的 `*.expected.json`——这是消费页逐页校验的基准)。**收口串行**——全部 worker 返回后 main 在一致的树上验门:逐个 `update_pubspec_assets.py` 注册资产 → **一次** `flutter analyze` 干净 + **一次** `flutter test`(覆盖本批全部共享组件 widget 测试)→ 逐个 `register_shared_component.py` 登记,**必须带** `--from-batch`(存源行 canonical 节点序)与 `--component-expected <组件expected.json>`(存组件 keyed 期望节点),`assets_incomplete` 时必须带 `--assets-incomplete` 显式记录,禁止静默近似;任一组件验门失败只登记通过的、失败组件按 missing 上报 → **重跑 detect 刷新 local 文件**(候选全部转 `reuse`)后才生成 worker prompt 并扇出。本步骤同时**预拉各行 OAS**(main 调 Apifox MCP 存 `spec_dir/oas.json`,worker 缓存命中即免拉,省 worker 内 1.5-3 分钟网络等待)并跑 `make_board_index.py --specs-dir lanhu/specs --out .iff/board_index.json`(交互锚定的确定性索引)。无公共组件候选时仅预取稿+预拉 OAS+建索引后直接扇出。
 3. **扇出(画板级,Claude Code Agent 工具)**:**必须真并行——同一条消息一次性发起全部 `Agent` 调用;严禁串行等待(R1 实测行级串行 54min/页)。唯一互斥资源是设备 I/O(9-11 的安装/启动/截图),由 `device_lock.py` 串行化(支持 `--pool` 多 emulator;构建与 repair 修改一律锁外)。**
    - **3a. board-worker + contract-worker 全并行**(同一条消息发起:board 每板一个 `--mode board`,contract 每 feature 一个 `--mode contract`):board = compliance → digest → 本板 canvas/expected/slots(6.7)→ trace 测试文件生成 → 本板 implementation_map 片段,只写本板专属文件,不跑 flutter test;contract = 步骤 6 系列(交互契约+完整性门+状态机+锚定+api_contract+test plan,含模型填边/锚定确认),只写 feature 级契约文件,不跑任何 flutter 命令。
@@ -406,9 +406,9 @@ P0 — iFF 只定**流程**,不定实现细节:架构/目录/命名/资产·路�
 P0 — 视觉实现红线:无论目标是否写“截图一致”,都禁止把设计稿截图、完整 artboard、reference 派生图作为组件可见层、背景图、`Image.asset`、`DecorationImage`、整图铺底或透明热区覆盖;交互热区可以叠加在真实视觉节点上,但不能替代视觉节点;验收只看真实 Flutter 页面/组件渲染结果与设计稿的一致性,必须组件逐层实现、截图比对、按 `repair_plan.json` 单次修复并复验。
 P0 — 视觉 provenance:每个 `reference.png`/`actual.png` 旁必须有 `visual_manifest.json`;最终 `actual_source` 必须是 `simulator_screenshot`,不得是 `widget_golden` 或 `generated_from_reference`。
 P0 — runtime 数据同源:视觉测试 fixture、widget preview、app shell/mock repository 必须使用同一份 fixture/provider;多状态长图必须在 app runtime 返回同一组状态数据,禁止测试多状态但最终 app 只注入默认单状态。
-P1 — 扇出并发先定为**每批 2 个互不影响的功能**,且**必须真并行**(同一条消息发起全部 Agent 调用;实测串行是 40min/页的第一大原因);设备 I/O(9-11 的安装/启动/截图)是唯一互斥点,用 `device_lock.py`(mkdir 原子锁,支持 `--pool` 多 emulator——池内 profile 必须完全一致,任何退出路径必须 release,stale 锁自动破除);**构建(gradle/xcode)与 repair 修改一律锁外**,锁只护短截图窗口(首验、复验各一个)。
+P1 — 扇出并发默认**每批 4 个互不影响的功能**(设备池 ≥2 台是前提;单设备退回 2,否则只是把排队搬进批里),且**必须真并行**(同一条消息发起全部 Agent 调用;实测串行是 40min/页的第一大原因);N 上调后 main 只收各 worker 固定 schema 的 JSON 摘要,**严禁 worker 回传产物内容**(protect main context,R1 教训);设备 I/O(9-11 的安装/启动/截图)是唯一互斥点,用 `device_lock.py`(mkdir 原子锁,支持 `--pool` 多 emulator——池内 profile 必须完全一致,任何退出路径必须 release,stale 锁自动破除);**构建(gradle/xcode)与 repair 修改一律锁外**,锁只护短截图窗口(首验、复验各一个)。
 P1 — iFF 读表 + 回写 `status/error/spec_dir`;`goal` 是外部指令,iFF 不实现它。
-P1 — 工作队列:**只选 status 为空**的行,每批 N(默认 2);选中**即刻标 `doing`**(认领/防重/可续),完成标 `done` 或 `error`。
+P1 — 工作队列:**只选 status 为空**的行,每批 N(默认 4;设备池 <2 台退回 2);选中**即刻标 `doing`**(认领/防重/可续),完成标 `done` 或 `error`。
 P1 — 单行顺序:确认视觉策略 → 本 skill 脚本取稿/下载完整 cover → **Apifox 读契约(运行时依赖,须配 Apifox MCP)** → 生成 scene/tokens/assets_manifest/groups/layout_contract/render_plan/fixture/interaction_contract/interaction_test_plan → 读项目 → 按交互测试计划设计测试(接口用例用真实契约 mock)→ 坐标编译实现 UI → 接口接入+mock 渲染 → 真实设备截图 diff → 单次 repair 复验 → 交互覆盖/视觉/manifest 自检。
 P1 — 运行时外部依赖:**Apifox MCP**(读接口契约)、Lanhu 网络/API 访问、Flutter 设备/模拟器;真跑/测试前需在目标环境就绪。
 P2 — `spec_dir` 缓存命中且包含 `reference.png` 才跳过取稿(幂等)。
