@@ -1,0 +1,9 @@
+[Unit]
+Description=dDP reload watch (__NAME__) —— 监 src/.reload-trigger
+
+[Path]
+PathModified=__APP_SRC__/.reload-trigger
+Unit=dpt-reload-__NAME__.service
+
+[Install]
+WantedBy=default.target

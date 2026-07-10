@@ -1,0 +1,9 @@
+[Unit]
+Description=dDP graceful php-fpm reload (__NAME__) —— docker kill -s USR2
+# [REVIEW:fix] 去抖/限频:防抖动或恶意 pipeline 狂触哨兵导致 USR2 风暴
+StartLimitIntervalSec=10
+StartLimitBurst=5
+
+[Service]
+Type=oneshot
+ExecStart=%h/dpt-docker-framework/bin/dpt-reload-on-trigger __NAME__

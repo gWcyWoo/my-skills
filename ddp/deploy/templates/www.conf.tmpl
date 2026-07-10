@@ -1,0 +1,26 @@
+; dDP 容器 php-fpm pool —— 安全 + 性能。装到 /usr/local/etc/php-fpm.d/www.conf。
+; 不设 user/group:容器以 33:33(www-data)非 root 跑,master 已是非 root,设了反而告警。
+[www]
+listen = 0.0.0.0:9000
+
+pm = dynamic
+pm.max_children = __MAX_CHILDREN__
+pm.start_servers = __START_SERVERS__
+pm.min_spare_servers = __MIN_SPARE__
+pm.max_spare_servers = __MAX_SPARE__
+pm.max_requests = 500
+
+request_terminate_timeout = 60s
+security.limit_extensions = .php
+clear_env = yes
+catch_workers_output = yes
+
+; 安全:仅对 fpm worker 禁危险函数(CLI composer 不受影响)
+php_admin_value[disable_functions] = exec,passthru,shell_exec,system,popen,proc_open,show_source
+
+ping.path = /ping
+pm.status_path = /status
+
+access.log = /proc/self/fd/2
+slowlog = /proc/self/fd/2
+request_slowlog_timeout = 5s

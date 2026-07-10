@@ -1,0 +1,24 @@
+
+# ---------- 分支 __BRANCH__ → app __NAME__ @ __DOMAIN__(runner tag: __TAG__)----------
+build___JOB__:
+  extends: .dpt_build
+  tags: ["__TAG__"]
+  variables:
+    APP_NAME: "__NAME__"
+    APP_SRC: "__APP_SRC__"
+    APP_DOMAIN: "__DOMAIN__"
+    APP_HEALTH_URL: "__HEALTH_URL__"
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "__BRANCH__"'
+
+deploy___JOB__:
+  extends: .dpt_deploy
+  tags: ["__TAG__"]
+  needs: ["build___JOB__"]
+  variables:
+    APP_NAME: "__NAME__"
+    APP_SRC: "__APP_SRC__"
+    APP_DOMAIN: "__DOMAIN__"
+    APP_HEALTH_URL: "__HEALTH_URL__"
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "__BRANCH__"'

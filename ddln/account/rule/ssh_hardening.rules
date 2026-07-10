@@ -1,0 +1,39 @@
+# dpt SSH 安全加固规则 —— 来源:CIS Linux Benchmark 第 5.2 节(SSH Server)+ Mozilla OpenSSH 现代配置
+# 执行器:lib/run_checks.sh(--fix 写 drop-in / --check 只审计)
+# 格式: kind|name|expected|severity|reference
+#   kind=sshd  name=指令(sshd -T 小写)  expected=期望值(__USER__→运营用户)
+#   kind=file  name=路径  expected=mode:owner:group
+#
+# 注:strong crypto(C 组)按最佳实践启用;clientalivecountmax=2、loglevel=VERBOSE 已与用户确认。
+
+# ===== A 认证面(强制)=====
+sshd|passwordauthentication|no|critical|CIS/Mozilla — 禁密码登录
+sshd|kbdinteractiveauthentication|no|critical|堵第二条密码路径
+sshd|authenticationmethods|publickey|critical|Mozilla — 仅证书
+sshd|pubkeyauthentication|yes|critical|证书登录前提
+sshd|permitrootlogin|no|critical|CIS 5.2.12 — 禁 root 登录
+sshd|permitemptypasswords|no|critical|CIS 5.2.9
+sshd|allowusers|__USER__|high|访问控制 — 仅允许运营用户
+sshd|ignorerhosts|yes|medium|CIS 5.2.11
+sshd|hostbasedauthentication|no|medium|CIS 5.2.13
+
+# ===== B 会话 / 抗暴力破解(强制)=====
+sshd|maxauthtries|3|high|CIS 5.2.5
+sshd|logingracetime|60|medium|CIS 5.2.17
+sshd|clientaliveinterval|300|medium|CIS 5.2.18
+sshd|clientalivecountmax|2|medium|CIS 5.2.18
+sshd|x11forwarding|no|medium|CIS 5.2.3
+sshd|permituserenvironment|no|medium|CIS 5.2.10
+sshd|maxsessions|10|low|CIS 5.2.6
+sshd|maxstartups|10:30:60|medium|CIS 5.2.7
+sshd|loglevel|VERBOSE|low|Mozilla — 记录公钥指纹便于审计
+
+# ===== C 加密套件 / 转发(最佳实践)=====
+sshd|ciphers|chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr|high|CIS 5.2.14 / Mozilla
+sshd|macs|hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,hmac-sha2-512,hmac-sha2-256|high|CIS 5.2.15 / Mozilla
+sshd|kexalgorithms|curve25519-sha256,curve25519-sha256@libssh.org,ecdh-sha2-nistp521,ecdh-sha2-nistp384,ecdh-sha2-nistp256,diffie-hellman-group-exchange-sha256|high|CIS 5.2.16 / Mozilla
+sshd|allowtcpforwarding|no|low|CIS 5.2.23
+sshd|allowagentforwarding|no|low|CIS 5.2.24
+
+# ===== D 文件权限(强制)=====
+file|/etc/ssh/sshd_config|600:root:root|high|CIS 5.2.1

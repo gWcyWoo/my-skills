@@ -1,0 +1,46 @@
+# dDP 项目 vhost —— 纯 HTTP,自定义端口 IP 直连(无域名场景)。
+# 宿主 nginx 在 __LISTEN__ 端口作该端口 default_server → rootless php-fpm 容器(127.0.0.1:__PORT__)。
+# root 指宿主上的 src/public;SCRIPT_FILENAME 用容器内路径(php-fpm 自解析)。
+# 明文 HTTP:无 TLS、无 HTTPS 参数;X-Forwarded-Proto=http。公网暴露前请确认已放行 ufw + 云安全组 __LISTEN__。
+server {
+    listen __LISTEN__ default_server;
+    listen [::]:__LISTEN__ default_server;
+    server_name _;
+
+    include snippets/security-headers.conf;
+    include snippets/deny-dotfiles.conf;
+
+    root __ROOT__;
+    index index.php;
+    client_max_body_size 20m;
+
+    location / {
+        try_files $uri $uri/ @thinkphp;
+    }
+
+    location @thinkphp {
+        include snippets/ratelimit.conf;
+        include fastcgi_params;
+        fastcgi_pass 127.0.0.1:__PORT__;
+        fastcgi_param SCRIPT_FILENAME /var/www/__NAME__/public/index.php;
+        fastcgi_param SCRIPT_NAME /index.php;
+        fastcgi_param DOCUMENT_ROOT /var/www/__NAME__/public;
+        fastcgi_param PATH_INFO $uri;
+        fastcgi_param REQUEST_URI $request_uri;
+        fastcgi_param QUERY_STRING $query_string;
+        fastcgi_param X-Forwarded-Proto $scheme;
+        fastcgi_hide_header X-Powered-By;
+    }
+
+    location = /index.php {
+        include fastcgi_params;
+        fastcgi_pass 127.0.0.1:__PORT__;
+        fastcgi_param SCRIPT_FILENAME /var/www/__NAME__/public/index.php;
+        fastcgi_param SCRIPT_NAME /index.php;
+        fastcgi_param DOCUMENT_ROOT /var/www/__NAME__/public;
+        fastcgi_param REQUEST_URI $request_uri;
+        fastcgi_param QUERY_STRING $query_string;
+        fastcgi_param X-Forwarded-Proto $scheme;
+        fastcgi_hide_header X-Powered-By;
+    }
+}
