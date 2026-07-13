@@ -56,20 +56,31 @@ def main() -> int:
     scale = 2 if width >= 700 else 1
     viewport = {"width": round(width / scale), "height": 812 if height > 1200 else round(height / scale)}
 
-    if height > viewport["height"] * scale * 1.4 and len(groups) >= 2:
+    # 判类先看画板是否就是"单台设备一屏":宽高都≈一个视口 ⇒ 单 screen(再多页内分区也只是一屏)。
+    # 多屏布局必然在某一维显著超过一个视口:纵向堆叠多态=variant_board / 纵向长目录=component_sheet /
+    # 横向并排多屏=flow_board。用"整页级组块"(近满宽且≥半视口高、且非整张画板本身)数量区分前两者。
+    vp_w_px = viewport["width"] * scale
+    vp_h_px = viewport["height"] * scale
+    tall = height > vp_h_px * 1.4
+    wide = width > vp_w_px * 1.4
+    page_groups = [g for g in groups
+                   if g["bbox"][2] >= width * 0.85
+                   and vp_h_px * 0.55 <= g["bbox"][3] <= height * 0.9]
+
+    if not tall and not wide:
+        design_type = "screen"
+        reason = "artboard is a single device viewport"
+    elif tall and states and len(page_groups) >= 2:
+        # 仅当检测到真实状态标记(apply_status 等 STATE_WORDS)且有多个整页块,才是堆叠多态板。
+        # 否则一张很长的画板就是一张可滚动的长单屏(长表单/长列表)——绝不凭空 state_1..N 造状态。
         design_type = "variant_board"
-        reason = "long artboard with repeated large groups"
-        if not states:
-            states = [f"state_{i + 1}" for i in range(len(groups))]
-    elif len(groups) >= 8 and height > width:
-        design_type = "component_sheet"
-        reason = "many independent large groups"
-    elif len(groups) >= 2 and height <= viewport["height"] * scale * 1.4:
+        reason = "long artboard stacking multiple real-state full pages"
+    elif wide and len(page_groups) >= 2:
         design_type = "flow_board"
-        reason = "multiple large page-like groups in one artboard"
+        reason = "side-by-side page-like screens in one wide artboard"
     else:
         design_type = "screen"
-        reason = "single page-like artboard"
+        reason = "single (possibly long/scrollable) page"
 
     result = {
         "type": design_type,

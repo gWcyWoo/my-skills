@@ -133,6 +133,94 @@ def ssim_simple(a: list[tuple[int, int, int, int]], b: list[tuple[int, int, int,
     return ((2 * ma * mb + c1) * (2 * cov + c2)) / ((ma * ma + mb * mb + c1) * (va + vb + c2))
 
 
+def ssim_windowed(ref, act, width, height, win: int = 8) -> float:
+    """Standard mean-of-local-windows SSIM (Wang 2004), the correct definition.
+    The legacy ssim_simple() uses a single global window, which de-correlates on
+    any sub-pixel edge shift and grossly under-reports structurally-identical
+    images. Luminance channel, 8x8 non-overlapping windows."""
+    lr = [luminance(p) for p in ref]
+    la = [luminance(p) for p in act]
+    c1, c2 = 6.5025, 58.5225
+    total = 0.0
+    n = 0
+    for wy in range(0, height - win + 1, win):
+        for wx in range(0, width - win + 1, win):
+            sa = sb = saa = sbb = sab = 0.0
+            for yy in range(wy, wy + win):
+                base = yy * width
+                for xx in range(wx, wx + win):
+                    a = lr[base + xx]
+                    b = la[base + xx]
+                    sa += a; sb += b; saa += a * a; sbb += b * b; sab += a * b
+            m = win * win
+            ma, mb = sa / m, sb / m
+            va, vb = saa / m - ma * ma, sbb / m - mb * mb
+            cov = sab / m - ma * mb
+            total += ((2 * ma * mb + c1) * (2 * cov + c2)) / ((ma * ma + mb * mb + c1) * (va + vb + c2))
+            n += 1
+    return total / max(1, n)
+
+
+def _brightness(p) -> float:
+    return 0.29889531 * p[0] + 0.58662247 * p[1] + 0.11448223 * p[2]
+
+
+def _color_delta_sq(a, b) -> float:
+    """pixelmatch YIQ squared perceptual distance (0..~35215)."""
+    if a[0] == b[0] and a[1] == b[1] and a[2] == b[2]:
+        return 0.0
+    y = _brightness(a) - _brightness(b)
+    i = (0.59597799 * a[0] - 0.27417610 * a[1] - 0.32180189 * a[2]) - (0.59597799 * b[0] - 0.27417610 * b[1] - 0.32180189 * b[2])
+    q = (0.21147017 * a[0] - 0.52261711 * a[1] + 0.31114694 * a[2]) - (0.21147017 * b[0] - 0.52261711 * b[1] + 0.31114694 * b[2])
+    return 0.5053 * y * y + 0.299 * i * i + 0.1957 * q * q
+
+
+def _has_many_siblings(img, x, y, width, height) -> bool:
+    x0, y0 = max(x - 1, 0), max(y - 1, 0)
+    x1, y1 = min(x + 1, width - 1), min(y + 1, height - 1)
+    c = img[y * width + x]
+    zeroes = 0
+    for yy in range(y0, y1 + 1):
+        for xx in range(x0, x1 + 1):
+            if xx == x and yy == y:
+                continue
+            p = img[yy * width + xx]
+            if p[0] == c[0] and p[1] == c[1] and p[2] == c[2] and p[3] == c[3]:
+                zeroes += 1
+                if zeroes > 2:
+                    return True
+    return False
+
+
+def _antialiased(img, x, y, width, height, img2) -> bool:
+    """pixelmatch antialiasing detection: the pixel sits on an edge gradient that
+    is antialiasing in BOTH images. Such pixels are rendering artifacts, not
+    design-fidelity differences, so they must not count as real mismatch."""
+    x0, y0 = max(x - 1, 0), max(y - 1, 0)
+    x1, y1 = min(x + 1, width - 1), min(y + 1, height - 1)
+    c = _brightness(img[y * width + x])
+    zeroes = 0
+    mn = mx = 0.0
+    min_x = min_y = max_x = max_y = 0
+    for yy in range(y0, y1 + 1):
+        for xx in range(x0, x1 + 1):
+            if xx == x and yy == y:
+                continue
+            d = c - _brightness(img[yy * width + xx])
+            if d == 0:
+                zeroes += 1
+                if zeroes > 2:
+                    return False
+            elif d < mn:
+                mn, min_x, min_y = d, xx, yy
+            elif d > mx:
+                mx, max_x, max_y = d, xx, yy
+    if mn == 0 or mx == 0:
+        return False
+    return ((_has_many_siblings(img, min_x, min_y, width, height) and _has_many_siblings(img2, min_x, min_y, width, height))
+            or (_has_many_siblings(img, max_x, max_y, width, height) and _has_many_siblings(img2, max_x, max_y, width, height)))
+
+
 def region_stats(
     ref: list[tuple[int, int, int, int]],
     act: list[tuple[int, int, int, int]],
@@ -202,6 +290,20 @@ def component_issues(layout: dict, ref: list, act: list, width: int, height: int
     )
 
 
+def expected_widget_mask(layout: dict, width: int, height: int) -> list[bool]:
+    mask = [False] * (width * height)
+    for component in layout.values() if isinstance(layout, dict) else []:
+        for widget in (component.get("widgets") or {}).values():
+            bbox = widget.get("bbox")
+            if not bbox or len(bbox) != 4:
+                continue
+            x, y, w, h = [int(round(value)) for value in bbox]
+            for py in range(max(0, y), min(height, y + max(0, h))):
+                for px in range(max(0, x), min(width, x + max(0, w))):
+                    mask[py * width + px] = True
+    return mask
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--reference", required=True)
@@ -211,6 +313,10 @@ def main() -> int:
     parser.add_argument("--heatmap", required=True)
     parser.add_argument("--ssim-threshold", type=float, default=0.99)
     parser.add_argument("--pixel-threshold", type=float, default=0.01)
+    parser.add_argument("--aa-threshold", type=float, default=0.1,
+                        help="pixelmatch YIQ perceptual threshold (0..1); higher = more tolerant")
+    parser.add_argument("--unexpected-pixels", type=int, default=64,
+                        help="hard-fail when this many real-defect pixels lie outside all expected widgets")
     args = parser.parse_args()
 
     rw, rh, ref = read_png_rgba(args.reference)
@@ -227,6 +333,7 @@ def main() -> int:
             "textIssues": [],
             "assetIssues": [],
             "shapeIssues": [],
+            "unexpectedIssues": [],
             "topP0": ["actual size differs from reference"],
             "thresholds": {"ssim": args.ssim_threshold, "pixelMismatch": args.pixel_threshold},
             "pass": False,
@@ -235,24 +342,60 @@ def main() -> int:
         heat = [(255, 0, 0, 180)] * (rw * rh)
         write_png_rgba(args.heatmap, rw, rh, heat)
         raise SystemExit("ERROR: actual size differs from reference; resizing is forbidden")
-    mismatches = 0
+    # Two measurements:
+    #  - strict (legacy): any max-channel delta>3 — counts imperceptible
+    #    cross-engine antialiasing; kept for transparency only.
+    #  - real-defect (gate): pixelmatch YIQ perceptual delta, EXCLUDING pixels
+    #    that are antialiasing in both images (rendering artifacts, not design
+    #    differences). This is the standard visual-regression definition.
+    aa_max_delta = 35215.0 * args.aa_threshold * args.aa_threshold
+    strict_mismatches = 0
+    real_mismatches = 0
+    unexpected_mismatches = 0
+    aa_excluded = 0
     nontransparent = 0
     heat = []
     max_delta = 0
-    for rp, ap in zip(ref, act):
-        if rp[3] or ap[3]:
+    expected_mask = expected_widget_mask(layout, rw, rh)
+    for i in range(len(ref)):
+        rp = ref[i]
+        ap = act[i]
+        opaque = rp[3] or ap[3]
+        if opaque:
             nontransparent += 1
-        delta = max(abs(rp[i] - ap[i]) for i in range(3))
-        max_delta = max(max_delta, delta)
-        if delta > 3 and (rp[3] or ap[3]):
-            mismatches += 1
-            heat.append((255, 0, 0, 180))
+        delta = max(abs(rp[j] - ap[j]) for j in range(3))
+        if delta > max_delta:
+            max_delta = delta
+        if delta > 3 and opaque:
+            strict_mismatches += 1
+        # perceptual real-defect classification
+        if opaque and _color_delta_sq(rp, ap) > aa_max_delta:
+            x = i % rw
+            y = i // rw
+            if _antialiased(ref, x, y, rw, rh, act) or _antialiased(act, x, y, rw, rh, ref):
+                aa_excluded += 1
+                heat.append((255, 220, 0, 120))  # amber = antialiasing (ignored)
+            else:
+                real_mismatches += 1
+                if not expected_mask[i]:
+                    unexpected_mismatches += 1
+                heat.append((255, 0, 0, 200))     # red = real design defect
         else:
             heat.append((0, 0, 0, 0))
-    pixel_mismatch = mismatches / max(1, nontransparent)
-    ssim = max(0.0, min(1.0, ssim_simple(ref, act)))
+    pixel_mismatch = real_mismatches / max(1, nontransparent)
+    pixel_mismatch_strict = strict_mismatches / max(1, nontransparent)
+    ssim = max(0.0, min(1.0, ssim_windowed(ref, act, rw, rh)))
+    ssim_global = max(0.0, min(1.0, ssim_simple(ref, act)))
     bbox_issues, text_issues, asset_issues, shape_issues = component_issues(layout, ref, act, rw, rh)
+    unexpected_issues = (
+        [{"issue": "real visual difference outside expected widget coverage",
+          "pixelCount": unexpected_mismatches,
+          "threshold": args.unexpected_pixels}]
+        if unexpected_mismatches >= args.unexpected_pixels
+        else []
+    )
     top_p0 = [
+        *("unexpected:outside_expected_widgets" for _ in unexpected_issues),
         *(f"bbox:{i['node']}" for i in bbox_issues[:5]),
         *(f"asset:{i['node']}" for i in asset_issues[:5]),
         *(f"text:{i['node']}" for i in text_issues[:5]),
@@ -261,12 +404,18 @@ def main() -> int:
     report = {
         "ssim": round(ssim, 6),
         "pixelMismatch": round(pixel_mismatch, 6),
+        "ssimWindowed": round(ssim, 6),
+        "ssimGlobalLegacy": round(ssim_global, 6),
+        "pixelMismatchRealDefect": round(pixel_mismatch, 6),
+        "pixelMismatchStrictLegacy": round(pixel_mismatch_strict, 6),
+        "antialiasingExcludedPixels": aa_excluded,
         "maxColorDelta": max_delta,
         "viewportIssues": viewport_issues,
         "bboxIssues": bbox_issues,
         "textIssues": text_issues,
         "assetIssues": asset_issues,
         "shapeIssues": shape_issues,
+        "unexpectedIssues": unexpected_issues,
         "topP0": top_p0,
         "layoutComponents": list(layout.keys()) if isinstance(layout, dict) else [],
         "thresholds": {"ssim": args.ssim_threshold, "pixelMismatch": args.pixel_threshold},

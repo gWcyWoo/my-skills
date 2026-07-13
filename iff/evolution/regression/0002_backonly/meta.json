@@ -1,0 +1,1 @@
+{"id":"0002_backonly","origin":"round-11 (提款账号列表): chevron `down` optional param -> unused_element_parameter on back-'<'-only designs","exercises":["text","back-'<' chevron ONLY (no dropdown)"],"assert":"analyze clean WITHOUT a dropdown to mask the unused param"}

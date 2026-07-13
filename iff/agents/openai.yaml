@@ -1,0 +1,4 @@
+interface:
+  display_name: "iFF"
+  short_description: "批量实现 Flutter 设计稿并完成真实客户端视觉交互数据验收"
+  default_prompt: "Use $iff with the active goal to implement and verify the pending Flutter design rows from its sheet."

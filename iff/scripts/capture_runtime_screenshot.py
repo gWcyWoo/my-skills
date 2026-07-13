@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
+import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -13,6 +14,28 @@ import time
 
 def run(cmd: list[str]) -> None:
     subprocess.run(cmd, check=True)
+
+
+def app_hashes(app_root: Path) -> dict[str, str]:
+    return {
+        str(path.relative_to(app_root)): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted(app_root.rglob("*.dart"))
+    }
+
+
+def runtime_input_hashes(project_root: Path) -> dict[str, str]:
+    paths = [
+        path
+        for name in ("pubspec.yaml", "pubspec.lock")
+        if (path := project_root / name).is_file()
+    ]
+    assets_root = project_root / "assets"
+    if assets_root.is_dir():
+        paths.extend(path for path in assets_root.rglob("*") if path.is_file())
+    return {
+        str(path.relative_to(project_root)): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted(paths)
+    }
 
 
 def main() -> int:
@@ -24,6 +47,8 @@ def main() -> int:
     parser.add_argument("--width", type=int)
     parser.add_argument("--height", type=int)
     parser.add_argument("--density", type=int, default=160)
+    parser.add_argument("--route", help="named initial route to launch (flutter run --route), so a "
+                        "non-home feature page can be screenshotted WITHOUT mutating main.dart's initialRoute")
     parser.add_argument("--settle-seconds", type=float, default=5.0)
     args = parser.parse_args()
 
@@ -35,7 +60,10 @@ def main() -> int:
         setup_commands.append(f"adb -s {args.device} shell wm density {args.density}")
         run(["adb", "-s", args.device, "shell", "wm", "size", f"{args.width}x{args.height}"])
         run(["adb", "-s", args.device, "shell", "wm", "density", str(args.density)])
-    run(["flutter", "run", "-d", args.device, "--debug", "--no-resident"])
+    run_cmd = ["flutter", "run", "-d", args.device, "--debug", "--no-resident"]
+    if args.route:
+        run_cmd.append(f"--route={args.route}")
+    run(run_cmd)
     if args.settle_seconds > 0:
         time.sleep(args.settle_seconds)
     if args.platform == "android":
@@ -52,10 +80,16 @@ def main() -> int:
     data = {}
     if manifest_path.is_file():
         data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    project_root = Path.cwd().resolve()
     data.update(
         {
             "actual_source": "simulator_screenshot",
             "device_id": args.device,
+            "project_root": str(project_root),
+            "app_hashes": app_hashes(project_root / "lib"),
+            "runtime_input_hashes": runtime_input_hashes(project_root),
+            "launch_command": run_cmd,
+            "route": args.route,
             "viewport": {"width": args.width, "height": args.height, "density": args.density},
             "setup_commands": setup_commands,
             "settle_seconds": args.settle_seconds,

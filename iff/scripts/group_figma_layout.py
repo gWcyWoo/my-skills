@@ -107,6 +107,33 @@ def main() -> int:
                 "depth": node.get("depth", 0),
             }
         )
+    # Always include the screen root as a coverage region so leaf nodes placed
+    # directly on the artboard (loose header/card content not wrapped in a
+    # sub-frame) are mapped by the layout contract and pass the render-plan
+    # widget-mapping audit. Use the artboard-local origin so relative bboxes
+    # stay consistent with the sub-frame groups above.
+    root_node = by_id.get(root_id)
+    if root_node and root_node.get("children"):
+        local_bbox = [
+            0.0,
+            0.0,
+            float(artboard.get("width") or root_node["bbox"][2]),
+            float(artboard.get("height") or root_node["bbox"][3]),
+        ]
+        groups.append(
+            {
+                "id": component_name("region", len(groups) + 1),
+                "kind": "region",
+                "node": root_id,
+                "path": root_node.get("path"),
+                "parent": root_node.get("parent"),
+                "children": root_node.get("children") or [],
+                "bbox": local_bbox,
+                "state": None,
+                "source": "figma_hierarchy",
+                "depth": root_node.get("depth", 0),
+            }
+        )
     if not groups:
         raise SystemExit("ERROR: no Figma layout groups detected")
     dump_json({"source": "figma_hierarchy", "groups": groups}, args.out)

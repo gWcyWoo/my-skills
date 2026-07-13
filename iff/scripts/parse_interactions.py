@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import re
 from pathlib import Path
 
@@ -63,23 +64,6 @@ REQUIRE_WORDS = (
     "保留",
     "展示",
 )
-STRUCTURE_PREFIXES = (
-    "App 入口",
-    "应用壳",
-    "页面 UI",
-    "卡片文件按",
-    "首页卡片 UI",
-    "`apply_status=5` 可取款卡片",
-    "首页金额展示",
-    "Domain model",
-    "静态配置",
-    "本地资源",
-    "LoanOffer",
-    "SupportAction",
-    "HomeTabItem",
-)
-
-
 def read_interaction(args: argparse.Namespace) -> str:
     if args.input:
         return Path(args.input).read_text(encoding="utf-8")
@@ -108,8 +92,6 @@ def split_items(text: str) -> list[str]:
 
 def is_ignorable_item(text: str) -> bool:
     if text.startswith("#"):
-        return True
-    if text.startswith(STRUCTURE_PREFIXES):
         return True
     if text.endswith("如下：") or text.endswith("如下:"):
         return True
@@ -142,8 +124,13 @@ def split_colon_rule(text: str) -> tuple[str | None, str | None]:
     right = right.strip()
     if not left or not right:
         return None, None
-    if left.startswith(("首页卡片 UI", "首页金额展示")):
-        return None, None
+    if any(word in right for word in TRIGGER_WORDS):
+        after_match = re.search(r"(?<!最)后(?!续|置)", right)
+        if after_match:
+            return (
+                right[: after_match.start()].strip() or None,
+                right[after_match.end() :].strip() or None,
+            )
     if any(word in right for word in EXPECT_WORDS) or any(word in left for word in TRIGGER_WORDS):
         return left, right
     return None, None
@@ -181,6 +168,24 @@ def split_trigger_expectation(text: str) -> tuple[str | None, str | None]:
     return trigger, expectation
 
 
+def stable_rule_id(source: str) -> str:
+    normalized = re.sub(r"\s+", " ", source).strip()
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:10].upper()
+    return f"INT-{digest}"
+
+
+def compound_clauses(text: str) -> list[str]:
+    trigger_pattern = "|".join(re.escape(word) for word in TRIGGER_WORDS)
+    clauses = [
+        part.strip()
+        for part in re.split(rf"[，,]\s*(?=(?:{trigger_pattern}))", text, flags=re.I)
+        if part.strip()
+    ]
+    if len(clauses) < 2:
+        return []
+    return clauses if all(all(split_trigger_expectation(part)) for part in clauses) else []
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--interaction", help="Raw interaction column value.")
@@ -192,21 +197,39 @@ def main() -> int:
     items = split_items(raw)
     rules = []
     ignored_items = []
+    acknowledged_non_rules = []
+    compound_candidates = []
     for item in items:
         if is_ignorable_item(item):
-            ignored_items.append(item)
+            acknowledged_non_rules.append(
+                {"source": item, "reason": "structure_or_heading"}
+            )
+            continue
+        clauses = compound_clauses(item)
+        if clauses:
+            compound_candidates.append({"source": item, "suggestedClauses": clauses})
             continue
         trigger, expectation = split_trigger_expectation(item)
         if not trigger or not expectation:
             ignored_items.append(item)
             continue
-        rule_id = f"INT-{len(rules) + 1:03d}"
+        rule_id = stable_rule_id(item)
         rules.append(
             {
                 "id": rule_id,
                 "source": item,
                 "trigger": trigger,
                 "expectation": expectation,
+                "action": trigger,
+                "actionTarget": {"kind": "__MODEL__"},
+                "observableOutcome": expectation,
+                "boundaryOutcome": "__MODEL__",
+                "failureOutcome": "__MODEL__",
+                "observableTargets": {
+                    "happy": {"kind": "__MODEL__"},
+                    "boundary": {"kind": "__MODEL__"},
+                    "failure": {"kind": "__MODEL__"},
+                },
                 "coverageRequired": ["happy", "boundary", "failure"],
                 "testCaseIdsRequired": [
                     f"{rule_id}-HAPPY",
@@ -215,9 +238,19 @@ def main() -> int:
                 ],
             }
         )
-    if raw.strip() and not rules:
+    if raw.strip() and not rules and not compound_candidates:
         raise SystemExit("ERROR: interaction column is not machine-parseable: no actionable rules found")
-    dump_json({"source": raw, "rules": rules, "ignoredItems": ignored_items}, args.out)
+    dump_json(
+        {
+            "source": raw,
+            "rules": rules,
+            "ignoredItems": ignored_items,
+            "acknowledgedNonRules": acknowledged_non_rules,
+            "compoundCandidates": compound_candidates,
+            "compoundDecisions": [],
+        },
+        args.out,
+    )
     return 0
 
 
