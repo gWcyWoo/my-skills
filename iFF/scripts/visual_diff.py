@@ -290,6 +290,20 @@ def component_issues(layout: dict, ref: list, act: list, width: int, height: int
     )
 
 
+def expected_widget_mask(layout: dict, width: int, height: int) -> list[bool]:
+    mask = [False] * (width * height)
+    for component in layout.values() if isinstance(layout, dict) else []:
+        for widget in (component.get("widgets") or {}).values():
+            bbox = widget.get("bbox")
+            if not bbox or len(bbox) != 4:
+                continue
+            x, y, w, h = [int(round(value)) for value in bbox]
+            for py in range(max(0, y), min(height, y + max(0, h))):
+                for px in range(max(0, x), min(width, x + max(0, w))):
+                    mask[py * width + px] = True
+    return mask
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--reference", required=True)
@@ -301,6 +315,8 @@ def main() -> int:
     parser.add_argument("--pixel-threshold", type=float, default=0.01)
     parser.add_argument("--aa-threshold", type=float, default=0.1,
                         help="pixelmatch YIQ perceptual threshold (0..1); higher = more tolerant")
+    parser.add_argument("--unexpected-pixels", type=int, default=64,
+                        help="hard-fail when this many real-defect pixels lie outside all expected widgets")
     args = parser.parse_args()
 
     rw, rh, ref = read_png_rgba(args.reference)
@@ -317,6 +333,7 @@ def main() -> int:
             "textIssues": [],
             "assetIssues": [],
             "shapeIssues": [],
+            "unexpectedIssues": [],
             "topP0": ["actual size differs from reference"],
             "thresholds": {"ssim": args.ssim_threshold, "pixelMismatch": args.pixel_threshold},
             "pass": False,
@@ -334,10 +351,12 @@ def main() -> int:
     aa_max_delta = 35215.0 * args.aa_threshold * args.aa_threshold
     strict_mismatches = 0
     real_mismatches = 0
+    unexpected_mismatches = 0
     aa_excluded = 0
     nontransparent = 0
     heat = []
     max_delta = 0
+    expected_mask = expected_widget_mask(layout, rw, rh)
     for i in range(len(ref)):
         rp = ref[i]
         ap = act[i]
@@ -358,6 +377,8 @@ def main() -> int:
                 heat.append((255, 220, 0, 120))  # amber = antialiasing (ignored)
             else:
                 real_mismatches += 1
+                if not expected_mask[i]:
+                    unexpected_mismatches += 1
                 heat.append((255, 0, 0, 200))     # red = real design defect
         else:
             heat.append((0, 0, 0, 0))
@@ -366,7 +387,15 @@ def main() -> int:
     ssim = max(0.0, min(1.0, ssim_windowed(ref, act, rw, rh)))
     ssim_global = max(0.0, min(1.0, ssim_simple(ref, act)))
     bbox_issues, text_issues, asset_issues, shape_issues = component_issues(layout, ref, act, rw, rh)
+    unexpected_issues = (
+        [{"issue": "real visual difference outside expected widget coverage",
+          "pixelCount": unexpected_mismatches,
+          "threshold": args.unexpected_pixels}]
+        if unexpected_mismatches >= args.unexpected_pixels
+        else []
+    )
     top_p0 = [
+        *("unexpected:outside_expected_widgets" for _ in unexpected_issues),
         *(f"bbox:{i['node']}" for i in bbox_issues[:5]),
         *(f"asset:{i['node']}" for i in asset_issues[:5]),
         *(f"text:{i['node']}" for i in text_issues[:5]),
@@ -386,6 +415,7 @@ def main() -> int:
         "textIssues": text_issues,
         "assetIssues": asset_issues,
         "shapeIssues": shape_issues,
+        "unexpectedIssues": unexpected_issues,
         "topP0": top_p0,
         "layoutComponents": list(layout.keys()) if isinstance(layout, dict) else [],
         "thresholds": {"ssim": args.ssim_threshold, "pixelMismatch": args.pixel_threshold},

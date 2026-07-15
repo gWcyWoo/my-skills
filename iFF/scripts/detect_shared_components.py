@@ -67,6 +67,16 @@ def canonical_subtree(root_id: str, by_id: dict[str, dict]) -> list[dict]:
                 "has_asset": bool(node.get("asset")),
                 "is_text": bool(node.get("text")),
                 "exportable": bool(node.get("exportable")),
+                "text": node.get("text"),
+                "solidFills": node.get("solidFills"),
+                "gradientFills": node.get("gradientFills"),
+                "border": node.get("border"),
+                "radius": node.get("radius"),
+                "shadow": node.get("shadow"),
+                "opacity": node.get("opacity"),
+                "asset": node.get("asset"),
+                "componentProperties": node.get("componentProperties"),
+                "variantProperties": node.get("variantProperties"),
             }
         )
         children = [by_id[c] for c in (node.get("children") or []) if c in by_id]
@@ -89,6 +99,54 @@ def signature_of(root_id: str, by_id: dict[str, dict]) -> tuple[str, list[dict]]
         sort_keys=True,
     )
     return "struct:" + hashlib.sha256(payload.encode("utf-8")).hexdigest(), records
+
+
+def loose_signature_of(records: list[dict]) -> str:
+    """Candidate-only skeleton that ignores optional leaf multiplicity and geometry."""
+    payload = sorted(
+        {
+            (int(record.get("depth") or 0), str(record.get("type") or ""), bool(record.get("is_text")))
+            for record in records
+        }
+    )
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    return "loose:" + hashlib.sha256(encoded).hexdigest()
+
+
+def variation_matrix(rows: list[dict]) -> list[dict]:
+    fields = (
+        "text",
+        "solidFills",
+        "gradientFills",
+        "border",
+        "radius",
+        "shadow",
+        "opacity",
+        "asset",
+        "componentProperties",
+        "variantProperties",
+    )
+    variations: list[dict] = []
+    record_count = min(len(row["records"]) for row in rows)
+    for index in range(record_count):
+        changed: dict[str, list[object]] = {}
+        for field in fields:
+            values_by_json = {
+                json.dumps(row["records"][index].get(field), ensure_ascii=False, sort_keys=True):
+                row["records"][index].get(field)
+                for row in rows
+            }
+            if len(values_by_json) > 1:
+                changed[field] = [values_by_json[key] for key in sorted(values_by_json)]
+        if changed:
+            variations.append(
+                {
+                    "index": index,
+                    "type": rows[0]["records"][index]["type"],
+                    "fields": changed,
+                }
+            )
+    return variations
 
 
 def load_registry(path: Path) -> dict:
@@ -118,6 +176,13 @@ def main() -> int:
     registry_path = Path(args.registry).expanduser()
     registry = load_registry(registry_path)
     registered = registry["components"]
+    registered_aliases: dict[str, dict] = {}
+    for registered_entry in registered.values():
+        for alias in registered_entry.get("source_aliases") or []:
+            existing_alias = registered_aliases.get(alias)
+            if existing_alias and existing_alias.get("family_id") != registered_entry.get("family_id"):
+                raise SystemExit(f"ERROR: source alias belongs to multiple component families: {alias}")
+            registered_aliases[alias] = registered_entry
 
     # occurrences[signature] -> list of {spec_dir, group..., records}
     occurrences: dict[str, list[dict]] = {}
@@ -161,7 +226,7 @@ def main() -> int:
     for signature, rows in sorted(occurrences.items()):
         row_dirs = {row["spec_dir"] for row in rows}
         kind = kind_by_signature[signature]
-        is_candidate = kind in kinds or len(row_dirs) >= 2 or signature in registered
+        is_candidate = kind in kinds or len(row_dirs) >= 2 or signature in registered or signature in registered_aliases
         if not is_candidate:
             continue
 
@@ -183,13 +248,35 @@ def main() -> int:
                     "node": source["records"][index]["node"],
                 }
         best = max(rows, key=lambda row: row["asset_nodes"])
-        entry = registered.get(signature)
+        entry = registered.get(signature) or registered_aliases.get(signature)
+        status = "reuse" if entry else ("candidate" if signature.startswith("struct:") else "missing")
+        model_decision = None
+        if status == "candidate":
+            model_decision = {"required": True, "reason": "structural_match_only"}
         # canonical order gives a positional bijection page-node <-> source-node,
         # so consuming pages can verify the mounted shared widget (whose canvas
         # keys are SOURCE node ids) against their OWN scene geometry.
         node_maps: dict[str, dict[str, str]] = {}
         source_nodes = (entry or {}).get("canonical_nodes") or []
-        if source_nodes:
+        node_role_nodes = (entry or {}).get("node_role_nodes") or {}
+        alias_role_indices = ((entry or {}).get("alias_role_indices") or {}).get(signature)
+        if alias_role_indices:
+            for row in rows:
+                mapped: dict[str, str] = {}
+                for role, index in alias_role_indices.items():
+                    source_node = node_role_nodes.get(role)
+                    if source_node is None:
+                        raise SystemExit(
+                            f"ERROR: role {role} has no canonical node for {signature}"
+                        )
+                    if not isinstance(index, int) or not 0 <= index < len(row["records"]):
+                        raise SystemExit(
+                            f"ERROR: role {role} has invalid canonical index {index} "
+                            f"for {signature} in {row['spec_dir']}"
+                        )
+                    mapped[row["records"][index]["node"]] = source_node
+                node_maps[row["spec_dir"]] = mapped
+        elif source_nodes:
             for row in rows:
                 row_nodes = [r["node"] for r in row["records"]]
                 if len(row_nodes) != len(source_nodes):
@@ -201,7 +288,10 @@ def main() -> int:
             {
                 "signature": signature,
                 "kind": kind,
-                "status": "reuse" if entry else "missing",
+                "status": status,
+                "model_decision": model_decision,
+                "loose_signature": loose_signature_of(rows[0]["records"]),
+                "variations": variation_matrix(rows),
                 "widget": entry,
                 "rows": [
                     {
@@ -217,6 +307,16 @@ def main() -> int:
                 "assets_incomplete": bool(missing_positions),
                 "assets_missing_positions": missing_positions,
             }
+        )
+
+    by_loose: dict[str, list[str]] = {}
+    for component in components:
+        by_loose.setdefault(component["loose_signature"], []).append(component["signature"])
+    for component in components:
+        component["related_signatures"] = sorted(
+            signature
+            for signature in by_loose[component["loose_signature"]]
+            if signature != component["signature"]
         )
 
     resolution = {
@@ -236,6 +336,7 @@ def main() -> int:
                         "signature": comp["signature"],
                         "kind": comp["kind"],
                         "status": comp["status"],
+                        "model_decision": comp.get("model_decision"),
                         "name": (comp["widget"] or {}).get("name"),
                         "widget_path": (comp["widget"] or {}).get("widget_path"),
                         "group_node": row["group_node"],
@@ -252,8 +353,12 @@ def main() -> int:
 
     reuse = sum(1 for c in components if c["status"] == "reuse")
     missing = sum(1 for c in components if c["status"] == "missing")
+    candidates = sum(1 for c in components if c["status"] == "candidate")
     incomplete = [c["signature"] for c in components if c["assets_incomplete"]]
-    print(f"ok shared components: {len(components)} candidates, {reuse} reuse, {missing} missing")
+    print(
+        f"ok shared components: {len(components)} total, {reuse} reuse, "
+        f"{missing} missing, {candidates} semantic candidate(s)"
+    )
     if incomplete:
         print("WARNING assets_incomplete (no row has a slice export for some icon positions): "
               + ", ".join(incomplete))

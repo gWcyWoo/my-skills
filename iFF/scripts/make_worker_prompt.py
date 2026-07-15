@@ -8,6 +8,9 @@ import hashlib
 import json
 from pathlib import Path
 
+from model_context_contract import expected_workers, persist_model_input, render_contract
+from verify_pipeline_scripts import build_report as build_preflight_report
+
 
 def digest(path: Path) -> str:
     h = hashlib.sha256()
@@ -22,81 +25,185 @@ def load_row(path: str | None) -> dict:
         return json.load(f)
 
 
+def write_prompt(prompt: str, out_value: str, max_bytes: int) -> None:
+    encoded = prompt.encode("utf-8")
+    if len(encoded) > max_bytes:
+        raise SystemExit(
+            f"ERROR: worker prompt exceeds {max_bytes} bytes: {len(encoded)}"
+        )
+    out = Path(out_value)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(encoded)
+    print(str(out))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--skill-dir", default=str(Path(__file__).resolve().parents[1]))
     parser.add_argument("--row-json", help="One claimed CSV/Excel row serialized as JSON.")
     parser.add_argument("--spec-dir", required=True,
                         help="board mode: the ONE board dir; fetch/assembly mode: the feature spec root")
-    parser.add_argument("--mode", choices=["assembly", "board", "fetch"], default="assembly",
-                        help="board-level fan-out roles: fetch = run pipeline steps 0-3 scripts per board; "
-                             "board = compile ONE board's visual unit (canvas/expected/slots/trace-test); "
-                             "assembly = per-feature integration, interactions, TDD, device window, audits")
+    parser.add_argument("--mode", choices=["assembly", "board"], required=True)
     parser.add_argument("--project-root", default=".")
+    parser.add_argument("--feature-manifest", required=True)
+    parser.add_argument("--preflight-report", required=True)
+    parser.add_argument("--max-bytes", type=int, default=8192)
     parser.add_argument("--out", required=True)
     args = parser.parse_args()
 
     skill_dir = Path(args.skill_dir).expanduser().resolve()
     skill_md = skill_dir / "SKILL.md"
     test_rules = skill_dir / "test_rules.md"
+    implementation_rules = skill_dir / "implementation_rules.md"
     scripts_dir = skill_dir / "scripts"
-    required = [skill_md, test_rules, scripts_dir / "verify_pipeline_scripts.py"]
+    required = [
+        skill_md,
+        test_rules,
+        implementation_rules,
+        scripts_dir / "verify_pipeline_scripts.py",
+    ]
     missing = [str(path) for path in required if not path.is_file()]
     if missing:
         raise SystemExit("ERROR: worker prompt inputs missing:\n" + "\n".join(missing))
 
+    feature_manifest_path = Path(args.feature_manifest).expanduser().resolve()
+    preflight_path = Path(args.preflight_report).expanduser().resolve()
+    feature_manifest = json.loads(feature_manifest_path.read_text(encoding="utf-8"))
+    stored_preflight = json.loads(preflight_path.read_text(encoding="utf-8"))
+    current_preflight = build_preflight_report(skill_dir)
+    if stored_preflight != current_preflight or not stored_preflight.get("ok"):
+        raise SystemExit("ERROR: preflight report is stale or failed")
+
+    spec = Path(args.spec_dir).expanduser().resolve()
+    feature_root = spec if args.mode == "assembly" else spec.parent
+    workers = expected_workers(feature_manifest)
+    if args.mode == "assembly":
+        worker = next(item for item in workers if item["role"] == "assembly")
+    else:
+        matches = [
+            item
+            for item in workers
+            if item["role"] == "board" and item["board"] == spec.name
+        ]
+        if len(matches) != 1:
+            raise SystemExit(
+                f"ERROR: board spec is not uniquely owned by feature manifest: {spec.name}"
+            )
+        worker = matches[0]
+    workers_dir = feature_root / ".iff" / "workers"
+    contract_input_path = workers_dir / f"{worker['id']}.contract.json"
+    receipt_path = workers_dir / f"{worker['id']}.receipt.json"
+    result_path = workers_dir / f"{worker['id']}.result.json"
+
     row = load_row(args.row_json)
+    row_path = Path(args.row_json).resolve() if args.row_json else None
+    row_reference = (
+        f"Row input (script-consumed; do not read in board mode): "
+        f"{row_path} sha256={digest(row_path)}"
+        if row_path is not None
+        else "Row input: none"
+    )
 
     shared_section = ""
     shared_local = Path(args.spec_dir) / "shared_components.local.json"
     # assembly mode gets the feature spec ROOT: aggregate every board's local file.
-    components_all = []
-    for local_file in ([shared_local] if shared_local.is_file()
-                       else sorted(Path(args.spec_dir).glob("*/shared_components.local.json"))):
+    shared_files = (
+        [shared_local]
+        if shared_local.is_file()
+        else sorted(Path(args.spec_dir).glob("*/shared_components.local.json"))
+    )
+    shared_references = []
+    for local_file in shared_files:
         shared = json.loads(local_file.read_text(encoding="utf-8"))
-        components_all.extend(shared.get("components") or [])
-    if True:
-        components = components_all
-        if components:
-            shared_section = f"""
-Shared components (pre-resolved by the main session — READ-ONLY reuse):
-{json.dumps(components, ensure_ascii=False, indent=2)}
-- Run make_render_plan.py with --shared {shared_local}; the listed group subtrees become covered_by_shared_component and must NOT be re-drawn on the canvas.
-- Mount each status=reuse widget (widget_path/name above) at its group bbox as the visible layer for that region.
-- NEVER create, edit, or fork shared component files during fan-out. If a shared-region visual issue shows up in diff, report it for serial fan-in; do not spend the single repair budget on it.
-- A status=missing entry here means the main session failed to resolve it before spawn: stop and return a failure summary instead of re-implementing it locally.
+        components = shared.get("components") or []
+        statuses: dict[str, int] = {}
+        for component in components:
+            status = str(component.get("status") or "unknown")
+            statuses[status] = statuses.get(status, 0) + 1
+        shared_references.append(
+            {
+                "path": str(local_file.resolve()),
+                "sha256": digest(local_file),
+                "componentCount": len(components),
+                "statusCounts": dict(sorted(statuses.items())),
+            }
+        )
+    if shared_references:
+        shared_section = f"""
+Shared component registries (script-consumed; do not read or embed full entries):
+{json.dumps(shared_references, ensure_ascii=False, separators=(',', ':'))}
+- Pass --shared {shared_local} to make_render_plan.py; do not redraw covered subtrees.
+- Scripts resolve full entries. Never edit shared components during fan-out; report shared diffs for serial fan-in. Stop on status=missing.
 """
 
     hashes = {
         "skill_md_sha256": digest(skill_md),
         "test_rules_sha256": digest(test_rules),
+        "implementation_rules_sha256": digest(implementation_rules),
         "verify_pipeline_scripts_sha256": digest(scripts_dir / "verify_pipeline_scripts.py"),
     }
-    spec = Path(args.spec_dir).resolve()
-    bootstrap = f"""Your FIRST action MUST be this Bash command (run it NOW), then continue top-to-bottom:
-1. Run: python3 {scripts_dir / "verify_pipeline_scripts.py"} --skill-dir {skill_dir}
-2. Read {skill_md} completely, then {test_rules}.
-3. Write {spec / "worker_compliance.json"} with loaded_files, skill_md_sha256: {hashes["skill_md_sha256"]}, test_rules_sha256: {hashes["test_rules_sha256"]}, verify_pipeline_scripts_sha256: {hashes["verify_pipeline_scripts_sha256"]}, pipeline_scripts_ok: true, worker_bootstrap_version: IFF_WORKER_BOOTSTRAP v1."""
+    bootstrap = f"""This is a bounded role contract; rule SHA values are provenance, not a claim that every rule is copied here.
+Preflight is current and bound by SHA: {preflight_path} sha256={digest(preflight_path)}.
+Use only scripts under {scripts_dir}. Fail visibly; never waive a failed command."""
 
-    if args.mode == "fetch":
-        prompt = f"""IFF_FETCH_WORKER v1
-You fetch + compile design boards for ONE sheet row. EXECUTE by RUNNING TOOLS; no prose, no questions.
-{bootstrap}
-For EACH board in Row JSON (split design_url on ASCII/full-width semicolons and newlines; one URL = one board),
-into {spec}/<board-title>/ run pipeline steps 1->0->2->3 EXACTLY as SKILL.md commands:
-fetch.py + write.py + download_cover.py -> classify_design.py -> export_figma_scene.py + check_figma_scene.py + export_tokens.py + export_assets_manifest.py -> group_figma_layout.py.
-Rules: scripts from {scripts_dir} ONLY; zero model judgment beyond error reporting; NEVER read artifact file contents; one board failing must not stop the others (record its error, continue); do not run step 4+ (render_plan waits for shared-component detection).
-Return a JSON summary: [{{"board": ..., "ok": true|false, "error": ...}}] per board.
-
-Row JSON:
-{json.dumps(row, ensure_ascii=False, indent=2)}
-
-Project root: {Path(args.project_root).resolve()}
-Feature spec root: {spec}
+    def finalize(body: str) -> int:
+        completion = f"""
+COMPLETION
+Write {result_path} as JSON with an outputs array containing every file produced by this worker.
+Run: python3 {scripts_dir / 'complete_worker.py'} --skill-dir {skill_dir} --feature-manifest {feature_manifest_path} --contract-input {contract_input_path} --result {result_path} --out {receipt_path}
+Return only after that command succeeds.
 """
+        generation = {
+            "mode": args.mode,
+            "skillDir": str(skill_dir),
+            "rowJson": str(row_path) if row_path else None,
+            "specDir": str(spec),
+            "projectRoot": str(Path(args.project_root).expanduser().resolve()),
+            "featureManifest": str(feature_manifest_path),
+            "preflightReport": str(preflight_path),
+            "promptPath": str(Path(args.out).expanduser().resolve()),
+        }
+        contract_input = {
+            "version": "IFF_WORKER_CONTRACT v3",
+            "worker": worker,
+            "paths": {
+                "featureRoot": str(feature_root),
+                "contractInput": str(contract_input_path),
+                "receipt": str(receipt_path),
+                "result": str(result_path),
+            },
+            "generation": generation,
+            "fingerprints": {
+                **hashes,
+                "row_json_sha256": digest(row_path) if row_path else None,
+                "feature_manifest_sha256": digest(feature_manifest_path),
+                "preflight_report_sha256": digest(preflight_path),
+                "renderer_sha256": digest(Path(__file__).resolve()),
+                "contract_library_sha256": digest(
+                    scripts_dir / "model_context_contract.py"
+                ),
+            },
+            "body": body + completion,
+        }
+        prompt = render_contract(contract_input)
+        if len(prompt) > args.max_bytes:
+            raise SystemExit(
+                f"ERROR: worker prompt exceeds {args.max_bytes} bytes: {len(prompt)}"
+            )
+        contract_input_path.parent.mkdir(parents=True, exist_ok=True)
+        contract_input_path.write_text(
+            json.dumps(contract_input, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
         out = Path(args.out)
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(prompt, encoding="utf-8")
+        out.write_bytes(prompt)
+        persist_model_input(
+            prompt,
+            kind="worker_prompt",
+            owner=worker["id"],
+            ledger=feature_root / ".iff" / "model_context.jsonl",
+        )
         print(str(out))
         return 0
 
@@ -106,85 +213,76 @@ Feature spec root: {spec}
 You compile ONE design board's visual unit for feature <feature> (derive from the spec path). EXECUTE by RUNNING TOOLS; no prose, no questions. Sibling board workers run in parallel — touch ONLY this board's files.
 {bootstrap}
 Steps for THIS board ({spec}):
-1. python3 {scripts_dir / "summarize_spec_artifacts.py"} --spec-dir {spec} ; read ONLY artifact_digest.json (reading discipline: big JSONs are script-consumed; window by node id when a single node is needed).
+1. python3 {scripts_dir / "summarize_spec_artifacts.py"} --spec-dir {spec}; then python3 {scripts_dir / "make_visual_model_packet.py"} --spec-dir {spec} --out {spec / "visual_model_packet.json"}; read ONLY visual_model_packet.json (big JSONs are script-consumed; window by node id only when the packet names one).
 2. Step 4 commands: make_figma_layout_contract.py, then make_render_plan.py WITH --shared {shared_local} (must exist; a status=missing entry there means the main session failed to resolve shared components — STOP and return failure), then check_design_artifacts.py.
-3. Step 6.7 commands: make_component_manifest.py then generate_canvas.py -> lib/<feature>/presentation/<state>_canvas.dart (+ .expected.json/.slots.json). copy_assets.py for this board's assets (FILES only — pubspec/fonts registration belongs to assembly).
+3. Step 6.7 commands: make_component_manifest.py then generate_canvas.py -> lib/<feature>/presentation/<state>_canvas.dart (+ .expected.json/.slots.json). copy_assets.py for this board's assets (FILES only — project-wide registration belongs to main fan-in).
 4. python3 {scripts_dir / "merge_shared_expected.py"} --expected <canvas>.dart.expected.json --local {shared_local} --scene {spec / "scene.json"} --out {spec / "merged_expected.json"}
-5. Write {spec / "implementation_map.json"} mapping this board's required render_plan nodes (renderMode absolute_positioned), then run check_implementation_map.py.
+5. Run make_implementation_map.py from render_plan.json + the generated canvas expected JSON, write {spec / "implementation_map.json"}, then run check_implementation_map.py.
 Allowed writes: lib/<feature>/presentation/<state>_canvas.dart{{,.expected.json,.slots.json}}, assets file copies, everything under {spec}. FORBIDDEN: page/selector/colors/fixture/slot-mapper or any feature-shared dart, routes/DI/pubspec/l10n, trace tests, ANY `flutter test`/`flutter run` (the assembly worker owns all test invocations), any other board's files.
 Return: {{"board": ..., "canvas": ..., "expected": ..., "slots": ..., "mergedExpected": ..., "assets": [...], "ok": true|false}}.
 
-Row JSON:
-{json.dumps(row, ensure_ascii=False, indent=2)}
+{row_reference}
+{shared_section}
 
 Project root: {Path(args.project_root).resolve()}
 Spec dir: {spec}
 """
-        out = Path(args.out)
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(prompt, encoding="utf-8")
-        print(str(out))
-        return 0
+        return finalize(prompt)
 
-    prompt = f"""IFF_WORKER_BOOTSTRAP v1
-You are one iFF worker for exactly one claimed row. EXECUTE this pipeline by RUNNING TOOLS
-(Bash / Read / Edit / Write / MCP). Do NOT reply with prose, do NOT ask the user questions, do
-NOT merely describe a plan — actually run each step. Your ONLY stopping point is printing the
-final result summary after the done-audit gates (or a concrete failure summary if blocked).
-Do not rely on automatic skill loading. You are not alone in this codebase: do not revert edits
-made by others, and adjust your implementation to accommodate current files.
+    assembly_facts = (
+        {"title": row["title"]} if row.get("title") is not None else {}
+    )
+    row_sources = []
+    if row_path is not None:
+        for key, filename in (
+            ("ui_notes", "row_ui_notes.txt"),
+            ("interaction", "row_interaction.txt"),
+            ("api", "row_api.txt"),
+        ):
+            source_path = spec / filename
+            source_path.parent.mkdir(parents=True, exist_ok=True)
+            source_path.write_text(str(row.get(key) or ""), encoding="utf-8")
+            row_sources.append(
+                {
+                    "kind": key,
+                    "path": str(source_path.resolve()),
+                    "sha256": digest(source_path),
+                }
+            )
 
-Your FIRST action MUST be this Bash command (run it NOW), then continue top-to-bottom:
-1. Run: python3 {scripts_dir / "verify_pipeline_scripts.py"} --skill-dir {skill_dir}
-2. Read {skill_md} completely (the fixed pipeline you must follow, steps 0–12).
-3. Read {test_rules} completely.
-4. Write {Path(args.spec_dir) / "worker_compliance.json"} with:
-   - loaded_files: [{str(skill_md)!r}, {str(test_rules)!r}]
-   - skill_md_sha256: {hashes["skill_md_sha256"]}
-   - test_rules_sha256: {hashes["test_rules_sha256"]}
-   - verify_pipeline_scripts_sha256: {hashes["verify_pipeline_scripts_sha256"]}
-   - pipeline_scripts_ok: true
-   - worker_bootstrap_version: IFF_WORKER_BOOTSTRAP v1
+    prompt = f"""IFF_ASSEMBLY_WORKER v2
+Execute tools and edits; no prose/questions. Stop only after all gates or a concrete failure. Preserve concurrent edits.
+{bootstrap}
+Paths: project={Path(args.project_root).resolve()} spec={Path(args.spec_dir).resolve()} scripts={scripts_dir}
 
-Hard gates:
-- Follow the fixed iFF pipeline from SKILL.md; do not skip or merge steps.
-- ASSEMBLY role (board-level fan-out): board workers already produced each state's canvas/expected/slots/merged_expected/implementation_map — CONSUME them, never regenerate or edit board canvases. You own: selector/page/colors/one shared fixture/slot mapper, interaction contract + state machine + anchors, prefill plan + modelFields, TDD (ONE red run, ONE green run), data integration, the device window (9-11, device_lock held), audits (12) with trace tests for every state generated by you and executed inside the ONE audit-time `flutter test`, and pubspec/fonts/asset registration for this feature's collected assets.
-- Before writing done evidence, run: python3 {scripts_dir / "check_done_gate.py"} --spec-root {Path(args.spec_dir).resolve()} — its failures are yours to fix, not to explain away.
-- Use only scripts under {scripts_dir} for deterministic artifacts.
-- Treat raw.json as Lanhu-wrapped Figma JSON. The primary design compiler is export_figma_scene.py -> check_figma_scene.py -> group_figma_layout.py -> make_figma_layout_contract.py. Do not use generic JSON walking or bbox/name guessing as the main source of truth for complex designs.
-- Compile interaction into contract/test plan and prove coverage with red/green evidence.
-- Implement UI from scene/tokens/assets/layout/render/interaction contracts, not from visual guesswork.
-- Never use the full design reference as a widget background or visible layer.
-- The device window (install/launch/screenshot through the post-repair re-capture) is mutex-guarded: run device_lock.py acquire before the first device use and device_lock.py release on EVERY exit path (success, failure, error). Everything else runs in parallel with sibling workers.
-- After runtime screenshot diff, generate repair_plan.json and apply it at most once. Re-capture and re-diff once after that repair. If the page still misses visual thresholds, return a failure summary instead of iterating; the main session will mark the row error and move to the next requirement.
-- Before implementation planning, run: python3 {scripts_dir / "check_design_artifacts.py"} --spec-dir {Path(args.spec_dir).resolve()}
-- Before writing tests or production code: run python3 {scripts_dir / "summarize_spec_artifacts.py"} --spec-dir {Path(args.spec_dir).resolve()} then python3 {scripts_dir / "prefill_implementation_plan.py"} --spec-dir {Path(args.spec_dir).resolve()}, fill ONLY the __MODEL__ placeholders listed in modelFields (never restate or edit machine-prefilled counts), then run: python3 {scripts_dir / "check_implementation_plan.py"} --plan {Path(args.spec_dir) / "implementation_plan.json"} --spec-dir {Path(args.spec_dir).resolve()}
-- Return paths for spec_dir, worker_compliance.json, implementation_plan.json, interaction_test_evidence.json, visual_manifest.json, actual.png, diff_report.json, and any required dependency/route/DI/asset registrations.
+ROLE/OWNERSHIP
+- Consume board canvas/expected/slots/merged_expected/implementation_map; never edit canvases.
+- Own feature selector/page/colors, fixture, slot mapper, interaction/data integration and tests.
+- FORBIDDEN: pubspec, routes/DI, project asset/font registration, target-client run and final gates. Write bounded fan_in_request.json and state_changes.json for main.
+- Use only {scripts_dir}; report missing paths/schema conflicts instead of guessing.
 
-Planning gate:
-- Read the current project entrypoint and existing architecture just enough to choose project-local names and ownership boundaries.
-- Reading discipline (token budget is part of correctness): run summarize_spec_artifacts.py first and read spec_dir/artifact_digest.json — it carries every artifact's schema keys, counts, case ids, endpoints and shared components. NEVER read scene.json, render_plan.json, layout_contract.json, repair_plan.json, diff_report.json, oas.json, raw.json or spec.md in full — they are script-consumed (the visible layer is generated by generate_canvas.py, not hand-drawn from node data). When one specific node's data is needed, window into the file by node id (grep -A/-B or a python one-liner), never a whole-file read. Small files (tokens.json, groups.json, design_classification.json, api_contract.json, component_manifest.json, data_slot_bindings.json, interaction_test_plan.json) may be read whole.
-- implementation_plan.json is machine-prefilled (inventory, counts, node coverage, commands, forbidden shortcuts). Your judgment fields: projectAlignment (entrypoint/app shell/feature dirs/fanoutOwnedFiles/faninRequests from READING the current project), fixtureAlignment.fixtureSource + stateData (one shared fixture source; state count is prefilled from the classification and must not shrink), and each region's mergeOrSkipRationale.
-- For variant_board designs, plan every state group as runtime data, widget test data, and preview data from one fixture source. A plan with fewer runtime states than the design states is invalid.
-- implementation_map.json must map visible render_plan nodes, not just layout regions. Before returning success, run: python3 {scripts_dir / "check_implementation_map.py"} --render-plan {Path(args.spec_dir) / "render_plan.json"} --implementation-map {Path(args.spec_dir) / "implementation_map.json"}
-- Each visible-node entry in implementation_map.json must include node, implementation, widget, bbox, and renderMode:"absolute_positioned" (or positioning/layoutMode with the same explicit coordinate meaning). Component ownership without a render-plan bbox mode is invalid.
-- Treat render_plan implementation values literally: image/image_png/image_webp/svg/asset nodes are atomic; do not also draw their descendants. image_fill must render the Figma image fill instead of a placeholder. gradient_shape must preserve gradient stops. vector_shape and shape_container must use Figma bbox/fill/border/radius/shadow/effects. clip_group and mask_group must preserve clipping/mask semantics. covered_by_asset, covered_by_text and covered_by_shared_component nodes are not visible widgets. text nodes must render the exact text string from scene/render data, not black boxes. oval_shape nodes must render as ovals, not rectangular bbox fills.
-- For screenshot fidelity, the visible layer must be an absolute render-plan canvas: scale the artboard to runtime viewport units, place every visible node at its render_plan bbox with Positioned/CustomPaint/Image/Text equivalents, and preserve design x/y/width/height. Do not rebuild visible card/support/tab regions with Row/Column/Flex spacing or semantic component templates. Semantic widgets are allowed only as transparent hit areas or behavior adapters over the coordinate-rendered pixels.
-- If the row asks for paths that do not exist in the current project, do not pretend they exist. Plan the smallest project-consistent scaffold and list shared-file edits for serial fan-in.
-- If an artifact schema differs from SKILL.md wording, follow the actual artifact schema and record the mismatch in implementation_plan.json instead of guessing fields.
+BOUNDED MODEL INPUT
+- Run summarize_spec_artifacts.py; large inputs stay script-side. Read only each packet's one action and selected node window.
+- Visual: make_visual_model_packet.py.
+- Interaction judgment: make_interaction_model_packet.py --spec-root {Path(args.spec_dir).resolve()} --project-root {Path(args.project_root).resolve()} --out {Path(args.spec_dir).resolve() / "interaction_model_packet.json"}; read ONLY interaction_model_packet.json, resolve its one action, regenerate.
+- Data: merge_feature_data.py for multi-state, then make_data_model_packet.py --spec-root {Path(args.spec_dir).resolve()} --out {Path(args.spec_dir).resolve() / "data_model_packet.json"}; resolve one action. Keep nodes state-qualified; fail stale/conflicting inputs.
 
+QUALITY PIPELINE
+1. check_design_artifacts.py defines geometry; never guess or use a reference background.
+2. prefill_implementation_plan.py; resolve declared __MODEL__ fields only, then check_implementation_plan.py.
+3. Compile/check every interaction rule, slot, repository, binding and state.
+4. Strict TDD: run_feature_tests.py once RED and once GREEN; each shared run writes interaction/data evidence with current hashes.
+5. Diff, apply at most one repair, re-capture/re-diff once; fail if thresholds miss.
+6. One audit run covers all state traces and implementation_map node/widget/bbox/absolute-mode. Keep render nodes atomic and semantic adapters transparent.
+7. Main serially applies fan_in_request.json, runs target client and final gates.
+
+Return a bounded summary of plan, RED/GREEN, data and visual evidence plus fan-in requests.
+{row_reference}
+Assembly facts: {json.dumps(assembly_facts, ensure_ascii=False, separators=(',', ':'))}
+Script-only row sources (never read whole in model context): {json.dumps(row_sources, ensure_ascii=False, separators=(',', ':'))}
 {shared_section}
-Row JSON:
-{json.dumps(row, ensure_ascii=False, indent=2)}
-
-Project root: {Path(args.project_root).resolve()}
-Spec dir: {Path(args.spec_dir).resolve()}
 """
-    out = Path(args.out)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(prompt, encoding="utf-8")
-    print(str(out))
-    return 0
+    return finalize(prompt)
 
 
 if __name__ == "__main__":

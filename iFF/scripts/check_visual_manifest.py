@@ -24,8 +24,22 @@ def main() -> int:
     args = parser.parse_args()
 
     data = load_json(args.manifest)
-    required = ["actual_source", "device_id", "capture_command", "timestamp"]
+    required = [
+        "actual_source",
+        "device_id",
+        "capture_command",
+        "timestamp",
+        "project_root",
+    ]
     missing = [key for key in required if not data.get(key)]
+    if not isinstance(data.get("app_hashes"), dict):
+        missing.append("app_hashes")
+    if not isinstance(data.get("runtime_input_hashes"), dict):
+        missing.append("runtime_input_hashes")
+    if not isinstance(data.get("launch_command"), list) or not data.get("launch_command"):
+        missing.append("launch_command")
+    if not isinstance(data.get("viewport"), dict) or not data.get("viewport"):
+        missing.append("viewport")
     if missing:
         raise SystemExit("ERROR: visual manifest missing fields: " + ", ".join(missing))
     if data.get("actual_source") != "simulator_screenshot":

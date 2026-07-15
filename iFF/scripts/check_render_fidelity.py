@@ -72,6 +72,7 @@ def main() -> int:
     ap.add_argument("--bbox-tol", type=float, default=2.0)
     ap.add_argument("--color-tol", type=float, default=3.0)
     ap.add_argument("--size-tol", type=float, default=1.0)
+    ap.add_argument("--typography-tol", type=float, default=0.01)
     ap.add_argument("--out")
     a = ap.parse_args()
 
@@ -111,31 +112,89 @@ def main() -> int:
                 failures.append({"node": nid, "category": "text", "impl": exp.get("impl"),
                                  "expected": norm_text(exp.get("text")),
                                  "observed": norm_text(act.get("text"))})
-            if exp.get("fontSize") is not None and act.get("fontSize") is not None:
-                d = abs(float(act["fontSize"]) - float(exp["fontSize"]))
-                if d > a.size_tol:
+            if exp.get("fontSize") is not None:
+                if act.get("fontSize") is None:
                     failures.append({"node": nid, "category": "fontSize", "impl": exp.get("impl"),
-                                     "expected": exp["fontSize"], "observed": act["fontSize"],
-                                     "delta": round(d, 2), "tol": a.size_tol})
+                                     "expected": exp["fontSize"], "observed": None})
+                else:
+                    d = abs(float(act["fontSize"]) - float(exp["fontSize"]))
+                    if d > a.size_tol:
+                        failures.append({"node": nid, "category": "fontSize", "impl": exp.get("impl"),
+                                         "expected": exp["fontSize"], "observed": act["fontSize"],
+                                         "delta": round(d, 2), "tol": a.size_tol})
+            for expected_key, actual_key in (
+                ("fontFamily", "fontFamily"),
+                ("fontStyle", "fontStyle"),
+                ("weight", "fontWeight"),
+            ):
+                expected_value = exp.get(expected_key)
+                if expected_value is not None and act.get(actual_key) != expected_value:
+                    failures.append(
+                        {
+                            "node": nid,
+                            "category": "fontWeight" if expected_key == "weight" else expected_key,
+                            "impl": exp.get("impl"),
+                            "expected": expected_value,
+                            "observed": act.get(actual_key),
+                        }
+                    )
+            for key in ("letterSpacing", "lineHeight"):
+                expected_value = exp.get(key)
+                actual_value = act.get(key)
+                if expected_value is None:
+                    continue
+                if actual_value is None:
+                    failures.append(
+                        {
+                            "node": nid,
+                            "category": key,
+                            "impl": exp.get("impl"),
+                            "expected": expected_value,
+                            "observed": None,
+                        }
+                    )
+                    continue
+                delta = abs(float(actual_value) - float(expected_value))
+                if delta > a.typography_tol:
+                    failures.append(
+                        {
+                            "node": nid,
+                            "category": key,
+                            "impl": exp.get("impl"),
+                            "expected": expected_value,
+                            "observed": actual_value,
+                            "delta": round(delta, 4),
+                            "tol": a.typography_tol,
+                        }
+                    )
         # color (text color or shape fill)
         erg = hex_rgb(exp.get("colorHex"))
         arg = argb_rgb(act.get("colorArgb"))
-        if erg and arg:
-            d = chan_max_diff(arg, erg)
-            if d > a.color_tol:
+        if erg:
+            if not arg:
                 failures.append({"node": nid, "category": "color", "impl": exp.get("impl"),
-                                 "expected": exp.get("colorHex"), "observed": list(arg),
-                                 "delta": d, "tol": a.color_tol})
-            if token_rgb and not any(chan_max_diff(arg, t) <= a.color_tol for t in token_rgb):
-                failures.append({"node": nid, "category": "token", "impl": exp.get("impl"),
-                                 "observed": list(arg), "detail": "rendered color is not a design token"})
+                                 "expected": exp.get("colorHex"), "observed": None})
+            else:
+                d = chan_max_diff(arg, erg)
+                if d > a.color_tol:
+                    failures.append({"node": nid, "category": "color", "impl": exp.get("impl"),
+                                     "expected": exp.get("colorHex"), "observed": list(arg),
+                                     "delta": d, "tol": a.color_tol})
+                if token_rgb and not any(chan_max_diff(arg, t) <= a.color_tol for t in token_rgb):
+                    failures.append({"node": nid, "category": "token", "impl": exp.get("impl"),
+                                     "observed": list(arg), "detail": "rendered color is not a design token"})
         # radius
-        if exp.get("radius") is not None and act.get("radius") is not None:
-            d = abs(float(act["radius"]) - float(exp["radius"]))
-            if d > a.size_tol:
-                failures.append({"node": nid, "category": "radius", "impl": exp.get("impl"),
-                                 "expected": exp["radius"], "observed": act["radius"],
-                                 "delta": round(d, 2), "tol": a.size_tol})
+        if exp.get("radius") is not None:
+            if act.get("radius") is None:
+                if float(exp["radius"]) != 0:
+                    failures.append({"node": nid, "category": "radius", "impl": exp.get("impl"),
+                                     "expected": exp["radius"], "observed": None})
+            else:
+                d = abs(float(act["radius"]) - float(exp["radius"]))
+                if d > a.size_tol:
+                    failures.append({"node": nid, "category": "radius", "impl": exp.get("impl"),
+                                     "expected": exp["radius"], "observed": act["radius"],
+                                     "delta": round(d, 2), "tol": a.size_tol})
 
     # icon/asset region shape gate: bbox+color cannot see a wrong glyph drawn at the
     # right place in the right dominant color — the pixel diff's per-asset-region
@@ -162,7 +221,12 @@ def main() -> int:
         "checkedNodes": checked,
         "failureCount": len(failures),
         "byCategory": by_cat,
-        "tolerances": {"bbox": a.bbox_tol, "color": a.color_tol, "size": a.size_tol},
+        "tolerances": {
+            "bbox": a.bbox_tol,
+            "color": a.color_tol,
+            "size": a.size_tol,
+            "typography": a.typography_tol,
+        },
         "failures": failures,
     }
     if a.out:

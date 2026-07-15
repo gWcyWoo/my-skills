@@ -31,17 +31,18 @@ A skill file is **non-conforming** if any P0 is missing.
    **Group all P0 lines first, then all P1, then all P2.** Out-of-order priority lines confuse readers — the model scans top-to-bottom and assumes priority decreases monotonically. A P0 buried after P1s gets read as if it were lower priority.
 6. **Positive instructions.** Tell the agent *what to do*, not just *what to avoid*. "Use LSP findReferences for callers" beats "do not Grep for callers" — though both together is fine.
 7. **No implicit success.** If a skill writes code, runs tests, or modifies files, the success path MUST include a verification step (run the tests, read the diagnostic, etc.). "Claim tests passed without running them" is forbidden by global CLAUDE.md and must be re-stated in `<final_reminders>` for any skill that touches tests.
-8. **Tool bans live in agent frontmatter, not in prompt rules.** If a skill must prevent the agent from using a specific tool (e.g. `Bash`, `Read` on source, `Edit`), the enforcement MUST be done by defining a custom subagent at `~/.claude/agents/<name>.md` with a `tools:` allowlist (or `disallowedTools:` denylist) that **physically removes the tool from the agent's inventory**. Prompt-level rules like "P0 — never use Bash" are soft constraints that the model routinely violates under pressure — proven empirically in this project. The pattern: define the agent file → dispatch via `Agent(subagent_type: "<custom-name>", ...)` from the skill. This is the **#1 enforcement mechanism** — reach for it before reaching for more prompt rules.
+8. **`--help` flag.** Any skill that accepts arguments or flags MUST support `--help`: print a usage block listing every argument and flag with a one-line meaning, then STOP with no side effects. Keep the usage block verbatim-printable in `<context>`, and handle `--help` as instruction step 1.
+9. **Tool bans live in agent frontmatter, not in prompt rules.** If a skill must prevent the agent from using a specific tool (e.g. `Bash`, `Read` on source, `Edit`), the enforcement MUST be done by defining a custom subagent at `~/.claude/agents/<name>.md` with a `tools:` allowlist (or `disallowedTools:` denylist) that **physically removes the tool from the agent's inventory**. Prompt-level rules like "P0 — never use Bash" are soft constraints that the model routinely violates under pressure — proven empirically in this project. The pattern: define the agent file → dispatch via `Agent(subagent_type: "<custom-name>", ...)` from the skill. This is the **#1 enforcement mechanism** — reach for it before reaching for more prompt rules.
 
 ---
 
 ## P1 — Strong Recommendations
 
-9. **Evidence before answer.** For research / exploration / review skills, the agent should first surface the relevant snippets (with `file:line`) and *then* draw conclusions. This filters noise and pulls the truly relevant context to the front of working memory.
-10. **Few-shot examples.** Anthropic's guidance: 3–5 high-quality examples is the most reliable steering. For skills with non-obvious classification or output shape, include at least 2 positive examples and 1 anti-pattern example.
-11. **Chaining for complex tasks.** If the skill is non-trivial, structure it as `draft → self-check → refine` (or `explore → plan → execute → verify`). Do not try to do everything in one pass.
-12. **Self-check slot.** For skills that produce artifacts (code, tests, plans, summaries), include a self-check step against the `<success_criteria>` before returning.
-13. **Subagent vs. main session boundary.** Every skill must be explicit about *where* it runs:
+10. **Evidence before answer.** For research / exploration / review skills, the agent should first surface the relevant snippets (with `file:line`) and *then* draw conclusions. This filters noise and pulls the truly relevant context to the front of working memory.
+11. **Few-shot examples.** Anthropic's guidance: 3–5 high-quality examples is the most reliable steering. For skills with non-obvious classification or output shape, include at least 2 positive examples and 1 anti-pattern example.
+12. **Chaining for complex tasks.** If the skill is non-trivial, structure it as `draft → self-check → refine` (or `explore → plan → execute → verify`). Do not try to do everything in one pass.
+13. **Self-check slot.** For skills that produce artifacts (code, tests, plans, summaries), include a self-check step against the `<success_criteria>` before returning.
+14. **Subagent vs. main session boundary.** Every skill must be explicit about *where* it runs:
     - If it dispatches a subagent: name it (`name: "..."`), pass a complete self-contained prompt, and document how follow-ups are handled (`SendMessage` vs new agent).
     - If it runs in the main session: say so in `<role>` and explain why (e.g., needs user-in-the-loop STOP points).
     - Never leave this ambiguous.
@@ -50,11 +51,11 @@ A skill file is **non-conforming** if any P0 is missing.
 
 ## P2 — Stylistic Preferences
 
-14. **Frontmatter description is a trigger, not a tagline.** It should let *future-Claude* decide in one read whether the skill applies. Lead with the trigger condition ("Use when...", "MUST invoke for..."), not marketing prose.
-15. **One concrete action per instruction step.** If a step contains "and" or "or", you **MUST split it** into separate sub-steps with explicit branching (e.g. `Default: ... / Fallback: ...`, or numbered `2a` / `2b`). "Consider splitting" is too soft a rule — the model will rationalize past a soft rule under pressure. Either split, or accept that the step is ambiguous.
-16. **`{{PLACEHOLDER}}` syntax** for substitutions inside embedded prompts. Make placeholders shout so they are not missed.
-17. **Cross-skill references use absolute paths.** `~/.claude/skills/foo/bar.md`, not `../foo/bar.md`.
-18. **Extended thinking hint.** For genuinely complex multi-step skills, a single `think thoroughly before your first action` line in `<instructions>` is usually more effective than over-prescribing the reasoning steps. **Threshold: at most one such hint per skill, and only for skills with 5+ instruction steps and non-obvious reasoning paths.** Do not sprinkle it on simple skills — it dilutes the signal everywhere.
+15. **Frontmatter description is a trigger, not a tagline.** It should let *future-Claude* decide in one read whether the skill applies. Lead with the trigger condition ("Use when...", "MUST invoke for..."), not marketing prose.
+16. **One concrete action per instruction step.** If a step contains "and" or "or", you **MUST split it** into separate sub-steps with explicit branching (e.g. `Default: ... / Fallback: ...`, or numbered `2a` / `2b`). "Consider splitting" is too soft a rule — the model will rationalize past a soft rule under pressure. Either split, or accept that the step is ambiguous.
+17. **`{{PLACEHOLDER}}` syntax** for substitutions inside embedded prompts. Make placeholders shout so they are not missed.
+18. **Cross-skill references use absolute paths.** `~/.claude/skills/foo/bar.md`, not `../foo/bar.md`.
+19. **Extended thinking hint.** For genuinely complex multi-step skills, a single `think thoroughly before your first action` line in `<instructions>` is usually more effective than over-prescribing the reasoning steps. **Threshold: at most one such hint per skill, and only for skills with 5+ instruction steps and non-obvious reasoning paths.** Do not sprinkle it on simple skills — it dilutes the signal everywhere.
 
 ---
 
@@ -125,7 +126,7 @@ P2 — <preference>
 
 - [ ] Frontmatter `description` starts with a trigger phrase.
 - [ ] `<role>` exists, names the execution location (main session vs subagent), AND lists at least one explicit "must NOT do" item (per the expanded rule #2).
-- [ ] `<instructions>` are numbered and atomic (no "and"/"or" branches inside a single step — split per rule #15).
+- [ ] `<instructions>` are numbered and atomic (no "and"/"or" branches inside a single step — split per rule #16).
 - [ ] `<output_format>` slots are concrete (no "summarize the result").
 - [ ] `<success_criteria>` includes a stop rule.
 - [ ] `<final_reminders>` exists with at least one P0 line, **and lines are grouped strictly P0 → P1 → P2** (no P0 buried after P1s).
@@ -133,5 +134,6 @@ P2 — <preference>
 - [ ] Subagent-vs-main-session boundary is explicit.
 - [ ] If the skill writes code, runs tests, or modifies files (per rule #7): a verification step is mandatory in the success path.
 - [ ] All cross-skill / cross-file references use absolute paths.
+- [ ] If the skill accepts arguments or flags (per rule #8): `--help` prints a usage block covering every one, with no side effects.
 
 If any box is unchecked, the skill is non-conforming. Fix before commit.

@@ -2,7 +2,7 @@
 
 > 本文件是 iFF 落地 Flutter 代码的**强制实现规范(MUST)**,所有 worker 写代码前必须加载并遵守。
 > 由 `scripts/sync_project_rules.py` **注入到目标工程的 `CLAUDE.md`**(分隔块内),工程内所有 agent 统一遵守;改规范只改本文件再同步,不在工程副本里直接改。
-> 规则 ID `IMPL-<类>-<n>` 供:worker 按 ID 精确引用、`worker_compliance.json` 核对、`check_static.py` 与结构 QA 映射。
+> 规则 ID `IMPL-<类>-<n>` 供 worker 角色合同精确引用;v3 worker receipt 绑定本文件当前 SHA,`check_static.py` 与结构 QA 映射。
 
 ## 速查索引
 
@@ -131,15 +131,17 @@
 - **IMPL-CMPB-4** 组件 typed props + 业务默认值 + 中文注释(作用/默认值语义/何时覆盖/错配影响)。
 
 ## DATA 数据驱动槽位
-- **IMPL-DATA-1** 动态槽 = 字段 + 变换 + 出现条件;来源 `data_slot_bindings.json`,`needsModelBinding` 每条须模型按交互规则确认(如 INT-010 `level_money`→`max_money` 回退)。
+- **IMPL-DATA-1** 动态槽 = 当前 OAS 的完整字段身份(endpoint/method/status/variant/JSON path/type)+已注册且类型兼容的 transform+出现状态;每槽恰好一次。歧义 binding 或静态化理由须模型通过≤8KB单 action packet确认,模型不得发明字段。
+- **IMPL-DATA-1a 多状态合并**:同 feature 多 board 必须用 `merge_feature_data.py` 产一份 feature-root manifest/bindings;`(state,node)` 是唯一键,同 node 的每个状态分别测试与 Android/iOS 客户端验收。禁止任选一个 board 或后写覆盖先写。
 - **IMPL-DATA-1b 槽位广度(凡接口字段皆动态)**:`make_component_manifest` 的正则只自动标出数字/金额/日期类动态文本;**凡是取值来自 OAS 数据字段的可见文本——包括纯文本(产品名/标题/状态文案/问候语/姓名等)——都必须被确认为 `dynamic_text_slot`**(在 `component_manifest.json` 里 `confirmedByModel=true` 并补绑定),由 `generate_canvas` 走 `slotText` 注入。**只有真正的 UI chrome(按钮文案、分区标题、固定 copy)才保持静态字面量**。把接口数据字段(如卡片产品名、状态)当静态画死=数据未驱动,违反不变量④。
 - **IMPL-DATA-2** 文本值走 DTO,不写字面量;格式化(₦千分位/日期/百分比)在领域层,组件只呈现。
 - **IMPL-DATA-3** 动态槽**先钉死设计宽度**(暂不放宽 flex);变长真数据裁切的取舍验证后再定。
 
 ## API 接口对接
 - **IMPL-API-1** DTO 由 Apifox 真 OAS codegen,字段以 OAS 为准,禁手搓与后端漂移。
-- **IMPL-API-2** Repository 真 HTTP + mock **同源**(同 DTO 形);可注入单例(IMPL-INFRA-3),保留测试注入与 reset。
-- **IMPL-API-3** 每个声明端点必须有 repo 调用点(`check_api_integration`);loading/error/empty/轮询/禁截图按交互规则接。
+- **IMPL-API-2** Repository 真 HTTP + mock **同 interface/DTO/mapper**;设计 fixture 只提供展示 seed,不冒充生产 response;可注入单例(IMPL-INFRA-3),保留测试注入与 reset。
+- **IMPL-API-3** 每个 OAS operation 恰好一个 runtime manifest entry;声明的 real repository 必须有正确 method+path 调用且从 main 可达。loading/success/error 固定必测;数组 response 强制 empty;retry/polling/refresh 按当前业务事实补。
+- **IMPL-API-4** `check_data_feature` 重算 OAS/bindings/runtime/fixture/API/RED-GREEN/目标 Android/iOS 客户端 evidence。无 live contract report 时必须记录 `liveApiVerified=false`,不得宣称测试/生产服务器已验证。
 
 ## WIRE 交互接线
 - **IMPL-WIRE-1** 每条交互规则的领域逻辑必须接到**运行时调用点**(组件事件/页面编排/repository),不能只被测试引用(`check_interaction_wiring`)。

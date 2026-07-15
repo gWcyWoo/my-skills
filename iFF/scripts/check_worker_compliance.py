@@ -1,53 +1,39 @@
 #!/usr/bin/env python3
-"""Validate that an iFF worker loaded the current skill rules."""
+"""Recompute one canonical iFF worker contract and completion receipt."""
 
 from __future__ import annotations
 
 import argparse
-import hashlib
+import json
 from pathlib import Path
 
-from common import load_json
-
-
-def digest(path: Path) -> str:
-    h = hashlib.sha256()
-    h.update(path.read_bytes())
-    return h.hexdigest()
+from complete_worker import build_receipt, load_object
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--skill-dir", default=str(Path(__file__).resolve().parents[1]))
+    parser.add_argument("--feature-manifest", required=True)
     parser.add_argument("--manifest", required=True)
     args = parser.parse_args()
 
-    skill_dir = Path(args.skill_dir).expanduser().resolve()
-    skill_md = skill_dir / "SKILL.md"
-    test_rules = skill_dir / "test_rules.md"
-    verify_script = skill_dir / "scripts" / "verify_pipeline_scripts.py"
-    manifest = load_json(args.manifest)
-
-    errors = []
-    expected = {
-        "skill_md_sha256": digest(skill_md),
-        "test_rules_sha256": digest(test_rules),
-        "verify_pipeline_scripts_sha256": digest(verify_script),
-    }
-    for key, value in expected.items():
-        if manifest.get(key) != value:
-            errors.append(f"{key} mismatch")
-    loaded = set(manifest.get("loaded_files") or [])
-    for path in (str(skill_md), str(test_rules)):
-        if path not in loaded:
-            errors.append(f"missing loaded file proof: {path}")
-    if manifest.get("pipeline_scripts_ok") is not True:
-        errors.append("pipeline_scripts_ok must be true")
-    if manifest.get("worker_bootstrap_version") != "IFF_WORKER_BOOTSTRAP v1":
-        errors.append("worker_bootstrap_version must be IFF_WORKER_BOOTSTRAP v1")
-    if errors:
-        raise SystemExit("ERROR: worker compliance failed:\n" + "\n".join(errors))
-    print("ok worker compliance")
+    receipt_path = Path(args.manifest).expanduser().resolve()
+    try:
+        stored = load_object(receipt_path)
+        if stored.get("workerContractVersion") != "IFF_WORKER_CONTRACT v3":
+            raise ValueError("legacy worker contract is not accepted")
+        expected = build_receipt(
+            Path(args.skill_dir).expanduser().resolve(),
+            Path(args.feature_manifest).expanduser().resolve(),
+            Path(str(stored.get("contractInputPath") or "")).expanduser().resolve(),
+            Path(str(stored.get("resultPath") or "")).expanduser().resolve(),
+            receipt_path,
+        )
+        if stored != expected:
+            raise ValueError("worker receipt differs from current canonical receipt")
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        raise SystemExit(f"ERROR: worker compliance failed: {error}") from error
+    print(f"ok worker compliance: {stored['worker']['id']}")
     return 0
 
 

@@ -222,9 +222,20 @@ def emit_text(node, x, y, w, h, reg: ColorRegistry, pos, end, nid: str, slot_ids
     size = node.get("fontSize") or 14
     base_argb = hex_to_argb_int(fill_hex(node) or "#000000")
     wt = weight_to_flutter(node.get("weight"))
+    family = esc(str(node.get("fontFamily") or "SF Pro Text"))
+    style = str(node.get("fontStyle") or "").lower()
+    style_expr = ", fontStyle: FontStyle.italic" if style == "italic" or node.get("italic") else ""
     ls = node.get("letterSpacing") or {}
     ls_val = ls.get("value", 0) if isinstance(ls, dict) else 0
     ls_expr = f", letterSpacing: {m(float(ls_val))}" if ls_val else ""
+    line_height = node.get("lineHeight")
+    line_height_value = line_height.get("value") if isinstance(line_height, dict) else line_height
+    height_ratio = (
+        float(line_height_value) / float(size)
+        if line_height_value not in (None, 0) and float(size) > 0
+        else None
+    )
+    height_expr = f", height: {height_ratio:.2f}" if height_ratio is not None else ""
     align = (node.get("align") or "left").lower()
     valign = (node.get("verticalAlignment") or "top").lower()
     text_align = ALIGN_MAP.get(align, "TextAlign.left")
@@ -238,8 +249,8 @@ def emit_text(node, x, y, w, h, reg: ColorRegistry, pos, end, nid: str, slot_ids
             rc = rgba_dict_argb(r.get("color") or (r.get("font") or {}).get("color")) or base_argb
             rsize = (r.get("font") or {}).get("size") or size
             spans.append(f"TextSpan(text: '{esc(str(r.get('content', '')))}', style: TextStyle("
-                         f"fontFamily: 'SF Pro Text', fontSize: {m(float(rsize))}, fontWeight: {wt}, "
-                         f"color: {reg.ref(rc)}))")
+                         f"fontFamily: '{family}', fontSize: {m(float(rsize))}, fontWeight: {wt}{style_expr}, "
+                         f"color: {reg.ref(rc)}{height_expr}))")
         # overflow: visible 与下方纯文本分支保持一致——文本节点被 render_plan bbox 定成固定高度
         # Positioned,多色胶囊/chip 文案(如 "Loan Term:\n91-360 days")按设计两行时下降部会略超框;
         # 缺省 TextOverflow.clip 会把 'days' 的 'y' 尾巴裁成 'davs'(固定高度+裁切,违反 final_reminders)。
@@ -249,8 +260,8 @@ def emit_text(node, x, y, w, h, reg: ColorRegistry, pos, end, nid: str, slot_ids
         # 动态文本槽:从注入的 slotText 取值,缺省回退设计展示值(不变量①④⑦);静态文案保持字面量。
         txt_arg = f"slotText['{nid}'] ?? '{txt}'" if nid in slot_ids else f"'{txt}'"
         inner = (f"Text({txt_arg}, textAlign: {text_align}, softWrap: true, overflow: TextOverflow.visible, "
-                 f"style: TextStyle(fontFamily: 'SF Pro Text', fontSize: {m(float(size))}, "
-                 f"fontWeight: {wt}, color: {reg.ref(base_argb)}{ls_expr}))")
+                 f"style: TextStyle(fontFamily: '{family}', fontSize: {m(float(size))}, "
+                 f"fontWeight: {wt}{style_expr}, color: {reg.ref(base_argb)}{ls_expr}{height_expr}))")
 
     box_align = {"center": "Alignment.topCenter", "right": "Alignment.topRight"}.get(align, "Alignment.topLeft")
     if valign == "center":
@@ -353,7 +364,9 @@ def emit_node(node: dict, asset_prefix: str, nodes: dict, reg: ColorRegistry, ar
             return pos + f"CustomPaint(painter: _ChevronPainter(color: {chev}, down: false))" + end
         if w >= h * 1.2:  # 矮宽 → 下拉/选择框 'v' chevron
             return pos + f"CustomPaint(painter: _ChevronPainter(color: {chev}, down: true))" + end
-        return pos + "const SizedBox.expand()" + end  # 方形未知小矢量:透明占位(不画错方块)
+        raise SystemExit(
+            f"ERROR: unrenderable vector {nid}: export an asset or provide deterministic path semantics"
+        )
 
     rad = radius_expr(effective_radius(node, nodes))
     if rad:
@@ -716,6 +729,23 @@ class {a.class_name} extends StatelessWidget {{
             "text": node.get("text") if is_text else None,
             "fontSize": node.get("fontSize") if is_text else None,
             "weight": node.get("weight") if is_text else None,
+            "fontFamily": node.get("fontFamily") if is_text else None,
+            "fontStyle": node.get("fontStyle") if is_text else None,
+            "letterSpacing": (
+                (node.get("letterSpacing") or {}).get("value")
+                if is_text and isinstance(node.get("letterSpacing"), dict)
+                else node.get("letterSpacing") if is_text else None
+            ),
+            "lineHeight": (
+                round(float((node.get("lineHeight") or {}).get("value")) / float(node.get("fontSize")), 4)
+                if is_text
+                and isinstance(node.get("lineHeight"), dict)
+                and (node.get("lineHeight") or {}).get("value") not in (None, 0)
+                and node.get("fontSize")
+                else round(float(node.get("lineHeight")) / float(node.get("fontSize")), 4)
+                if is_text and isinstance(node.get("lineHeight"), (int, float)) and node.get("fontSize")
+                else None
+            ),
             "colorHex": fill_hex(node),
             "radius": radius_value(effective_radius(node, nodes)),
         }

@@ -9,6 +9,8 @@ AND from a non-test lib file. Pass --fixture-name to pin a specific symbol.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import re
 from pathlib import Path
 
@@ -18,6 +20,8 @@ SYMBOL = re.compile(
     r"^\s*(?:(?:abstract|final|sealed|base|interface|mixin)\s+)*(?:class|mixin|enum|extension)\s+(\w+)"
     r"|^\s*(?:const|final)\s+(?:[\w<>, ]+\s+)?(\w+)\s*=",
     re.M)
+COMMENTS = re.compile(r"//[^\n]*|/\*.*?\*/", re.S)
+IMPORT = re.compile(r"^\s*import\s+['\"]([^'\"]+)['\"]", re.M)
 
 
 def is_skip(path: Path) -> bool:
@@ -49,12 +53,15 @@ def main() -> int:
 
     test_refs: set[str] = set()
     runtime_refs: set[str] = set()
+    fixture_names = {path.name for path in fixture_files}
     for path in root.rglob("*.dart"):
         if is_skip(path) or path in fixture_files:
             continue
         try:
-            text = path.read_text(encoding="utf-8")
+            text = COMMENTS.sub("", path.read_text(encoding="utf-8"))
         except UnicodeDecodeError:
+            continue
+        if not any(Path(uri).name in fixture_names for uri in IMPORT.findall(text)):
             continue
         hit = next((s for s in symbols if re.search(rf"\b{re.escape(s)}\b", text)), None)
         if not hit:
@@ -71,6 +78,23 @@ def main() -> int:
             f"and a runtime/page file. symbols={sorted(symbols)} test_refs={sorted(test_refs)} "
             f"runtime_refs={sorted(runtime_refs)}. The widget test, preview and the page/repository "
             "must read the SAME design fixture (②⑦).")
+
+    for fixture in fixture_files:
+        source_path = Path(str(fixture) + ".source.json")
+        if not source_path.is_file():
+            raise SystemExit(f"ERROR: fixture source provenance missing: {source_path}")
+        source = json.loads(source_path.read_text(encoding="utf-8"))
+        for state, record in (source.get("states") or {}).items():
+            seed_path = Path(str((record or {}).get("path") or ""))
+            current_hash = (
+                hashlib.sha256(seed_path.read_bytes()).hexdigest()
+                if seed_path.is_file()
+                else None
+            )
+            if current_hash != (record or {}).get("sha256"):
+                raise SystemExit(f"ERROR: stale design slot seed: {state}")
+        if hashlib.sha256(fixture.read_bytes()).hexdigest() != source.get("fixtureSha256"):
+            raise SystemExit(f"ERROR: fixture differs from generated source: {fixture}")
     print(f"ok same-source fixture: shared symbol(s)={sorted(shared)} "
           f"(fixtureFiles={len(fixture_files)})")
     return 0

@@ -21,6 +21,7 @@ deterministic board index (make_board_index.py):
 from __future__ import annotations
 
 import argparse
+import hashlib
 import re
 from pathlib import Path
 
@@ -32,6 +33,10 @@ QUOTE_RE = re.compile(r"[「『\"“'‘]([^」』\"”'’]{1,30})[」』\"”'
 
 def norm(s: str) -> str:
     return re.sub(r"\s+", "", str(s or ""))
+
+
+def sha256(path: str) -> str:
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
 def match_query(query: str, boards: list[dict]) -> list[dict]:
@@ -60,13 +65,49 @@ def main() -> int:
 
     if args.check:
         doc = load_json(args.out)
-        bad = [a for a in doc.get("anchors") or []
-               if a.get("resolution") == "ambiguous" and not a.get("confirmed")
-               or a.get("resolution") == "unresolved" and not a.get("pending_route")]
+        expected_inputs = {
+            "contract": sha256(args.contract),
+            "index": sha256(args.index),
+        }
+        actual_inputs = doc.get("inputs") or {}
+        stale = [
+            name
+            for name, digest in expected_inputs.items()
+            if actual_inputs.get(name) != digest
+        ]
+        if stale:
+            print(
+                "FAIL anchors: "
+                + ", ".join(f"stale {name} hash" for name in stale)
+            )
+            return 1
+        bad = []
+        for anchor in doc.get("anchors") or []:
+            reason = None
+            if anchor.get("resolution") == "ambiguous":
+                confirmed = anchor.get("confirmed")
+                candidates = {
+                    f"{candidate.get('feature')}/{candidate.get('board')}"
+                    for candidate in anchor.get("candidates") or []
+                }
+                if not confirmed:
+                    reason = "missing confirmed target"
+                elif confirmed not in candidates:
+                    reason = "confirmed target is not a candidate"
+            elif anchor.get("resolution") == "unresolved":
+                if not anchor.get("pending_route"):
+                    reason = "missing pending_route"
+                elif not str(anchor.get("targetIntent") or "").strip():
+                    reason = "pending_route missing targetIntent"
+            if reason:
+                bad.append((anchor, reason))
         if bad:
             print(f"FAIL anchors: {len(bad)} unresolved visual reference(s):")
-            for a in bad:
-                print(f"  - {a.get('rule')}: {a.get('query')!r} ({a.get('resolution')})")
+            for anchor, reason in bad:
+                print(
+                    f"  - {anchor.get('rule')}: {anchor.get('query')!r} "
+                    f"({anchor.get('resolution')}): {reason}"
+                )
             return 1
         print(f"ok anchors: {len(doc.get('anchors') or [])} references all grounded")
         return 0
@@ -102,7 +143,17 @@ def main() -> int:
                 "bound": hits[0] if resolution == "unique" else None,
             })
     unresolved = sum(1 for a in anchors if a["resolution"] != "unique")
-    dump_json({"contract": args.contract, "anchors": anchors}, args.out)
+    dump_json(
+        {
+            "contract": args.contract,
+            "inputs": {
+                "contract": sha256(args.contract),
+                "index": sha256(args.index),
+            },
+            "anchors": anchors,
+        },
+        args.out,
+    )
     print(f"ok anchors: {len(anchors)} visual reference(s), "
           f"{len(anchors) - unresolved} auto-bound, {unresolved} need model confirmation "
           f"(edit {args.out}, then rerun with --check)")

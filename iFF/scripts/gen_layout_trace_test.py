@@ -51,7 +51,8 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 350));
     await tester.pump(const Duration(seconds: 1));
-    while (tester.takeException() != null) {}
+    expect(tester.takeException(), isNull,
+        reason: 'unexpected Flutter exception while rendering the real page');
 
     const List<String> ids = <String>[__IDS__];
     final Map<String, dynamic> nodes = <String, dynamic>{};
@@ -82,6 +83,13 @@ void main() {
       if (tf.evaluate().isNotEmpty) {
         final Text t = tester.widget<Text>(tf.first);
         rec['fontSize'] = t.style?.fontSize;
+        rec['fontFamily'] = t.style?.fontFamily;
+        rec['fontStyle'] = t.style?.fontStyle?.name;
+        rec['fontWeight'] = t.style?.fontWeight == null
+            ? null
+            : (t.style!.fontWeight!.index + 1) * 100;
+        rec['letterSpacing'] = t.style?.letterSpacing;
+        rec['lineHeight'] = t.style?.height;
         rec['colorArgb'] = t.style?.color?.toARGB32();
         rec['text'] = t.data ?? t.textSpan?.toPlainText();
       }
@@ -93,6 +101,13 @@ void main() {
           final EditableText e = tester.widget<EditableText>(ef.first);
           rec['text'] = e.controller.text;
           rec['fontSize'] = e.style.fontSize;
+          rec['fontFamily'] = e.style.fontFamily;
+          rec['fontStyle'] = e.style.fontStyle?.name;
+          rec['fontWeight'] = e.style.fontWeight == null
+              ? null
+              : (e.style.fontWeight!.index + 1) * 100;
+          rec['letterSpacing'] = e.style.letterSpacing;
+          rec['lineHeight'] = e.style.height;
           rec['colorArgb'] = e.style.color?.toARGB32();
         }
       }
@@ -106,6 +121,18 @@ void main() {
           if (br is BorderRadius) rec['radius'] = br.topLeft.x;
         } else if (dec is ShapeDecoration) {
           if (dec.color != null) rec['colorArgb'] = dec.color!.toARGB32();
+        }
+      }
+      final Finder cf = find.descendant(of: f.first, matching: find.byType(CustomPaint));
+      if (cf.evaluate().isNotEmpty) {
+        final CustomPaint customPaint = tester.widget<CustomPaint>(cf.first);
+        final dynamic painter = customPaint.painter;
+        try {
+          final Color? painterColor = painter.color as Color?;
+          if (painterColor != null) rec['colorArgb'] = painterColor.toARGB32();
+        } on NoSuchMethodError {
+          // Color is an optional trace capability; pixel shape gates cover painters
+          // that intentionally expose no instance color (for example a fixed star).
         }
       }
       nodes[id] = rec;

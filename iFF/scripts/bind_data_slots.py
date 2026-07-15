@@ -14,6 +14,7 @@ the interaction spec — e.g. that the withdraw card amount is level_money-with-
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -30,29 +31,86 @@ PATTERNS = [
      re.compile(r"rate|interest", re.I), "asPercent"),
 ]
 
+TRANSFORM_TYPES = {
+    "asText": {"string", "integer", "number", "boolean"},
+    "formatNaira": {"integer", "number"},
+    "formatDate": {"string"},
+    "asDays": {"integer", "number"},
+    "asPercent": {"integer", "number"},
+}
+
 
 def flatten_fields(contract: dict) -> list:
-    """Collect field names from either the normalized OAS shape (endpoint->method->responseFields)
-    or the derived shape (endpoint->{fields}); tolerant of string leaves."""
-    names = []
+    """Collect response fields without losing their operation and JSON-path identity."""
+    fields = []
 
-    def walk(fields, prefix=""):
-        if not isinstance(fields, dict):
+    def walk_legacy(values, endpoint, method, status="200", prefix=""):
+        if not isinstance(values, dict):
             return
-        for n, spec in fields.items():
-            names.append(prefix + n)
+        for name, spec in values.items():
+            path = prefix + name
+            fields.append({
+                "endpoint": endpoint,
+                "method": method,
+                "status": status,
+                "jsonPath": "$." + path,
+                "type": spec.get("type", "unknown") if isinstance(spec, dict) else "unknown",
+                "format": spec.get("format") if isinstance(spec, dict) else None,
+                "required": spec.get("required", False) if isinstance(spec, dict) else False,
+                "nullable": spec.get("nullable", False) if isinstance(spec, dict) else False,
+                "enum": spec.get("enum") if isinstance(spec, dict) else None,
+            })
             if isinstance(spec, dict) and isinstance(spec.get("fields"), dict):
-                walk(spec["fields"], prefix + n + ".")
+                walk_legacy(spec["fields"], endpoint, method, status, path + ".")
 
-    for _path, methods in (contract.get("endpoints") or {}).items():
+    for endpoint, methods in (contract.get("endpoints") or {}).items():
         if not isinstance(methods, dict):
             continue
-        for _m, op in methods.items():
-            if isinstance(op, dict) and "responseFields" in op:
-                walk(op.get("responseFields"))
+        for method, op in methods.items():
+            if not isinstance(op, dict):
+                continue
+            responses = op.get("responses") or {}
+            for status, response in responses.items():
+                response = response or {}
+
+                def append_fields(values, variant_kind=None, variant_index=None):
+                    for json_path, spec in (values or {}).items():
+                        if not isinstance(spec, dict):
+                            continue
+                        field = {
+                            "endpoint": endpoint,
+                            "method": method,
+                            "status": str(status),
+                            "jsonPath": json_path,
+                            "type": spec.get("type", "unknown"),
+                            "format": spec.get("format"),
+                            "required": bool(spec.get("required", False)),
+                            "nullable": bool(spec.get("nullable", False)),
+                            "enum": spec.get("enum"),
+                        }
+                        if variant_kind is not None:
+                            field["variantKind"] = variant_kind
+                            field["variantIndex"] = variant_index
+                        fields.append(field)
+
+                append_fields(response.get("fields"))
+                for variant in response.get("variants") or []:
+                    append_fields(
+                        variant.get("fields"),
+                        response.get("schemaKind"),
+                        variant.get("index"),
+                    )
+            if not responses and "responseFields" in op:
+                walk_legacy(op.get("responseFields"), endpoint, method)
         if isinstance(methods.get("fields"), dict):  # derived shape
-            walk(methods["fields"])
-    return sorted(set(names))
+            walk_legacy(methods["fields"], endpoint, "UNKNOWN")
+    unique = {json.dumps(field, ensure_ascii=False, sort_keys=True): field for field in fields}
+    return sorted(
+        unique.values(),
+        key=lambda field: (
+            field["endpoint"], field["method"], field["status"], field["jsonPath"]
+        ),
+    )
 
 
 def main() -> int:
@@ -64,12 +122,13 @@ def main() -> int:
     args = ap.parse_args()
 
     manifest = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
+    if not Path(args.api_contract).is_file():
+        raise SystemExit(f"ERROR: api contract not found: {args.api_contract}")
     contract = {}
-    if Path(args.api_contract).is_file():
-        try:
-            contract = json.loads(Path(args.api_contract).read_text(encoding="utf-8"))
-        except ValueError:
-            contract = {}
+    try:
+        contract = json.loads(Path(args.api_contract).read_text(encoding="utf-8"))
+    except ValueError as exc:
+        raise SystemExit(f"ERROR: invalid api contract: {exc}") from exc
     fields = flatten_fields(contract)
 
     bindings = []
@@ -80,15 +139,34 @@ def main() -> int:
             match = None
             for kind, text_re, field_re, transform in PATTERNS:
                 if text_re.search(text):
-                    candidates = [f for f in fields if field_re.search(f)]
+                    candidates = [f for f in fields if field_re.search(f["jsonPath"])]
+                    compatible = [
+                        field for field in candidates
+                        if field["type"] in TRANSFORM_TYPES[transform]
+                    ]
                     match = {
                         "slotKind": kind,
                         "transform": transform,
                         "candidateFields": candidates,
-                        "field": candidates[0] if len(candidates) == 1 else None,
-                        "confidence": "high" if len(candidates) == 1 else ("medium" if candidates else "low"),
+                        "compatibleCandidateFields": compatible,
+                        "field": compatible[0] if len(compatible) == 1 else None,
+                        "confidence": "high" if len(compatible) == 1 else (
+                            "medium" if compatible else "low"
+                        ),
                     }
                     break
+            if match is None:
+                candidates = [
+                    field for field in fields if field["type"] in TRANSFORM_TYPES["asText"]
+                ]
+                match = {
+                    "slotKind": "text",
+                    "transform": "asText",
+                    "candidateFields": candidates,
+                    "compatibleCandidateFields": candidates,
+                    "field": None,
+                    "confidence": "low",
+                }
             entry = {
                 "component": comp.get("name"),
                 "variantIndex": comp.get("variantIndex"),
@@ -102,8 +180,25 @@ def main() -> int:
                 needs_model.append({"node": slot.get("node"), "designText": text,
                                     "reason": "no contract" if not fields else "ambiguous/no field match"})
 
+    inputs = {
+        "component_manifest.json": hashlib.sha256(
+            Path(args.manifest).read_bytes()
+        ).hexdigest(),
+        "api_contract.json": hashlib.sha256(
+            Path(args.api_contract).read_bytes()
+        ).hexdigest(),
+    }
+    if args.interaction_contract:
+        interaction_path = Path(args.interaction_contract)
+        if not interaction_path.is_file():
+            raise SystemExit(f"ERROR: interaction contract not found: {interaction_path}")
+        inputs["interaction_contract.json"] = hashlib.sha256(
+            interaction_path.read_bytes()
+        ).hexdigest()
+
     out = {
         "source": "bind_data_slots.py",
+        "inputs": inputs,
         "hasRealContract": bool(fields),
         "slotCount": len(bindings),
         "highConfidence": sum(1 for b in bindings if b["binding"] and b["binding"]["confidence"] == "high"),
