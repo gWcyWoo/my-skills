@@ -1,0 +1,4 @@
+interface:
+  display_name: "WMTI"
+  short_description: "Code-led review walkthroughs"
+  default_prompt: "Use $wmti to walk me through the diagnosis or proposed change in code order."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Deploy StarCoach"
+  short_description: "Deploy StarCoach live services on cos-apps safely."
+  default_prompt: "Deploy a StarCoach service. Ask me for the SSH login command and target project first."
