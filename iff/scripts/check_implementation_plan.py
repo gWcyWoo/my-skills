@@ -109,7 +109,7 @@ def count_render_nodes(spec_dir: Path) -> dict[str, int]:
             counts["image"] += 1
         elif implementation in {"shape", "oval_shape", "gradient_shape", "vector_shape", "shape_container"}:
             counts["shape"] += 1
-        elif implementation in {"covered_by_asset", "covered_by_text"}:
+        elif implementation in {"covered_by_asset", "covered_by_text", "covered_by_shared_component"}:
             counts["covered"] += 1
         if implementation in {"image_png", "image_webp", "image", "svg", "asset"}:
             counts["atomicAsset"] += 1
@@ -133,9 +133,14 @@ def main() -> int:
     parser.add_argument("--spec-dir", help="Spec dir containing design artifacts.")
     args = parser.parse_args()
 
-    plan_path = Path(args.plan_flag or args.plan or "")
-    if not plan_path:
-        raise SystemExit("ERROR: missing implementation plan path")
+    raw_plan_path = args.plan_flag if args.plan_flag is not None else args.plan
+    if raw_plan_path is None or not raw_plan_path.strip():
+        raise SystemExit("ERROR: --plan requires a non-empty implementation plan file path")
+    plan_path = Path(raw_plan_path).expanduser().resolve()
+    if not plan_path.exists():
+        raise SystemExit(f"ERROR: --plan file does not exist: {plan_path}")
+    if not plan_path.is_file():
+        raise SystemExit(f"ERROR: --plan must be a file: {plan_path}")
     spec_dir = Path(args.spec_dir) if args.spec_dir else plan_path.parent
     plan = load_json(plan_path)
 
@@ -143,6 +148,12 @@ def main() -> int:
     for key in REQUIRED_PLAN_KEYS:
         if key not in plan:
             errors.append(f"missing top-level key: {key}")
+
+    # prefill_implementation_plan.py leaves "__MODEL__" placeholders for the judgment
+    # fields; an unfilled placeholder means the model skipped its part of the plan.
+    todo_count = plan_path.read_text(encoding="utf-8").count("__MODEL__")
+    if todo_count:
+        errors.append(f"{todo_count} unfilled __MODEL__ placeholder(s) — fill every modelFields entry first")
 
     inventory = plan.get("artifactInventory")
     for artifact in REQUIRED_ARTIFACTS:

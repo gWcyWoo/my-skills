@@ -23,12 +23,26 @@ def evidence_ok(evidence: dict) -> list[str]:
     errors = []
     red = evidence.get("red") or {}
     green = evidence.get("green") or {}
-    if red.get("exit_code") in (None, 0):
-        errors.append("red evidence must exist and have non-zero exit_code")
+    guard = evidence.get("guard") or {}
+    mode = guard.get("mode")
+    if mode == "preexisting_green_adoption":
+        adoption = evidence.get("adoption") or {}
+        if adoption.get("authorization") != "preexisting-green":
+            errors.append("adoption evidence authorization is invalid")
+        if adoption.get("exit_code") != 0:
+            errors.append("adoption evidence must have exit_code 0")
+        if not adoption.get("command"):
+            errors.append("adoption evidence missing command")
+        run_ids = {guard.get("runId"), adoption.get("run_id"), green.get("run_id")}
+        if None in run_ids or len(run_ids) != 1:
+            errors.append("adoption/green guard run ids must match")
+    else:
+        if red.get("exit_code") in (None, 0):
+            errors.append("red evidence must exist and have non-zero exit_code")
+        if not red.get("command"):
+            errors.append("red evidence missing command")
     if green.get("exit_code") != 0:
         errors.append("green evidence must exist and have exit_code 0")
-    if not red.get("command"):
-        errors.append("red evidence missing command")
     if not green.get("command"):
         errors.append("green evidence missing command")
     return errors

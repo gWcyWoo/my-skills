@@ -1,0 +1,45 @@
+{
+  "nodes": {
+    "root": {
+      "name": "Artboard",
+      "implementation": "shape_container",
+      "bbox": [0, 0, 750, 1200],
+      "parent": null,
+      "fills": ["#FFFFFF"],
+      "solidFills": [{"color": {"r": 1, "g": 1, "b": 1, "a": 1}}],
+      "radius": {"topLeft": 0, "topRight": 0, "bottomLeft": 0, "bottomRight": 0},
+      "border": [],
+      "visible": true,
+      "required": true
+    },
+    "rotated-gradient": {
+      "name": "Rotated gradient background",
+      "implementation": "gradient_shape",
+      "bbox": [6.8380737304688, 336.9296875, 743.1619262695312, 656.1918334960938],
+      "parent": "root",
+      "rotation": 80.72179947167388,
+      "fills": ["#FAFFAB", "#FFFFFF"],
+      "solidFills": [],
+      "gradientFills": [
+        {
+          "type": "gradient",
+          "gradient": {
+            "type": 0,
+            "stops": [
+              {"color": {"a": 1, "r": 0.9803921568627451, "g": 1, "b": 0.6705882352941176}, "position": 0},
+              {"color": {"a": 1, "r": 1, "g": 1, "b": 1}, "position": 1}
+            ],
+            "from": {"x": 0.2188059389591217, "y": 0.35213831067085266},
+            "to": {"x": 0.5, "y": 1}
+          }
+        }
+      ],
+      "radius": {"topLeft": 468.2627, "topRight": 468.2627, "bottomLeft": 468.2627, "bottomRight": 468.2627},
+      "border": [],
+      "visible": true,
+      "required": true
+    }
+  },
+  "assetStrategy": {},
+  "visibleImplementations": ["gradient_shape", "shape_container"]
+}

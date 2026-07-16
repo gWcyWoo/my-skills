@@ -1,0 +1,9 @@
+{
+  "nodes": {
+    "root": {"name": "Artboard", "implementation": "shape_container", "bbox": [0, 0, 750, 600], "parent": null, "fills": ["#FFFFFF"], "solidFills": [{"color": {"r": 1, "g": 1, "b": 1, "a": 1}}], "radius": {"topLeft": 0, "topRight": 0, "bottomLeft": 0, "bottomRight": 0}, "border": [], "visible": true, "required": true},
+    "title": {"name": "Title", "implementation": "text", "bbox": [80, 30, 300, 36], "parent": "root", "text": "Accounts", "fontSize": 24, "weight": 600, "align": "left", "solidFills": [{"color": {"r": 0.13, "g": 0.13, "b": 0.13, "a": 1}}], "fills": ["#222222"], "radius": {"topLeft": 0, "topRight": 0, "bottomLeft": 0, "bottomRight": 0}, "visible": true, "required": true},
+    "back": {"name": "Vector", "implementation": "shape", "bbox": [24, 24, 24, 46], "parent": "root", "fills": ["#222222"], "solidFills": [{"color": {"r": 0.13, "g": 0.13, "b": 0.13, "a": 1}}], "radius": {"topLeft": 0, "topRight": 0, "bottomLeft": 0, "bottomRight": 0}, "border": [], "shapeType": "rect", "visible": true, "required": true}
+  },
+  "assetStrategy": {},
+  "visibleImplementations": ["text", "shape", "shape_container"]
+}

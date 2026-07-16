@@ -1,0 +1,9 @@
+{
+  "id": "0003_rotated_aabb",
+  "origin": "home background: render-plan bbox is the rotated AABB and must not be rotated a second time at AABB size",
+  "exercises": [
+    "rotated gradient shape",
+    "local-size reconstruction from AABB"
+  ],
+  "assert": "rotated child rebuilds but never overflows the source AABB"
+}

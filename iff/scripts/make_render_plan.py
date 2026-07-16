@@ -68,7 +68,6 @@ def has_container_visual(node: dict) -> bool:
         or node.get("border")
         or node.get("shadow")
         or node.get("effects")
-        or node.get("radius") is not None
     )
 
 
@@ -99,7 +98,6 @@ def has_visual_signal(node: dict) -> bool:
         or node.get("border")
         or node.get("shadow")
         or node.get("effects")
-        or node.get("radius") is not None
         or node.get("exportable")
         or node.get("mask")
     )
@@ -173,6 +171,9 @@ def main() -> int:
     parser.add_argument("--scene", required=True)
     parser.add_argument("--assets", required=True)
     parser.add_argument("--layout", required=True)
+    parser.add_argument("--shared", help="shared_components.local.json from detect_shared_components.py; "
+                                         "status=reuse groups are excluded from the canvas")
+    parser.add_argument("--root-node", help="limit the plan to this node subtree and normalize bboxes to its origin")
     parser.add_argument("--out", required=True)
     args = parser.parse_args()
 
@@ -187,6 +188,29 @@ def main() -> int:
         raise SystemExit("ERROR: scene has no nodes")
 
     by_id = {node["id"]: node for node in nodes}
+    component_root = None
+    component_origin = None
+    if args.root_node:
+        component_root = by_id.get(args.root_node)
+        if component_root is None:
+            raise SystemExit(f"ERROR: root node not found: {args.root_node}")
+        allowed = set()
+        pending = [args.root_node]
+        while pending:
+            node_id = pending.pop()
+            if node_id in allowed:
+                continue
+            allowed.add(node_id)
+            current = by_id.get(node_id) or {}
+            for child in current.get("children") or []:
+                child_id = child.get("id") if isinstance(child, dict) else child
+                if child_id:
+                    pending.append(str(child_id))
+        nodes = [node for node in nodes if node.get("id") in allowed]
+        root_bbox = component_root.get("bbox")
+        if not isinstance(root_bbox, list) or len(root_bbox) != 4:
+            raise SystemExit(f"ERROR: root node has invalid bbox: {args.root_node}")
+        component_origin = [root_bbox[0], root_bbox[1]]
     asset_ids = set(assets.keys()) if isinstance(assets, dict) else set()
     covered_by_asset: dict[str, str] = {}
     for asset_id in asset_ids:
@@ -201,26 +225,106 @@ def main() -> int:
         and any((by_id.get(child_id) or {}).get("text") for child_id in node.get("children") or [])
     }
 
+    # Regions resolved to a registered shared component: the page canvas must not
+    # re-draw them; the verified shared widget is mounted at the group bbox instead.
+    shared_roots: dict[str, dict] = {}
+    covered_by_shared: dict[str, str] = {}
+    if args.shared:
+        shared_local = load_json(args.shared)
+        for comp in shared_local.get("components") or []:
+            root_id = str(comp.get("group_node") or "")
+            if not root_id or comp.get("status") != "reuse":
+                continue
+            if root_id not in by_id:
+                raise SystemExit(f"ERROR: shared component group node not in scene: {root_id}")
+            shared_roots[root_id] = comp
+            covered_by_shared[root_id] = root_id
+            for descendant_id in collect_descendants(root_id, by_id):
+                covered_by_shared[descendant_id] = root_id
+
+    # 整稿资产红线始终以原始 scene 的最大节点为基准。组件模式只改变
+    # 选择范围与坐标原点，不能把组件自身错误地当成“整张设计稿”。
     max_area = max(n["bbox"][2] * n["bbox"][3] for n in nodes)
     plan = {
         "nodes": {},
+        "rootNode": args.root_node,
         "assetStrategy": "webP > png; svg only for simple vectors",
         "visibleImplementations": sorted(VISIBLE_IMPLEMENTATIONS),
+        "sharedComponents": [
+            {
+                "signature": comp.get("signature"),
+                "name": comp.get("name"),
+                "widget_path": comp.get("widget_path"),
+                "group_node": root_id,
+                "bbox": (by_id.get(root_id) or {}).get("bbox"),
+            }
+            for root_id, comp in sorted(shared_roots.items())
+        ],
     }
     errors = []
+    if component_root is not None:
+        plan["componentRoot"] = {
+            "node": args.root_node,
+            "sourceBBox": component_root["bbox"],
+            "bbox": [0, 0, component_root["bbox"][2], component_root["bbox"][3]],
+        }
+
     for node in nodes:
-        bbox = node["bbox"]
+        bbox = list(node["bbox"])
+        if component_origin is not None:
+            bbox[0] -= component_origin[0]
+            bbox[1] -= component_origin[1]
+        absolute_transform = node.get("absoluteTransform")
+        if (
+            component_origin is not None
+            and isinstance(absolute_transform, list)
+            and len(absolute_transform) == 2
+            and all(isinstance(row, list) and len(row) == 3 for row in absolute_transform)
+        ):
+            absolute_transform = [list(row) for row in absolute_transform]
+            absolute_transform[0][2] -= component_origin[0]
+            absolute_transform[1][2] -= component_origin[1]
+            a, b, _ = absolute_transform[0]
+            c, d, _ = absolute_transform[1]
+            if abs(b) < 1e-6 and abs(c) < 1e-6 and (a < 0 or d < 0):
+                # bbox is the render-plan coordinate authority. Some Lanhu/Figma
+                # payloads expose transforms in a different global space, so
+                # rebuild pure-flip translations from the normalized bbox.
+                absolute_transform[0][2] = bbox[0] - min(0.0, a * bbox[2])
+                absolute_transform[1][2] = bbox[1] - min(0.0, d * bbox[3])
         manifest_asset = assets.get(node["id"]) if isinstance(assets, dict) else None
-        asset_path = node.get("asset") or (manifest_asset.get("path") if isinstance(manifest_asset, dict) else None)
-        mode = asset_strategy(str(asset_path)) if asset_path else implementation_for(node, text_layer_wrappers, set(covered_by_asset))
+        asset_path = (
+            manifest_asset.get("path") if isinstance(manifest_asset, dict) else None
+        ) or node.get("asset")
+        if node["id"] in covered_by_shared:
+            mode = "covered_by_shared_component"
+        else:
+            mode = asset_strategy(str(asset_path)) if asset_path else implementation_for(node, text_layer_wrappers, set(covered_by_asset))
         required = mode in VISIBLE_IMPLEMENTATIONS
-        if node.get("exportable") and not asset_path:
+        # 1D 描边分隔线(Figma Line / 零厚度 shapeLayer)bbox 的宽或高为 0。作为可见节点
+        # 必须有正的厚度才能被坐标画布渲染并通过 render_plan 的正 bbox 校验,否则一条设计
+        # 里真实存在的分隔线会被判为非法零尺寸。用其描边宽度(缺省 1 设计px)补齐缺失维度,
+        # 既忠实于"1px 细线"的设计语义,又不影响其它有正尺寸的节点。
+        if required and isinstance(bbox, list) and len(bbox) == 4 and (bbox[2] <= 0 or bbox[3] <= 0):
+            stroke = 1.0
+            for stroke_spec in (node.get("border") or []):
+                if isinstance(stroke_spec, dict):
+                    try:
+                        stroke = max(stroke, float(stroke_spec.get("width") or 0))
+                    except (TypeError, ValueError):
+                        pass
+            bbox = list(bbox)
+            if bbox[2] <= 0:
+                bbox[2] = stroke
+            if bbox[3] <= 0:
+                bbox[3] = stroke
+        if node.get("exportable") and not asset_path and mode != "covered_by_shared_component":
             errors.append(f"exportable node missing asset path: {node['id']}")
         if mode.startswith("image") or mode == "svg" or mode == "asset":
             if not asset_path:
                 if mode != "image_fill":
                     errors.append(f"asset node missing asset path: {node['id']}")
-        if asset_path and bbox[2] * bbox[3] >= max_area * 0.98:
+        if component_root is None and asset_path and bbox[2] * bbox[3] >= max_area * 0.98:
             errors.append(f"full-artboard asset is forbidden: {node['id']}")
         plan["nodes"][node["id"]] = {
             "name": node.get("name"),
@@ -232,6 +336,11 @@ def main() -> int:
             "weight": node.get("weight"),
             "lineHeight": node.get("lineHeight"),
             "letterSpacing": node.get("letterSpacing"),
+            "align": node.get("align"),
+            "verticalAlignment": node.get("verticalAlignment"),
+            "textRuns": node.get("textRuns") or [],
+            "rotation": node.get("rotation") or 0,
+            "absoluteTransform": absolute_transform,
             "fills": node.get("fills") or [],
             "rawFills": node.get("rawFills") or [],
             "solidFills": node.get("solidFills") or [],
@@ -243,15 +352,26 @@ def main() -> int:
             "effects": node.get("effects") or [],
             "opacity": node.get("opacity", 1),
             "path": node.get("path"),
-            "parent": node.get("parent"),
+            "parent": (
+                None
+                if component_root is not None and node["id"] == args.root_node
+                else node.get("parent")
+            ),
             "children": node.get("children") or [],
             "figmaType": node.get("figmaType"),
             "shapeType": node.get("shapeType"),
             "visible": bool(node.get("effectiveVisible", True) and node.get("visible", True)),
             "required": required,
             "renderMode": "absolute_positioned" if required else None,
-            "coveredBy": covered_by_asset.get(node["id"]) if mode == "covered_by_asset" else None,
-            "reason": render_reason(node, mode, covered_by_asset),
+            "coveredBy": (covered_by_asset.get(node["id"]) if mode == "covered_by_asset"
+                          else covered_by_shared.get(node["id"]) if mode == "covered_by_shared_component"
+                          else None),
+            "reason": (
+                "region rendered by shared component "
+                f"{(shared_roots.get(covered_by_shared[node['id']]) or {}).get('name') or covered_by_shared[node['id']]}"
+                if mode == "covered_by_shared_component"
+                else render_reason(node, mode, covered_by_asset)
+            ),
             "sourceSchema": scene.get("sourceSchema"),
             "widgetTraceRequired": True,
         }

@@ -60,7 +60,8 @@ def num(value: Any, default: float = 0.0) -> float:
 
 
 def bbox_of(layer: dict[str, Any]) -> list[float] | None:
-    frame = layer.get("frame") or layer.get("absoluteBoundingBox") or layer.get("bounds") or {}
+    rotated_real_frame = layer.get("realFrame") if abs(num(layer.get("rotation"))) > 0.01 else None
+    frame = rotated_real_frame or layer.get("frame") or layer.get("absoluteBoundingBox") or layer.get("bounds") or {}
     if not isinstance(frame, dict):
         return None
     left = frame.get("left", frame.get("x"))

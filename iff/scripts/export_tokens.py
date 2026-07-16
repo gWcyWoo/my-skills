@@ -9,7 +9,16 @@ from common import dump_json, load_json
 
 
 def sorted_nums(values):
-    return sorted({v for v in values if v is not None})
+    flat = []
+    for v in values:
+        if v is None:
+            continue
+        if isinstance(v, dict):
+            # radius may be a per-corner dict {topLeft,topRight,bottomLeft,bottomRight}
+            flat.extend(x for x in v.values() if isinstance(x, (int, float)))
+        elif isinstance(v, (int, float)):
+            flat.append(v)
+    return sorted(set(flat))
 
 
 def main() -> int:

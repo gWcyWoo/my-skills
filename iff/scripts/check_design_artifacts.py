@@ -92,7 +92,14 @@ def inside_artboard(bbox: list[Any], width: float, height: float, tolerance: flo
     if not (isinstance(bbox, list) and len(bbox) == 4):
         return False
     x, y, w, h = [float(value) for value in bbox]
-    return x >= -tolerance and y >= -tolerance and x + w <= width + tolerance and y + h <= height + tolerance
+    if w <= 0 or h <= 0:
+        return False
+    # Require the top-left origin to sit inside the artboard (this catches
+    # un-normalized raw Figma coordinates such as the root artboard's
+    # [-669, -27202, ...]). Allow the far edge to bleed off the artboard:
+    # real designs place decorations/icons that the frame clips, and frame
+    # bboxes can be padded/stale relative to their in-bounds children.
+    return -tolerance <= x <= width + tolerance and -tolerance <= y <= height + tolerance
 
 
 def main() -> int:
