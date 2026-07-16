@@ -237,9 +237,15 @@ def main() -> int:
                 continue
             if root_id not in by_id:
                 raise SystemExit(f"ERROR: shared component group node not in scene: {root_id}")
+            subtree_ids = [root_id, *collect_descendants(root_id, by_id)]
+            if any(
+                (by_id[node_id].get("systemUi") or {}).get("excluded") is True
+                for node_id in subtree_ids
+            ):
+                continue
             shared_roots[root_id] = comp
             covered_by_shared[root_id] = root_id
-            for descendant_id in collect_descendants(root_id, by_id):
+            for descendant_id in subtree_ids[1:]:
                 covered_by_shared[descendant_id] = root_id
 
     # 整稿资产红线始终以原始 scene 的最大节点为基准。组件模式只改变
@@ -296,7 +302,9 @@ def main() -> int:
         asset_path = (
             manifest_asset.get("path") if isinstance(manifest_asset, dict) else None
         ) or node.get("asset")
-        if node["id"] in covered_by_shared:
+        if node.get("effectiveVisible") is False or node.get("visible") is False:
+            mode = "hidden"
+        elif node["id"] in covered_by_shared:
             mode = "covered_by_shared_component"
         else:
             mode = asset_strategy(str(asset_path)) if asset_path else implementation_for(node, text_layer_wrappers, set(covered_by_asset))
@@ -330,6 +338,7 @@ def main() -> int:
             "name": node.get("name"),
             "bbox": bbox,
             "implementation": mode,
+            "systemUi": node.get("systemUi"),
             "asset": asset_path,
             "text": node.get("text"),
             "fontSize": node.get("fontSize"),

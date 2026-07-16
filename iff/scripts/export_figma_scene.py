@@ -7,6 +7,8 @@ import argparse
 from pathlib import Path
 from typing import Any
 
+from system_ui_filter import exclude_system_ui
+
 from common import colors_of, dump_json, load_json
 
 
@@ -258,6 +260,9 @@ def walk_layers(
             node["textRuns"] = styles
     if asset:
         node["asset"] = asset
+        asset_variants = assets.get(node_id)
+        if isinstance(asset_variants, dict):
+            node["assetVariants"] = asset_variants
     state["z"] += 1
     nodes = [node]
     for child in layer.get("layers") or []:
@@ -297,6 +302,7 @@ def main() -> int:
     if not nodes:
         raise SystemExit("ERROR: no Figma nodes with frame found")
     artboard_bbox = nodes[0]["bbox"]
+    system_ui_exclusions = exclude_system_ui(nodes, artboard_bbox, asset_base=Path(args.assets).parent)
     dump_json(
         {
             "sourceSchema": "lanhu_figma_json",
@@ -313,6 +319,7 @@ def main() -> int:
                 "meta": figma.get("meta") or {},
             },
             "nodes": nodes,
+            "systemUiExclusions": system_ui_exclusions,
         },
         args.out,
     )

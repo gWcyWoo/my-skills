@@ -12,7 +12,7 @@
 | `STYLE` | 风格命名 | 两空格 · PascalCase/camelCase/snake_case · 单引号 · 尾逗号 · 显式返回类型 |
 | `DOC` | 中文注释 | 解释"为什么" · 公共基础设施完整注释 · 失效注释同步更新 |
 | `LAYER` | 分层 | presentation/domain/data · 公共组件不含业务流程 |
-| `LAYOUT` | 布局响应式 | **关系换算优先 · 禁硬编码坐标/scale · TextStyle 禁 height** |
+| `LAYOUT` | 布局响应式 | **375 逻辑基准 · 状态栏透明覆盖/完全隐藏双态 · TextStyle 禁 height** |
 | `HIER` | 视觉层级还原 | 父容器/右侧图标/整行宽度/文本归属 |
 | `COMP` | 组件拆分 | 先搜复用 · 不过度抽 · 一致样式抽公共组件 |
 | `FORM` | 表单 | 输入/选择拆开 · 原生 InputDecoration · 不包 InkWell |
@@ -60,6 +60,8 @@
 - **IMPL-LAYOUT-2 禁硬编码**:禁止写死设计稿宽高、固定画布 `SizedBox`、`scale`/`_designWidth`/`_panelWidth`/`_panelHeight` 之类还原常量。**唯一允许的"坐标"是关系换算值(× unit 或 fraction),绝不允许裸像素硬编码。**
 - **IMPL-LAYOUT-3 结构选择**:自然成行/列/栈的内容优先 `Column`/`Row`/`Flex`/`Wrap`+gap;仅当线性布局无法表达真实遮挡或复杂精确定位(如卡片角部装饰、复杂 artboard)才用 `Align`/`Stack`,且坐标用关系换算值。**简单页面(弹窗/表单/列表项)严禁 Stack 还原坐标。**
 - **IMPL-LAYOUT-4 宽度自适应**:组件宽度交父级约束,不写死设计稿宽度;整行/整块容器(覆盖整行的 Rectangle)铺满父容器,不只包裹文本。
+- **IMPL-SYSTEM-UI-1 系统区域双态合同**:设计稿、切图或矢量资产中的状态栏时间/信号/Wi-Fi/电量、摄像头挖孔/刘海/灵动岛等设备系统 UI 必须在 scene 编译阶段由 `system_ui_filter.py` 标记并剔除；生成的 render plan 中只能是 `implementation=hidden` 且 `required=false`，Flutter 页面不得加载对应资产或重复绘制。每张画板必须用 `make_status_bar_policy.py` 从 scene 生成独立 Dart 策略常量,上线页只能引用该常量,禁止模型手填 `true/false`。运行时严格消费生成的双态策略:① scene 含 `systemUiExclusions[*].role=status_bar` 时,真实系统状态栏保持可见,使用 `SystemUiMode.edgeToEdge` 和透明 `statusBarColor`,业务页面从屏幕顶部开始并绘制到状态栏背后；页面根部禁止默认 `SafeArea`、`MediaQuery.*.top` 或未启用 `extendBodyBehindAppBar` 的 AppBar 预留顶部空间,仅保护侧边/底部时必须 `SafeArea(top:false,...)`。② scene 明确不含状态栏时,使用 `SystemUiMode.manual` 且 overlays 只保留 `SystemUiOverlay.bottom`,完全隐藏顶部状态栏,同样不预留 top inset。入口必须在 `runApp` 前 `await` 初始策略并把同一控制器传给页面复用；Android `LaunchTheme`/`NormalTheme` 和实际 `FlutterActivity` 必须同步初始生成策略：hidden 必须使用系统 `NoTitleBar.Fullscreen` 父主题，并同时设置 `windowFullscreen=true`、`windowDrawsSystemBarBackgrounds=true`、透明 `statusBarColor`（只写 fullscreen item 不足以覆盖 Android 12+ 系统 SplashScreen），还必须在 `super.onCreate` 前设置 `FLAG_FULLSCREEN`，在其后安全隐藏 Insets，并在 `onPostResume`/`onWindowFocusChanged` 持续恢复隐藏直到 `onFlutterUiDisplayed` 关闭一次性启动守卫；禁止在 `super.onCreate` 前访问 InsetsController（DecorView 尚未创建会崩溃），也禁止永久守卫破坏后续 overlay 页面。overlay 必须为非 fullscreen + 透明 statusBarColor + drawsSystemBarBackgrounds 且不得原生强制隐藏；`check_capture_readiness.py` 必须同时验证主题、Activity 与调用时序，禁止原生启动窗口或首帧后切换造成系统栏闪现/消失；混合页面逐页应用对应生成策略,禁止用全局单态误配其它路由。摄像头/挖孔只属于真实设备或模拟器外观，不能由 App 绘制或遮盖。设计导出异常导致设备/截图伪影脱离顶部区域时，模型只能依据用户确认和当前 scene 节点证据调用 `system_ui_filter.py --exclude-node <node-id>` 显式排除；不得扩大全局几何启发式误删普通黑色 Logo、星形或业务装饰，未知节点必须失败。缓存工程中完全由这些节点组成的旧共享组件，必须由 `prune_system_ui_components.py` 连同生成测试、expected、独占资产和注册项一起退役；禁止残留不可达伪状态栏实现。
+- **IMPL-SYSTEM-UI-2 Android hidden 启动过渡**：`LaunchTheme` 必须使用 `Theme.Translucent.NoTitleBar.Fullscreen`（或显式 `windowIsTranslucent=true`）并设置 `windowAnimationStyle=@null`，用于绕过 Android 12+ 系统 SplashScreen，同时禁止透明启动窗口进场动画把桌面状态栏带入 App 过渡帧；`NormalTheme` 必须保持不透明 fullscreen。`check_capture_readiness.py` 必须验证该组合。
 - **IMPL-LAYOUT-5 文字垂直关系**:`TextStyle` **禁加 `height`**;垂直关系靠父级布局/`padding`/间距/约束表达,避免跨平台字体裁切漂移。
 - **IMPL-LAYOUT-6 像素级定义**:验收"像素级"指**元素/尺寸/层级/关系逐像素准**;字形边缘抗锯齿差属渲染引擎(Impeller≠Figma),不计缺陷,也不得为消除它牺牲响应式或写死坐标。
 

@@ -95,6 +95,10 @@ def main() -> int:
             max_area = max(max_area, bbox[2] * bbox[3])
     for node_id, item in nodes.items():
         impl = item.get("implementation")
+        system_ui = item.get("systemUi")
+        if isinstance(system_ui, dict) and system_ui.get("excluded") is True:
+            if impl != "hidden" or item.get("required") is True:
+                errors.append(f"{node_id}: system UI must be hidden and non-required")
         local_reference_fallback = valid_local_reference_fallback(node_id, item)
         component_root = plan.get("componentRoot")
         exported_component_root = bool(
