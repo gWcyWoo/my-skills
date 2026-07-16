@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-  echo "用法: run.sh <code|explore|test|review> \"任务描述\" [工作目录]" >&2
+  echo "用法: $0 <code|explore|test|review> <任务描述> [工作目录]" >&2
 }
 
 MODE="${1:-}"
@@ -18,113 +18,48 @@ esac
 [[ -d "$WORKDIR" ]] || { echo "错误: 工作目录不存在: $WORKDIR" >&2; exit 2; }
 WORKDIR="$(cd "$WORKDIR" && pwd -P)"
 
-API_KEY="${MOONSHOT_API_KEY:-${KIMI_API_KEY:-}}"
-[[ -n "$API_KEY" ]] || {
-  echo "错误: 缺少 MOONSHOT_API_KEY（也接受 KIMI_API_KEY）。" >&2
-  exit 2
-}
-
-CLAUDE_BIN="${KIMI_WORKER_CLAUDE:-${WORKER_CLAUDE:-claude}}"
-command -v "$CLAUDE_BIN" >/dev/null 2>&1 || {
-  echo "错误: 找不到 Claude Code: $CLAUDE_BIN" >&2
-  exit 2
-}
-command -v python3 >/dev/null 2>&1 || {
-  echo "错误: 找不到 python3，无法格式化 worker 输出。" >&2
-  exit 2
-}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+"$SCRIPT_DIR/preflight.sh" --ensure >/dev/null
 
 case "$MODE" in
   code)
-    MODE_GUIDANCE="执行已经批准的实现方案。允许编辑任务边界内的文件。不要扩大范围；完成后报告改动文件、验证命令和未解决问题。"
-    PERMISSION_ARGS=(--permission-mode acceptEdits)
+    SANDBOX="workspace-write"
+    MODE_GUIDANCE="执行已经批准的实现方案。只编辑任务边界内的文件，保留无关改动，完成后运行要求的验证并报告改动文件。"
     ;;
   explore)
-    MODE_GUIDANCE="只做探索。禁止修改任何项目文件，也禁止通过 Bash 间接写文件。结论必须提供具体 file:line 证据。"
-    PERMISSION_ARGS=(--permission-mode default --disallowedTools Edit,Write,NotebookEdit)
+    SANDBOX="read-only"
+    MODE_GUIDANCE="只做探索。禁止修改文件；结论必须提供具体绝对路径和行号证据。"
     ;;
   test)
-    MODE_GUIDANCE="只运行测试和诊断命令。禁止修改项目文件或实现修复。报告完整命令、退出码和关键失败。"
-    PERMISSION_ARGS=(--permission-mode default --disallowedTools Edit,Write,NotebookEdit)
+    SANDBOX="workspace-write"
+    MODE_GUIDANCE="只运行测试和诊断命令。禁止修改源文件或实现修复；报告完整命令、退出码和关键失败。"
     ;;
   review)
-    MODE_GUIDANCE="只审查现有代码或 diff。禁止修改项目文件。只报告可操作问题，并提供具体 file:line、影响和理由。"
-    PERMISSION_ARGS=(--permission-mode default --disallowedTools Edit,Write,NotebookEdit)
+    SANDBOX="read-only"
+    MODE_GUIDANCE="只审查现有代码或 diff。禁止修改文件；只报告有证据的可操作问题。"
     ;;
 esac
 
-PROMPT="$MODE_GUIDANCE
+PROMPT="你是由 Kimi 模型驱动的 Codex 子会话。直接使用本会话的 Codex 工具完成任务，不要启动 Claude、GLM、OpenCode、其他 Codex 子进程或任何外部 agent runtime。
+
+$MODE_GUIDANCE
 
 任务:
 $TASK"
 
-USER_HOME="${HOME:?HOME 未设置}"
-WORKER_CONFIG="$USER_HOME/.claude-worker-kimi"
-mkdir -p "$WORKER_CONFIG"
-chmod 700 "$WORKER_CONFIG"
-if [[ ! -f "$WORKER_CONFIG/.claude.json" ]]; then
-  cat > "$WORKER_CONFIG/.claude.json" <<'JSON'
-{
-  "hasCompletedOnboarding": true,
-  "penguinModeOrgEnabled": true,
-  "bypassPermissionsModeAccepted": true
-}
-JSON
-  chmod 600 "$WORKER_CONFIG/.claude.json"
-fi
+LOG_DIR="${KIMI_LOG_DIR:-/Users/oklik/.codex/log/kimi}"
+mkdir -p "$LOG_DIR"
+LOG_PATH="$LOG_DIR/$(date '+%Y%m%d-%H%M%S')-$MODE.log"
 
-LOG_DIR="${LLM_WORKER_LOG_DIR:-/tmp/codex-llm-logs}"
-if [[ -e "$LOG_DIR" || -L "$LOG_DIR" ]]; then
-  [[ ! -L "$LOG_DIR" ]] || { echo "错误: 日志目录是软链: $LOG_DIR" >&2; exit 2; }
-  [[ -d "$LOG_DIR" ]] || { echo "错误: 日志路径不是目录: $LOG_DIR" >&2; exit 2; }
-  [[ -O "$LOG_DIR" ]] || { echo "错误: 日志目录不属于当前用户: $LOG_DIR" >&2; exit 2; }
-else
-  mkdir -m 700 -p "$LOG_DIR"
-fi
-chmod 700 "$LOG_DIR"
-LATEST_LOG="$LOG_DIR/kimi-latest.log"
-touch "$LATEST_LOG"
-chmod 600 "$LATEST_LOG"
-
-SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-WENV=(
-  "ANTHROPIC_BASE_URL=${KIMI_BASE_URL:-https://api.kimi.com/coding/}"
-  "ANTHROPIC_API_KEY=$API_KEY"
-)
-CLAUDE_ARGS=()
-if [[ -n "${KIMI_MODEL:-}" ]]; then
-  WENV+=("ANTHROPIC_MODEL=$KIMI_MODEL" "CLAUDE_CODE_SUBAGENT_MODEL=$KIMI_MODEL")
-  CLAUDE_ARGS+=(--model "$KIMI_MODEL")
-fi
-if [[ -n "${KIMI_THINKING_TOKENS:-}" ]]; then
-  WENV+=("MAX_THINKING_TOKENS=$KIMI_THINKING_TOKENS")
-fi
-CLAUDE_ARGS+=(
-  "${PERMISSION_ARGS[@]}"
-  --add-dir "$WORKDIR"
-  -p "$PROMPT"
-  --output-format stream-json
-  --verbose
-)
-
-cd "$WORKDIR"
-echo "[worker] provider=kimi mode=$MODE log=$LATEST_LOG" >&2
 set +e
-env -i \
-  HOME="$USER_HOME" \
-  PATH="$PATH" \
-  USER="${USER:-}" \
-  TERM="${TERM:-xterm-256color}" \
-  LANG="${LANG:-en_US.UTF-8}" \
-  CLAUDE_CONFIG_DIR="$WORKER_CONFIG" \
-  DISABLE_AUTOUPDATER=1 \
-  ENABLE_TOOL_SEARCH=0 \
-  CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1 \
-  CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \
-  API_TIMEOUT_MS=3000000 \
-  "${WENV[@]}" \
-  "$CLAUDE_BIN" "${CLAUDE_ARGS[@]}" \
-  | python3 "$SELF_DIR/fmt.py" "$LATEST_LOG" "kimi:$MODE" "$$"
-rc=${PIPESTATUS[0]}
+codex exec --json --ephemeral --skip-git-repo-check \
+  -C "$WORKDIR" \
+  -s "$SANDBOX" \
+  -m "kimi-for-coding" \
+  -c 'model_provider="kimi-local"' \
+  -c 'model_catalog_json="/Users/oklik/.mimo2codex/models.json"' \
+  -c 'approval_policy="never"' \
+  "$PROMPT" 2>>"$LOG_PATH" | python3 "$SCRIPT_DIR/fmt.py" "$LOG_PATH" "kimi:$MODE" "$$"
+STATUS=${PIPESTATUS[0]}
 set -e
-exit "$rc"
+exit "$STATUS"
