@@ -1,0 +1,4 @@
+interface:
+  display_name: "GLM Worker"
+  short_description: "Delegate explore, code, test, and review tasks to GLM"
+  default_prompt: "Use $glm code to execute an approved implementation task."
