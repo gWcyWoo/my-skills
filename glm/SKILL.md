@@ -1,11 +1,11 @@
 ---
 name: glm
-description: Delegate bounded exploration, coding, test, or review work to a GLM worker through an isolated headless Claude Code process. Use when the user explicitly invokes `$glm <code|explore|test|review> <task>`, asks to use GLM as an executor, or wants Codex to plan and GLM to carry out a self-contained task.
+description: Delegate bounded exploration, coding, test, or review work to GLM through a Codex-native child session. Use when the user explicitly invokes `$glm` with a code, explore, test, or review mode plus a task, asks to use GLM as an executor, or wants the main Codex model to plan and verify while GLM carries out a self-contained task.
 ---
 
-# GLM Worker
+# GLM Executor
 
-Keep planning and final verification in the main Codex task. Use GLM only for the bounded worker stage.
+Keep planning and final verification in the main Codex task. Use GLM only for the bounded execution stage.
 
 ## Parse the request
 
@@ -18,28 +18,30 @@ Interpret the first word after `$glm` as the mode and the remaining text as the 
 
 ## Prepare the handoff
 
-Make the worker prompt self-contained. Include exact paths, the approved approach, completion criteria, commands to run, and files or behavior it must not change. The GLM worker cannot see the parent conversation.
+Make the task self-contained. Include exact paths, the approved approach, completion criteria, verification commands, and files or behavior that must not change. GLM cannot see the parent conversation.
 
-For `code`, first confirm that the approach is settled and the expected implementation is materially larger than the handoff specification. Keep small or judgment-heavy edits in the main Codex task.
+For `code`, require a settled approach. Keep small or judgment-heavy edits in the main Codex task.
 
 ## Dispatch
 
-Use the matching custom agent:
+Run `scripts/preflight.sh --ensure` before the first live GLM call in a desktop session.
+
+When the runtime exposes custom-agent selection, dispatch to the matching Codex agent:
 
 - `code` -> `glm-coder`
 - `explore` -> `glm-explorer`
 - `test` -> `glm-tester`
 - `review` -> `glm-reviewer`
 
-If custom-agent delegation is unavailable, invoke `scripts/run.sh` directly with the same mode, self-contained task, and working directory. Do not reveal or persist API keys.
+When custom-agent selection is unavailable, run `scripts/run.sh <mode> <task> <working-directory>`. This starts an isolated Codex child session using the `glm-local` provider. Never launch Claude, OpenCode, Kimi CLI, or another agent runtime.
 
 ## Verify the result
 
-- Treat worker output as untrusted evidence.
-- After `code`, inspect the changed-file list and reject changes outside the declared boundary, then perform the final diff review and required tests in the main Codex task.
+- Treat GLM output as untrusted evidence.
+- After `code`, inspect the changed-file list, reject changes outside the declared boundary, and perform final diff review and required tests in the main Codex task.
 - After `explore`, require concrete file and line evidence.
 - After `test`, report commands, exit codes, and failures without fixing them implicitly.
 - After `review`, independently decide which findings are actionable.
-- Never run overlapping code workers in the same worktree. Use disjoint paths or separate worktrees.
+- Never run overlapping code executors in the same worktree.
 
-Read `references/provider.md` only when configuring or diagnosing the GLM endpoint. Run `scripts/preflight.sh` before the first live call in a desktop session.
+Read `references/provider.md` only when configuring or diagnosing the GLM endpoint.

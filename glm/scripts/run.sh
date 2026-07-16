@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-  echo "用法: run.sh <code|explore|test|review> \"任务描述\" [工作目录]" >&2
+  echo "用法: $0 <code|explore|test|review> <任务描述> [工作目录]" >&2
 }
 
 MODE="${1:-}"
@@ -18,117 +18,48 @@ esac
 [[ -d "$WORKDIR" ]] || { echo "错误: 工作目录不存在: $WORKDIR" >&2; exit 2; }
 WORKDIR="$(cd "$WORKDIR" && pwd -P)"
 
-API_KEY="${ZHIPU_API_KEY:-${GLM_API_KEY:-}}"
-[[ -n "$API_KEY" ]] || {
-  echo "错误: 缺少 ZHIPU_API_KEY（也接受 GLM_API_KEY）。" >&2
-  exit 2
-}
-
-CLAUDE_BIN="${GLM_WORKER_CLAUDE:-${WORKER_CLAUDE:-claude}}"
-command -v "$CLAUDE_BIN" >/dev/null 2>&1 || {
-  echo "错误: 找不到 Claude Code: $CLAUDE_BIN" >&2
-  exit 2
-}
-command -v python3 >/dev/null 2>&1 || {
-  echo "错误: 找不到 python3，无法格式化 worker 输出。" >&2
-  exit 2
-}
-
-MODEL="${GLM_MODEL:-GLM-5.2}"
-SMALL_MODEL="${GLM_SMALL_MODEL:-$MODEL}"
-if [[ "$MODEL" == *"[1m]"* ]]; then
-  echo "错误: GLM 模型 id 不要带 [1m] 后缀。" >&2
-  exit 2
-fi
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+"$SCRIPT_DIR/preflight.sh" --ensure >/dev/null
 
 case "$MODE" in
   code)
-    MODE_GUIDANCE="执行已经批准的实现方案。允许编辑任务边界内的文件。不要扩大范围；完成后报告改动文件、验证命令和未解决问题。"
-    PERMISSION_ARGS=(--permission-mode acceptEdits)
+    SANDBOX="workspace-write"
+    MODE_GUIDANCE="执行已经批准的实现方案。只编辑任务边界内的文件，保留无关改动，完成后运行要求的验证并报告改动文件。"
     ;;
   explore)
-    MODE_GUIDANCE="只做探索。禁止修改任何项目文件，也禁止通过 Bash 间接写文件。结论必须提供具体 file:line 证据。"
-    PERMISSION_ARGS=(--permission-mode default --disallowedTools Edit,Write,NotebookEdit)
+    SANDBOX="read-only"
+    MODE_GUIDANCE="只做探索。禁止修改文件；结论必须提供具体绝对路径和行号证据。"
     ;;
   test)
-    MODE_GUIDANCE="只运行测试和诊断命令。禁止修改项目文件或实现修复。报告完整命令、退出码和关键失败。"
-    PERMISSION_ARGS=(--permission-mode default --disallowedTools Edit,Write,NotebookEdit)
+    SANDBOX="workspace-write"
+    MODE_GUIDANCE="只运行测试和诊断命令。禁止修改源文件或实现修复；报告完整命令、退出码和关键失败。"
     ;;
   review)
-    MODE_GUIDANCE="只审查现有代码或 diff。禁止修改项目文件。只报告可操作问题，并提供具体 file:line、影响和理由。"
-    PERMISSION_ARGS=(--permission-mode default --disallowedTools Edit,Write,NotebookEdit)
+    SANDBOX="read-only"
+    MODE_GUIDANCE="只审查现有代码或 diff。禁止修改文件；只报告有证据的可操作问题。"
     ;;
 esac
 
-PROMPT="$MODE_GUIDANCE
+PROMPT="你是由 GLM 模型驱动的 Codex 子会话。直接使用本会话的 Codex 工具完成任务，不要启动 Claude、Kimi、OpenCode、其他 Codex 子进程或任何外部 agent runtime。
+
+$MODE_GUIDANCE
 
 任务:
 $TASK"
 
-USER_HOME="${HOME:?HOME 未设置}"
-WORKER_CONFIG="$USER_HOME/.claude-worker-glm"
-mkdir -p "$WORKER_CONFIG"
-chmod 700 "$WORKER_CONFIG"
-if [[ ! -f "$WORKER_CONFIG/.claude.json" ]]; then
-  cat > "$WORKER_CONFIG/.claude.json" <<'JSON'
-{
-  "hasCompletedOnboarding": true,
-  "penguinModeOrgEnabled": true,
-  "bypassPermissionsModeAccepted": true
-}
-JSON
-  chmod 600 "$WORKER_CONFIG/.claude.json"
-fi
+LOG_DIR="${GLM_LOG_DIR:-/Users/oklik/.codex/log/glm}"
+mkdir -p "$LOG_DIR"
+LOG_PATH="$LOG_DIR/$(date '+%Y%m%d-%H%M%S')-$MODE.log"
 
-LOG_DIR="${LLM_WORKER_LOG_DIR:-/tmp/codex-llm-logs}"
-if [[ -e "$LOG_DIR" || -L "$LOG_DIR" ]]; then
-  [[ ! -L "$LOG_DIR" ]] || { echo "错误: 日志目录是软链: $LOG_DIR" >&2; exit 2; }
-  [[ -d "$LOG_DIR" ]] || { echo "错误: 日志路径不是目录: $LOG_DIR" >&2; exit 2; }
-  [[ -O "$LOG_DIR" ]] || { echo "错误: 日志目录不属于当前用户: $LOG_DIR" >&2; exit 2; }
-else
-  mkdir -m 700 -p "$LOG_DIR"
-fi
-chmod 700 "$LOG_DIR"
-LATEST_LOG="$LOG_DIR/glm-latest.log"
-touch "$LATEST_LOG"
-chmod 600 "$LATEST_LOG"
-
-SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-WENV=(
-  "ANTHROPIC_BASE_URL=${GLM_BASE_URL:-https://open.bigmodel.cn/api/anthropic}"
-  "ANTHROPIC_AUTH_TOKEN=$API_KEY"
-  "ANTHROPIC_MODEL=$MODEL"
-  "ANTHROPIC_SMALL_FAST_MODEL=$SMALL_MODEL"
-  "CLAUDE_CODE_SUBAGENT_MODEL=$MODEL"
-  "ANTHROPIC_DEFAULT_OPUS_MODEL=$MODEL"
-  "ANTHROPIC_DEFAULT_SONNET_MODEL=$MODEL"
-  "ANTHROPIC_DEFAULT_HAIKU_MODEL=$SMALL_MODEL"
-)
-
-cd "$WORKDIR"
-echo "[worker] provider=glm mode=$MODE log=$LATEST_LOG" >&2
 set +e
-env -i \
-  HOME="$USER_HOME" \
-  PATH="$PATH" \
-  USER="${USER:-}" \
-  TERM="${TERM:-xterm-256color}" \
-  LANG="${LANG:-en_US.UTF-8}" \
-  CLAUDE_CONFIG_DIR="$WORKER_CONFIG" \
-  DISABLE_AUTOUPDATER=1 \
-  ENABLE_TOOL_SEARCH=0 \
-  CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1 \
-  CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \
-  API_TIMEOUT_MS=3000000 \
-  "${WENV[@]}" \
-  "$CLAUDE_BIN" \
-    --model "$MODEL" \
-    "${PERMISSION_ARGS[@]}" \
-    --add-dir "$WORKDIR" \
-    -p "$PROMPT" \
-    --output-format stream-json \
-    --verbose \
-  | python3 "$SELF_DIR/fmt.py" "$LATEST_LOG" "glm:$MODE" "$$"
-rc=${PIPESTATUS[0]}
+codex exec --json --ephemeral --skip-git-repo-check \
+  -C "$WORKDIR" \
+  -s "$SANDBOX" \
+  -m "glm-5.2" \
+  -c 'model_provider="glm-local"' \
+  -c 'model_catalog_json="/Users/oklik/.mimo2codex/models.json"' \
+  -c 'approval_policy="never"' \
+  "$PROMPT" 2>>"$LOG_PATH" | python3 "$SCRIPT_DIR/fmt.py" "$LOG_PATH" "glm:$MODE" "$$"
+STATUS=${PIPESTATUS[0]}
 set -e
-exit "$rc"
+exit "$STATUS"
