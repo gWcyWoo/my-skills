@@ -1,0 +1,7 @@
+{
+  "kind": "icp.p3-platform-package-architecture-approval.v1",
+  "schema_version": 1,
+  "path": "references/p3-platform-package-architecture.md",
+  "sha256": "cf801a06300491e7abc88bdf6269f54983d07bf14ed9e314b9c0ff028173a355",
+  "approved_change": "rename-cakp-to-cap"
+}

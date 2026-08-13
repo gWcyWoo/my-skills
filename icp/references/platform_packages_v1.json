@@ -1,0 +1,55 @@
+{
+  "kind": "icp.platform-packages-index.v1",
+  "schema_version": 1,
+  "packages": [
+    {
+      "platform_id": "android-java",
+      "profile_id": "android-java-standard",
+      "package_module_basename": "android_java_package_v1.py",
+      "package_module_sha256": "761a601f5aad2f402d11782ed618235b2085355a9ecdd3704728505206ffc411",
+      "package_descriptor_digest": "9ce553fd00b0ed34c47d2344bd9b717a20289bad903422c47158a40e9d6de80b"
+    },
+    {
+      "platform_id": "android-kotlin",
+      "profile_id": "android-kotlin-standard",
+      "package_module_basename": "android_kotlin_package_v1.py",
+      "package_module_sha256": "6862959eebeb1fa58145ad80cbd8ffa57b95764f515cad22c093e8a931a8b023",
+      "package_descriptor_digest": "b714074033958400c17bd246da67a2bf75bd77916ef1c0dc29a32cadc7184a65"
+    },
+    {
+      "platform_id": "flutter",
+      "profile_id": "flutter-standard",
+      "package_module_basename": "flutter_package_v1.py",
+      "package_module_sha256": "fd6e4230be6eeb5658ad5954f834f7ad455f64899f0c8633b8b0bef24d0b768f",
+      "package_descriptor_digest": "0a3d73a8079322545780ed8a88d418840c3796ec193cc5f6de0591a6c1bd46be"
+    },
+    {
+      "platform_id": "ios-objc",
+      "profile_id": "ios-objc-standard",
+      "package_module_basename": "ios_objc_package_v1.py",
+      "package_module_sha256": "a49c95211410afa5a379e24ece0ebc1793ea44ef2d74c150aa2eb70b7a51703d",
+      "package_descriptor_digest": "d807ffe410c63058602bcf5ad5f58ef53810ad00a93ce3def71d64b8e4e7fe01"
+    },
+    {
+      "platform_id": "ios-swift",
+      "profile_id": "ios-swift-standard",
+      "package_module_basename": "ios_swift_package_v1.py",
+      "package_module_sha256": "d2c74ef151c526afb9d09de794bcbe2b91d9e699c4dc4f9b577deb08c6c63a0e",
+      "package_descriptor_digest": "8e2284ffda027108d4011abb22926347451e14fd1c504264fb6e51901d980915"
+    },
+    {
+      "platform_id": "nextjs",
+      "profile_id": "nextjs-standard",
+      "package_module_basename": "nextjs_package_v1.py",
+      "package_module_sha256": "79f8307381ebecea55e1030ccb3809271650fdd09b15a195e3d572b401c7917f",
+      "package_descriptor_digest": "64d2f563846407df1b0e7a5f2f2daa4a38a186dcfd218ba84226e41755b67977"
+    },
+    {
+      "platform_id": "vue",
+      "profile_id": "vue-vite",
+      "package_module_basename": "vue_package_v1.py",
+      "package_module_sha256": "bdf6793f68186231abea9fd006687f3c1e949c221019b3ea0fba5b12f0721caa",
+      "package_descriptor_digest": "42231c0cd115a99175984255bbee9ed1bb6dd2055129350b234b98e69c5455d7"
+    }
+  ]
+}

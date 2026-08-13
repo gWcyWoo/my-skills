@@ -1,0 +1,3324 @@
+{
+  "counts": {
+    "required_registry_total": 111,
+    "scripts_in_required": 111,
+    "scripts_not_in_required": 54,
+    "scripts_total": 165
+  },
+  "kind": "iff-baseline-freeze",
+  "required_registry": [
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:14",
+      "name": "classify_design.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:15",
+      "name": "fetch.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:16",
+      "name": "write.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:17",
+      "name": "download_cover.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:18",
+      "name": "export_figma_scene.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:19",
+      "name": "export_tokens.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:20",
+      "name": "export_assets_manifest.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:21",
+      "name": "check_figma_scene.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:22",
+      "name": "check_design_artifacts.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:23",
+      "name": "group_figma_layout.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:24",
+      "name": "make_figma_layout_contract.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:25",
+      "name": "make_render_plan.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:26",
+      "name": "make_visual_fixture.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:27",
+      "name": "parse_interactions.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:28",
+      "name": "make_interaction_tests_plan.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:29",
+      "name": "check_implementation_plan.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:30",
+      "name": "check_implementation_map.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:31",
+      "name": "make_implementation_map.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:32",
+      "name": "copy_assets.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:33",
+      "name": "update_pubspec_assets.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:34",
+      "name": "prepare_assembly_packaging.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:35",
+      "name": "assembly_tdd_guard.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:36",
+      "name": "capture_runtime_screenshot.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:37",
+      "name": "check_capture_readiness.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:38",
+      "name": "select_runtime_device.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:39",
+      "name": "physical_device_preview.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:40",
+      "name": "validate_skill_structure.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:41",
+      "name": "visual_diff.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:42",
+      "name": "make_repair_plan.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:43",
+      "name": "visual_repair_budget.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:44",
+      "name": "check_visual_manifest.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:45",
+      "name": "check_fixture_source.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:46",
+      "name": "check_render_plan.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:47",
+      "name": "check_interaction_coverage.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:48",
+      "name": "selftest_check_interaction_coverage_adoption.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:49",
+      "name": "check_contract_artifacts.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:50",
+      "name": "make_worker_prompt.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:51",
+      "name": "selftest_contract_artifacts_gate.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:52",
+      "name": "selftest_contract_worker_anchor_gate.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:53",
+      "name": "make_shared_component_jobs.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:54",
+      "name": "prepare_shared_component_assets.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:55",
+      "name": "retire_stale_flutter_template_tests.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:56",
+      "name": "selftest_shared_component_pipeline.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:57",
+      "name": "check_worker_compliance.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:59",
+      "name": "reconcile_feature.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:60",
+      "name": "oas_ref_resource_cache.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:61",
+      "name": "selftest_oas_ref_resource_cache.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:62",
+      "name": "normalize_api_contract.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:63",
+      "name": "selftest_normalize_api_contract.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:64",
+      "name": "scope_api_contract.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:65",
+      "name": "selftest_feature_api_contract.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:66",
+      "name": "selftest_api_integration.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:67",
+      "name": "make_component_manifest.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:68",
+      "name": "bind_data_slots.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:69",
+      "name": "check_interaction_wiring.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:70",
+      "name": "check_interaction_completeness.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:71",
+      "name": "promote_interaction_rules.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:72",
+      "name": "selftest_interaction_contract_convergence.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:73",
+      "name": "selftest_interaction_source_provenance.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:74",
+      "name": "check_api_integration.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:77",
+      "name": "gen_layout_trace_test.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:78",
+      "name": "layout_trace_contract.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:79",
+      "name": "dynamic_content_contract.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:80",
+      "name": "check_render_fidelity.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:81",
+      "name": "selftest_render_fidelity_api_dynamic_content.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:82",
+      "name": "selftest_visual_diff_api_dynamic_content.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:83",
+      "name": "selftest_visual_diff_asset_descendant_mask.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:84",
+      "name": "selftest_render_fidelity_asset_real_defect.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:85",
+      "name": "selftest_layout_trace_expected_contract.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:86",
+      "name": "selftest_merge_shared_expected_strict.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:87",
+      "name": "check_responsive_layout.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:88",
+      "name": "selftest_responsive_layout_contract.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:89",
+      "name": "system_ui_filter.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:90",
+      "name": "selftest_system_ui_exclusion.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:91",
+      "name": "selftest_confirmed_design_exclusion.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:92",
+      "name": "prune_system_ui_components.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:93",
+      "name": "selftest_prune_system_ui_components.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:94",
+      "name": "selftest_component_bbox_adaptation.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:95",
+      "name": "selftest_generate_canvas_text_layout.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:98",
+      "name": "generate_canvas.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:99",
+      "name": "sync_project_rules.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:102",
+      "name": "detect_shared_components.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:103",
+      "name": "register_shared_component.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:104",
+      "name": "generate_shared_component_test.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:105",
+      "name": "merge_shared_expected.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:108",
+      "name": "device_lock.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:109",
+      "name": "summarize_spec_artifacts.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:110",
+      "name": "prefill_implementation_plan.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:111",
+      "name": "assembly_plan_batch.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:112",
+      "name": "assembly_completion.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:113",
+      "name": "assembly_worker_supervisor.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:114",
+      "name": "shared_worker_supervisor.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:115",
+      "name": "selftest_assembly_bounded_context.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:116",
+      "name": "selftest_assembly_completion_evidence.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:117",
+      "name": "selftest_assembly_worker_supervisor.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:118",
+      "name": "selftest_runtime_device_fallback.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:119",
+      "name": "selftest_capture_readiness.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:120",
+      "name": "selftest_capture_frame_stability.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:121",
+      "name": "selftest_assembly_runtime_device_contract.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:122",
+      "name": "selftest_shared_worker_supervisor.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:123",
+      "name": "selftest_assembly_plan_batch_apply.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:124",
+      "name": "selftest_assembly_plan_cli_contract.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:125",
+      "name": "selftest_assembly_worker_board_audits.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:128",
+      "name": "check_done_gate.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:129",
+      "name": "selftest_check_done_gate_real_defect_scope.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:130",
+      "name": "selftest_check_done_gate_adoption.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:131",
+      "name": "make_board_index.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:132",
+      "name": "resolve_interaction_anchors.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:133",
+      "name": "make_state_machine.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:134",
+      "name": "update_flow_graph.py"
+    },
+    {
+      "evidence": "iff/scripts/verify_pipeline_scripts.py:135",
+      "name": "make_journey_map.py"
+    }
+  ],
+  "schema_version": 1,
+  "scripts": [
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/assembly_worker_supervisor.py:108",
+        "iff/scripts/make_worker_prompt.py:398",
+        "iff/scripts/make_worker_prompt.py:556",
+        "iff/scripts/selftest_assembly_completion_evidence.py:118",
+        "iff/scripts/selftest_assembly_worker_supervisor.py:24",
+        "iff/scripts/verify_pipeline_scripts.py:112"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:112"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/assembly_completion.py",
+      "produces": [],
+      "sha256": "2a282f8b6fbb25f3d7d66bfe527eea95b62ed31279a12f8a46923a66b8a2d92a"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/make_worker_prompt.py:383",
+        "iff/scripts/selftest_assembly_bounded_context.py:249",
+        "iff/scripts/selftest_assembly_plan_batch_apply.py:58",
+        "iff/scripts/selftest_assembly_plan_batch_apply.py:83",
+        "iff/scripts/selftest_assembly_plan_cli_contract.py:13",
+        "iff/scripts/selftest_assembly_worker_board_audits.py:51",
+        "iff/scripts/verify_pipeline_scripts.py:111"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:111"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/assembly_plan_batch.py",
+      "produces": [],
+      "sha256": "04038121a20768921f534ecf58c0a5bd28feb5c0bf68bce5f84f3d13d489b337"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/make_worker_prompt.py:66",
+        "iff/scripts/make_worker_prompt.py:82",
+        "iff/scripts/make_worker_prompt.py:91"
+      ],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/assembly_shared_context.py",
+      "produces": [],
+      "sha256": "093ae742df023b381477e285a8f381a6a58e7cdf5fbe15c29a3d5ee11fedba0b"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/check_done_gate.py:39",
+        "iff/scripts/make_worker_prompt.py:413",
+        "iff/scripts/make_worker_prompt.py:420",
+        "iff/scripts/make_worker_prompt.py:430",
+        "iff/scripts/prepare_assembly_packaging.py:125",
+        "iff/scripts/prepare_assembly_packaging.py:149",
+        "iff/scripts/selftest_assembly_completion_evidence.py:162",
+        "iff/scripts/selftest_assembly_completion_evidence.py:55",
+        "iff/scripts/selftest_assembly_completion_evidence.py:95",
+        "iff/scripts/selftest_assembly_packaging_gate.py:21",
+        "iff/scripts/selftest_assembly_packaging_prompt_order.py:50",
+        "iff/scripts/selftest_assembly_packaging_prompt_order.py:53",
+        "iff/scripts/selftest_assembly_tdd_guard.py:23",
+        "iff/scripts/selftest_assembly_tdd_guard.py:97",
+        "iff/scripts/verify_pipeline_scripts.py:35"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:35"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/assembly_tdd_guard.py",
+      "produces": [],
+      "sha256": "38fe24b39e303c5cc1800693f45d3e1dff6cacf9651146f6c7c65692db7a8b72"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/make_worker_prompt.py:376",
+        "iff/scripts/make_worker_prompt.py:67",
+        "iff/scripts/selftest_assembly_worker_supervisor.py:23",
+        "iff/scripts/verify_pipeline_scripts.py:113"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:113"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/assembly_worker_supervisor.py",
+      "produces": [],
+      "sha256": "8819c2c88ab4a618861a1b96f74f27108cad5b0ffef0a4cb061ce5cafbe3d84d"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:68"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:68"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/bind_data_slots.py",
+      "produces": [],
+      "sha256": "9c7bbd995086bb4978e15dd9c414114ca7ebe5534af593261a26ff96eeb14102"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/selftest_capture_frame_stability.py:9",
+        "iff/scripts/selftest_runtime_device_fallback.py:123",
+        "iff/scripts/selftest_runtime_post_wipe_readiness.py:10",
+        "iff/scripts/selftest_runtime_reference_dimensions.py:13",
+        "iff/scripts/selftest_runtime_release_apk_capture.py:7",
+        "iff/scripts/verify_pipeline_scripts.py:36"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:36"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/capture_runtime_screenshot.py",
+      "produces": [],
+      "sha256": "dfa56f666ff6ee42576758e0ccfad9f114765f656873af80414455bfd13ee301"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/make_worker_prompt.py:481",
+        "iff/scripts/selftest_api_integration.py:114",
+        "iff/scripts/selftest_api_integration.py:132",
+        "iff/scripts/selftest_api_integration.py:191",
+        "iff/scripts/selftest_api_integration.py:88",
+        "iff/scripts/verify_pipeline_scripts.py:74"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:74"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/check_api_integration.py",
+      "produces": [],
+      "sha256": "8471ee12c03dc8c8c1859fcecf73c0505cf3ef080b3cc54dfddd24bfb875fc10"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/make_worker_prompt.py:504",
+        "iff/scripts/selftest_asset_resource_contract.py:4"
+      ],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/check_asset_resources.py",
+      "produces": [],
+      "sha256": "721f8eabb4156deb4286d9aaacdffed4c59ba6113b2e38de27f1cbe40e343d6e"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/make_worker_prompt.py:486",
+        "iff/scripts/selftest_capture_readiness.py:45",
+        "iff/scripts/verify_pipeline_scripts.py:37"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:37"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/check_capture_readiness.py",
+      "produces": [],
+      "sha256": "6e5fa4927ee167dcc2ebab060d4182119bcfee424f4155c1d85d6c488669fbb1"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/make_worker_prompt.py:355",
+        "iff/scripts/selftest_contract_artifacts_gate.py:87",
+        "iff/scripts/selftest_contract_worker_anchor_gate.py:62",
+        "iff/scripts/verify_pipeline_scripts.py:49"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:49"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/check_contract_artifacts.py",
+      "produces": [],
+      "sha256": "a5479d772361e707cb79490f65e099ed802615df3613e1ab281180ac4382bc7e"
+    },
+    {
+      "consumes": [
+        "iff/scripts/check_design_artifacts.py:118:raw.json",
+        "iff/scripts/check_design_artifacts.py:119:design_classification.json",
+        "iff/scripts/check_design_artifacts.py:120:scene.json",
+        "iff/scripts/check_design_artifacts.py:121:groups.json",
+        "iff/scripts/check_design_artifacts.py:122:assets_manifest.json",
+        "iff/scripts/check_design_artifacts.py:123:layout_contract.json",
+        "iff/scripts/check_design_artifacts.py:124:render_plan.json",
+        "iff/scripts/check_design_artifacts.py:126:reference.png"
+      ],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/assembly_plan_batch.py:79",
+        "iff/scripts/selftest_assembly_worker_board_audits.py:61",
+        "iff/scripts/verify_pipeline_scripts.py:22"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:22"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/check_design_artifacts.py",
+      "produces": [],
+      "sha256": "834e5d015bab549bf57d3ee2707c2eb55e623aea88b7640e5553075d624ad143"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/assembly_completion.py:88",
+        "iff/scripts/selftest_api_integration.py:10",
+        "iff/scripts/selftest_check_done_gate_adoption.py:31",
+        "iff/scripts/selftest_check_done_gate_dedup.py:13",
+        "iff/scripts/selftest_check_done_gate_real_defect_scope.py:18",
+        "iff/scripts/verify_pipeline_scripts.py:128"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:128"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/check_done_gate.py",
+      "produces": [],
+      "sha256": "6a4d8c5ac9afb0414508aeedc4c9054ba43ccd4271c40bed697e35ae7366b2bc"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:21"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:21"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/check_figma_scene.py",
+      "produces": [],
+      "sha256": "884d60060a02b02dfba43396035f1feb397b345465f94ef7fa3d253e677ba0fd"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/make_worker_prompt.py:518",
+        "iff/scripts/selftest_assembly_fixture_gate_order.py:53",
+        "iff/scripts/selftest_check_fixture_source_root_named_test.py:36",
+        "iff/scripts/verify_pipeline_scripts.py:45"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:45"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/check_fixture_source.py",
+      "produces": [],
+      "sha256": "aeec5e45cbd40789e45e7a22605196e05377365d87935ac991333fe33a4b7af4"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/assembly_plan_batch.py:94",
+        "iff/scripts/make_implementation_map.py:12",
+        "iff/scripts/make_worker_prompt.py:308",
+        "iff/scripts/selftest_board_worker_implementation_map_handoff.py:148",
+        "iff/scripts/selftest_board_worker_implementation_map_handoff.py:61",
+        "iff/scripts/verify_pipeline_scripts.py:30"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:30"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/check_implementation_map.py",
+      "produces": [],
+      "sha256": "63ecdd0a29e368fa06debf271e4c3c9def25900a3d802402652e09e0bc0aadd1"
+    },
+    {
+      "consumes": [
+        "iff/scripts/check_implementation_plan.py:199:scene.json",
+        "iff/scripts/check_implementation_plan.py:51:design_classification.json",
+        "iff/scripts/check_implementation_plan.py:60:groups.json",
+        "iff/scripts/check_implementation_plan.py:90:render_plan.json"
+      ],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/assembly_plan_batch.py:206",
+        "iff/scripts/verify_pipeline_scripts.py:29"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:29"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/check_implementation_plan.py",
+      "produces": [],
+      "sha256": "aaf8888d740b38d6ee62c7767e05b6b9d1ff8fc2ac258efce3e644ab5770630f"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/make_worker_prompt.py:352",
+        "iff/scripts/promote_interaction_rules.py:20",
+        "iff/scripts/promote_interaction_rules.py:24",
+        "iff/scripts/selftest_interaction_contract_convergence.py:15",
+        "iff/scripts/selftest_interaction_contract_convergence.py:172",
+        "iff/scripts/selftest_interaction_contract_convergence.py:175",
+        "iff/scripts/selftest_interaction_source_provenance.py:10",
+        "iff/scripts/verify_pipeline_scripts.py:70"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:70"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/check_interaction_completeness.py",
+      "produces": [],
+      "sha256": "7405ecc9b13baacaeb67fa36f21d6175fad0628fc842d05f780d65c136ee2750"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/selftest_check_interaction_coverage_adoption.py:4",
+        "iff/scripts/verify_pipeline_scripts.py:47"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:47"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/check_interaction_coverage.py",
+      "produces": [],
+      "sha256": "e1b041d25d4416eb9add68df11c725f12a51b1477a8169ed4b77771d2b1639bb"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:69"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:69"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/check_interaction_wiring.py",
+      "produces": [],
+      "sha256": "559e51f36fbc7e5c0021954c95ec4acc34ad01f309cac40ec3c8d98889103c59"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/selftest_canvas.py:109",
+        "iff/scripts/selftest_layout_trace_expected_contract.py:72",
+        "iff/scripts/selftest_render_fidelity_api_dynamic_content.py:29",
+        "iff/scripts/selftest_render_fidelity_asset_real_defect.py:32",
+        "iff/scripts/selftest_render_fidelity_trace_gate.py:43",
+        "iff/scripts/verify_pipeline_scripts.py:80"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:80"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/check_render_fidelity.py",
+      "produces": [],
+      "sha256": "18bbd6d9327c4fdd8ac4138088800424698eea1a8c31a375b5221444dc81c9d8"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/selftest_check_render_plan_paint_source.py:9",
+        "iff/scripts/selftest_reference_region_fallback.py:156",
+        "iff/scripts/selftest_reference_region_fallback.py:165",
+        "iff/scripts/selftest_shared_component_pipeline.py:146",
+        "iff/scripts/selftest_shared_component_pipeline.py:195",
+        "iff/scripts/selftest_system_ui_exclusion.py:20",
+        "iff/scripts/shared_worker_supervisor.py:243",
+        "iff/scripts/verify_pipeline_scripts.py:46"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:46"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/check_render_plan.py",
+      "produces": [],
+      "sha256": "b8994ca15cf3bdef6d56423196f1cf3be8618da4500c1f1a000a6f84d7493196"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/check_done_gate.py:41",
+        "iff/scripts/make_worker_prompt.py:516",
+        "iff/scripts/selftest_responsive_layout_contract.py:111",
+        "iff/scripts/selftest_responsive_layout_contract.py:89",
+        "iff/scripts/selftest_responsive_layout_contract.py:99",
+        "iff/scripts/verify_pipeline_scripts.py:87"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:87"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/check_responsive_layout.py",
+      "produces": [],
+      "sha256": "bf586a96f189e948834dd7f8db4af3874884833d09fe75ce47550c7fa966ee7f"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:44"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:44"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/check_visual_manifest.py",
+      "produces": [],
+      "sha256": "af53b4383550ccc3fe6face041be51f67357cb5490635f8c6058fd0295542424"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/make_worker_prompt.py:134",
+        "iff/scripts/make_worker_prompt.py:209",
+        "iff/scripts/make_worker_prompt.py:217",
+        "iff/scripts/make_worker_prompt.py:218",
+        "iff/scripts/selftest_shared_worker_compliance_writer.py:140",
+        "iff/scripts/selftest_shared_worker_compliance_writer.py:40",
+        "iff/scripts/selftest_shared_worker_compliance_writer.py:92",
+        "iff/scripts/verify_pipeline_scripts.py:57"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:57"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/check_worker_compliance.py",
+      "produces": [],
+      "sha256": "adad45e890341e5497d0bf08ef9717565e0b8872eef37750cd953bd81124b773"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/classify_blocker.py",
+      "produces": [],
+      "sha256": "9e8547b3034d43020133bd3a30d0d932fcd210cecba13726d2741aaeb36b25bb"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:14"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:14"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/classify_design.py",
+      "produces": [],
+      "sha256": "09118ea0c67b93e771de0df2f235065e9bcebea025bf30ae64846119a9f81be6"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/check_design_artifacts.py:10",
+        "iff/scripts/check_done_gate.py:37",
+        "iff/scripts/check_figma_scene.py:8",
+        "iff/scripts/check_implementation_map.py:9",
+        "iff/scripts/check_implementation_plan.py:10",
+        "iff/scripts/check_interaction_coverage.py:9",
+        "iff/scripts/check_render_plan.py:8",
+        "iff/scripts/check_visual_manifest.py:10",
+        "iff/scripts/check_worker_compliance.py:11",
+        "iff/scripts/classify_design.py:9",
+        "iff/scripts/copy_assets.py:10",
+        "iff/scripts/detect_shared_components.py:27",
+        "iff/scripts/download_cover.py:12",
+        "iff/scripts/export_assets_manifest.py:11",
+        "iff/scripts/export_figma_scene.py:12",
+        "iff/scripts/export_tokens.py:8",
+        "iff/scripts/group_figma_layout.py:9",
+        "iff/scripts/make_board_index.py:16",
+        "iff/scripts/make_figma_layout_contract.py:9",
+        "iff/scripts/make_interaction_tests_plan.py:8",
+        "iff/scripts/make_journey_map.py:15",
+        "iff/scripts/make_render_plan.py:9",
+        "iff/scripts/make_repair_plan.py:12",
+        "iff/scripts/make_shared_component_jobs.py:10",
+        "iff/scripts/make_state_machine.py:23",
+        "iff/scripts/merge_shared_expected.py:21",
+        "iff/scripts/parse_interactions.py:10",
+        "iff/scripts/prefill_implementation_plan.py:16",
+        "iff/scripts/prepare_shared_component_assets.py:12",
+        "iff/scripts/register_shared_component.py:17",
+        "iff/scripts/resolve_interaction_anchors.py:27",
+        "iff/scripts/retire_stale_flutter_template_tests.py:9",
+        "iff/scripts/selftest_shared_worker_compliance_writer.py:41",
+        "iff/scripts/summarize_spec_artifacts.py:19",
+        "iff/scripts/update_flow_graph.py:20",
+        "iff/scripts/visual_diff.py:14"
+      ],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/common.py",
+      "produces": [],
+      "sha256": "afbcc3f876497090572e948121de1a154a9991a50359a8399886649a493b4124"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:32"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:32"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/copy_assets.py",
+      "produces": [
+        "iff/scripts/copy_assets.py:60:manifest.json"
+      ],
+      "sha256": "deb2c092da980d40279ab8b7dd2ccdfb1e5299e4f13efd081e4eefb20f4c4402"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/selftest_csv_row_status.py:10"
+      ],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/csv_row_status.py",
+      "produces": [],
+      "sha256": "d5a1f418694d002335671694c8fa419368b36919f168cfd93a33b3c2479105ae"
+    },
+    {
+      "consumes": [
+        "iff/scripts/detect_shared_components.py:207:scene.json",
+        "iff/scripts/detect_shared_components.py:208:groups.json",
+        "iff/scripts/detect_shared_components.py:209:assets_manifest.json"
+      ],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/selftest_component_bbox_adaptation.py:15",
+        "iff/scripts/selftest_component_bbox_adaptation.py:60",
+        "iff/scripts/selftest_detect_shared_component_asset_coverage.py:21",
+        "iff/scripts/verify_pipeline_scripts.py:102"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:102"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/detect_shared_components.py",
+      "produces": [],
+      "sha256": "8cd87eb1a8cf69587c4c22a83db5c76e2e468f2d166123a708cd57d9dd547feb"
+    },
+    {
+      "consumes": [
+        "iff/scripts/device_lock.py:39:owner.json"
+      ],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:108"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:108"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/device_lock.py",
+      "produces": [
+        "iff/scripts/device_lock.py:50:owner.json",
+        "iff/scripts/device_lock.py:80:owner.json"
+      ],
+      "sha256": "20c4786c78347ff09d3c67d7c901b3ba119c741c437ea6d9bd6a7d0b9115175d"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:17"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:17"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/download_cover.py",
+      "produces": [],
+      "sha256": "ce77d70613738750a854db8874bcf1ca50e2c88f977c9a98741183967407f4ff"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/check_render_fidelity.py:35",
+        "iff/scripts/verify_pipeline_scripts.py:79",
+        "iff/scripts/visual_diff.py:12"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:79"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/dynamic_content_contract.py",
+      "produces": [],
+      "sha256": "8e95222b5378eb2d74d3c09fa08221805b740c6c38360c97b9e441493f738253"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/selftest_export_assets_vector_priority.py:12",
+        "iff/scripts/selftest_export_assets_vector_priority.py:58",
+        "iff/scripts/verify_pipeline_scripts.py:20"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:20"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/export_assets_manifest.py",
+      "produces": [],
+      "sha256": "e868a433acb8759ad1b8cf321a1c964c8410af7fc711bd24c5e7e1320f9bc70a"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/selftest_export_figma_scene_real_frame.py:2",
+        "iff/scripts/selftest_system_ui_exclusion.py:18",
+        "iff/scripts/verify_pipeline_scripts.py:18"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:18"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/export_figma_scene.py",
+      "produces": [],
+      "sha256": "ffcdfb8a22ecdf1d69e68fa14b6fc0af76bf8a4d174d5105d8aa86ef98221b99"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:19"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:19"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/export_tokens.py",
+      "produces": [],
+      "sha256": "d29ba55da18a7252204c2242382db8e72dc4b6f5b329eabb70b1a98417445d59"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/download_cover.py:11",
+        "iff/scripts/make_worker_prompt.py:259",
+        "iff/scripts/selftest_fetch_worker_feature_parent_dir.py:73",
+        "iff/scripts/selftest_fetch_worker_feature_parent_dir.py:85",
+        "iff/scripts/verify_pipeline_scripts.py:15"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:15"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/fetch.py",
+      "produces": [],
+      "sha256": "7cba730ba2a32c593d8a5b89a0cfd50321a55b4a53004a8b5a5cd87d28e579ac"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/make_worker_prompt.py:516",
+        "iff/scripts/selftest_canvas.py:85",
+        "iff/scripts/selftest_layout_trace_expected_contract.py:49",
+        "iff/scripts/selftest_responsive_layout_contract.py:46",
+        "iff/scripts/verify_pipeline_scripts.py:77"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:77"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/gen_layout_trace_test.py",
+      "produces": [],
+      "sha256": "fc14a600f697dfb12f47a57256e98c8761c0bf8c5b0d1659ebc88014f07d2ca3"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/selftest_canvas.py:74",
+        "iff/scripts/selftest_canvas_empty_colors.py:42",
+        "iff/scripts/selftest_canvas_output_directories.py:24",
+        "iff/scripts/selftest_canvas_rotation_aabb.py:4",
+        "iff/scripts/selftest_generate_canvas_logical_375.py:10",
+        "iff/scripts/selftest_generate_canvas_logical_375.py:63",
+        "iff/scripts/selftest_generate_canvas_text_layout.py:12",
+        "iff/scripts/selftest_shared_component_root_coordinates.py:173",
+        "iff/scripts/verify_pipeline_scripts.py:98"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:98"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/generate_canvas.py",
+      "produces": [],
+      "sha256": "a1d4e5c689e46790b5de8a8f2133f1f8c93f799cee73d5684b2ffce2e77236af"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/make_worker_prompt.py:178",
+        "iff/scripts/selftest_shared_component_prompt_isolation.py:110",
+        "iff/scripts/selftest_shared_component_test_import.py:25",
+        "iff/scripts/verify_pipeline_scripts.py:104"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:104"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/generate_shared_component_test.py",
+      "produces": [],
+      "sha256": "76d9cad7a8ebd0944377a8bca2f6db15c8ab4217e54c9dfcfeb61058305c7e4a"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:23"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:23"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/group_figma_layout.py",
+      "produces": [],
+      "sha256": "4765158a98491830e0e025cb89b2496cb54f06bc8d81c2647a7b6363681f6026"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/assembly_tdd_guard.py:16",
+        "iff/scripts/check_done_gate.py:40",
+        "iff/scripts/check_render_fidelity.py:34",
+        "iff/scripts/make_repair_plan.py:13",
+        "iff/scripts/verify_pipeline_scripts.py:78"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:78"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/layout_trace_contract.py",
+      "produces": [],
+      "sha256": "14301b98886b46c35e238bd9117b5826583e6689134e4b4a27cc32ccc657f56d"
+    },
+    {
+      "consumes": [
+        "iff/scripts/make_board_index.py:37:groups.json"
+      ],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:131"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:131"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/make_board_index.py",
+      "produces": [],
+      "sha256": "fdcc7085787fc155fcae3616a912f7b5142c963d9910699106559abb383e56d6"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/selftest_shared_component_root_coordinates.py:164",
+        "iff/scripts/verify_pipeline_scripts.py:67"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:67"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/make_component_manifest.py",
+      "produces": [],
+      "sha256": "6f45b79eed24a663c44d2951eb0f853e85e19cd6a33cae3ecbcdfe4e51428aa4"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/make_evolution_prompt.py",
+      "produces": [],
+      "sha256": "486b9baf977336b7e908c8f2d1b31193d127a58890e559c6af8a50cdd2e571b6"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/selftest_shared_component_root_coordinates.py:129",
+        "iff/scripts/verify_pipeline_scripts.py:24"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:24"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/make_figma_layout_contract.py",
+      "produces": [],
+      "sha256": "f96b800b18e704fc08cc269f7b3bc4c33fde9c2e53e52d80a7fbabbc18b02a91"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/make_worker_prompt.py:308",
+        "iff/scripts/selftest_board_worker_implementation_map_handoff.py:131",
+        "iff/scripts/selftest_board_worker_implementation_map_handoff.py:56",
+        "iff/scripts/selftest_board_worker_implementation_map_handoff.py:90",
+        "iff/scripts/verify_pipeline_scripts.py:31"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:31"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/make_implementation_map.py",
+      "produces": [],
+      "sha256": "322501cdb9355f2a679106a7ec41a1ed25b946f68472970bd935ddc8b9996322"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/make_worker_prompt.py:351",
+        "iff/scripts/selftest_interaction_contract_convergence.py:16",
+        "iff/scripts/selftest_interaction_contract_convergence.py:174",
+        "iff/scripts/selftest_interaction_contract_convergence.py:175",
+        "iff/scripts/verify_pipeline_scripts.py:28"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:28"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/make_interaction_tests_plan.py",
+      "produces": [],
+      "sha256": "de97f44854a59891ab7c51dffe5120138fc6c9ab7db29dd4bde5513db6027bd5"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:135"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:135"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/make_journey_map.py",
+      "produces": [],
+      "sha256": "4737a97fd2d3bf38649cad85b5140c4ba30107384734bb0a27c83a41666a62d5"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/selftest_reference_region_fallback.py:110",
+        "iff/scripts/selftest_render_plan_root_asset.py:29",
+        "iff/scripts/selftest_shared_component_root_coordinates.py:138",
+        "iff/scripts/selftest_system_ui_exclusion.py:19",
+        "iff/scripts/verify_pipeline_scripts.py:25"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:25"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/make_render_plan.py",
+      "produces": [],
+      "sha256": "5d07657e8bae75db87cec141f95cbc14ee2d3aaa98ec85513eaf12ca72c8846a"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/selftest_repair_actionability_budget_v2.py:10",
+        "iff/scripts/selftest_repair_plan_composite_actionability.py:2",
+        "iff/scripts/selftest_repair_plan_source_bound_retry.py:2",
+        "iff/scripts/selftest_repair_plan_trace_gate.py:39",
+        "iff/scripts/selftest_visual_repair_budget.py:10",
+        "iff/scripts/verify_pipeline_scripts.py:42",
+        "iff/scripts/visual_repair_budget.py:11"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:42"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/make_repair_plan.py",
+      "produces": [],
+      "sha256": "0e9f9bc079ba62e6811ab6193a931b7784791eca2a290aade89ad7a166612874"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/selftest_shared_component_pipeline.py:101",
+        "iff/scripts/selftest_shared_component_prompt_isolation.py:69",
+        "iff/scripts/verify_pipeline_scripts.py:53"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:53"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/make_shared_component_jobs.py",
+      "produces": [
+        "iff/scripts/make_shared_component_jobs.py:111:jobs.json"
+      ],
+      "sha256": "e5553ce1047e061613b54bfe7015b32ec33c48198fe57d4590efc767df280ec2"
+    },
+    {
+      "consumes": [
+        "iff/scripts/make_state_machine.py:60:design_classification.json",
+        "iff/scripts/make_state_machine.py:66:shared_components.local.json"
+      ],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:133"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:133"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/make_state_machine.py",
+      "produces": [],
+      "sha256": "56c71459f030132223250cdd1541975706e39b9ad1f374458dedd5ed644b29ce"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/selftest_status_bar_policy.py:31"
+      ],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/make_status_bar_policy.py",
+      "produces": [],
+      "sha256": "9445ca003d248986243f46ffbeac077193e0e32c324338fb7a1e6140c1534abf"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:26"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:26"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/make_visual_fixture.py",
+      "produces": [],
+      "sha256": "84982d5034805995f7edac6f1117477023efd97c4bd688b01a62404d38f16a5d"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/selftest_assembly_bounded_context.py:101",
+        "iff/scripts/selftest_assembly_bounded_context.py:216",
+        "iff/scripts/selftest_assembly_fixture_gate_order.py:26",
+        "iff/scripts/selftest_assembly_fixture_runtime_target.py:37",
+        "iff/scripts/selftest_assembly_packaging_prompt_order.py:29",
+        "iff/scripts/selftest_assembly_plan_cli_contract.py:27",
+        "iff/scripts/selftest_assembly_runtime_device_contract.py:25",
+        "iff/scripts/selftest_assembly_visual_repair_contract.py:27",
+        "iff/scripts/selftest_assembly_worker_board_audits.py:30",
+        "iff/scripts/selftest_board_worker_canvas_generation_order.py:38",
+        "iff/scripts/selftest_board_worker_colors_isolation.py:25",
+        "iff/scripts/selftest_board_worker_feature_output_root.py:47",
+        "iff/scripts/selftest_board_worker_implementation_map_handoff.py:34",
+        "iff/scripts/selftest_contract_worker_anchor_gate.py:28",
+        "iff/scripts/selftest_contract_worker_oas_command.py:27",
+        "iff/scripts/selftest_feature_api_contract.py:258",
+        "iff/scripts/selftest_fetch_worker_external_blocker_contract.py:31",
+        "iff/scripts/selftest_fetch_worker_feature_parent_dir.py:44",
+        "iff/scripts/selftest_interaction_contract_convergence.py:17",
+        "iff/scripts/selftest_shared_component_pipeline.py:130",
+        "iff/scripts/selftest_shared_component_prompt_isolation.py:86",
+        "iff/scripts/selftest_shared_worker_compliance_writer.py:71",
+        "iff/scripts/selftest_shared_worker_supervisor.py:127",
+        "iff/scripts/verify_pipeline_scripts.py:50"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:50"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/make_worker_prompt.py",
+      "produces": [],
+      "sha256": "8038a3bcc297034301c548d3f475b2481e05e2cf8589de201b3a1ef17c2d1489"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/make_worker_prompt.py:307",
+        "iff/scripts/selftest_component_bbox_adaptation.py:88",
+        "iff/scripts/selftest_merge_shared_expected_strict.py:38",
+        "iff/scripts/verify_pipeline_scripts.py:105"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:105"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/merge_shared_expected.py",
+      "produces": [],
+      "sha256": "9c0741139c89c0e140e8272863222250bd212d878a30b3eb0f4a1258ee2c343a"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/make_worker_prompt.py:347",
+        "iff/scripts/selftest_feature_api_contract.py:67",
+        "iff/scripts/selftest_normalize_api_contract.py:13",
+        "iff/scripts/verify_pipeline_scripts.py:62"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:62"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/normalize_api_contract.py",
+      "produces": [],
+      "sha256": "73157a0d4fd708b94ca35e6337297cd8a9204bea60d39b797ea0b1218f728add"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/make_worker_prompt.py:345",
+        "iff/scripts/selftest_contract_worker_oas_command.py:47",
+        "iff/scripts/selftest_oas_ref_resource_cache.py:13",
+        "iff/scripts/verify_pipeline_scripts.py:60"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:60"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/oas_ref_resource_cache.py",
+      "produces": [],
+      "sha256": "303398a2b4aeb3b5b4a07a1df484ae5873208c79b29119fdf5dfea361845774e"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/open_pr.py",
+      "produces": [],
+      "sha256": "5fbf73458ecbd0586483843a1a5af580965131ecf099abd136a9ee0735e5d833"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/make_worker_prompt.py:335",
+        "iff/scripts/promote_interaction_rules.py:21",
+        "iff/scripts/selftest_interaction_contract_convergence.py:14",
+        "iff/scripts/verify_pipeline_scripts.py:27"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:27"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/parse_interactions.py",
+      "produces": [],
+      "sha256": "d8dcecb41be913038ac419c49df4dc167880168e848f4ae61c5575b1c1288b84"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/selftest_physical_device_preview.py:10",
+        "iff/scripts/verify_pipeline_scripts.py:39"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:39"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/physical_device_preview.py",
+      "produces": [],
+      "sha256": "e3f3ed303afe2ac2582a4f085e4dcc72116e43bc073d8ec105449c761127e9a7"
+    },
+    {
+      "consumes": [
+        "iff/scripts/prefill_implementation_plan.py:47:render_plan.json",
+        "iff/scripts/prefill_implementation_plan.py:48:layout_contract.json"
+      ],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/assembly_plan_batch.py:83",
+        "iff/scripts/selftest_assembly_completion_evidence.py:52",
+        "iff/scripts/selftest_assembly_plan_batch_apply.py:35",
+        "iff/scripts/verify_pipeline_scripts.py:110"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:110"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/prefill_implementation_plan.py",
+      "produces": [],
+      "sha256": "98f1493cb377d85c4bae4ce1c3102177caca4fa3b170df5173fc8ed97d78d4aa"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/assembly_tdd_guard.py:17",
+        "iff/scripts/check_done_gate.py:38",
+        "iff/scripts/make_worker_prompt.py:404",
+        "iff/scripts/selftest_assembly_completion_evidence.py:78",
+        "iff/scripts/selftest_assembly_packaging_gate.py:20",
+        "iff/scripts/selftest_assembly_packaging_prompt_order.py:51",
+        "iff/scripts/selftest_assembly_tdd_guard.py:24",
+        "iff/scripts/verify_pipeline_scripts.py:34"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:34"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/prepare_assembly_packaging.py",
+      "produces": [],
+      "sha256": "9c08fd55affb65361056cde2897869cdb0b5a915324dc6e5a859ad9788074409"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/selftest_reference_region_fallback.py:128",
+        "iff/scripts/selftest_reference_region_fallback.py:198",
+        "iff/scripts/selftest_shared_component_pipeline.py:177",
+        "iff/scripts/selftest_shared_component_root_coordinates.py:151",
+        "iff/scripts/verify_pipeline_scripts.py:54"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:54"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/prepare_shared_component_assets.py",
+      "produces": [],
+      "sha256": "c04c740cac0bceb4bd63a17f55b1f2772ad5dc7cf3e8297e2eb527f41b0e3418"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/make_worker_prompt.py:336",
+        "iff/scripts/selftest_interaction_contract_convergence.py:168",
+        "iff/scripts/selftest_interaction_contract_convergence.py:174",
+        "iff/scripts/selftest_interaction_contract_convergence.py:18",
+        "iff/scripts/verify_pipeline_scripts.py:71"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:71"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/promote_interaction_rules.py",
+      "produces": [],
+      "sha256": "f6f10ada0cf402b2ee5ce9797bf8468ecbfcc7ab38dd61aea9f388dba1fa3ef7"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/selftest_prune_system_ui_components.py:19",
+        "iff/scripts/verify_pipeline_scripts.py:92"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:92"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/prune_system_ui_components.py",
+      "produces": [],
+      "sha256": "2da390091cda36787bf451e1ca083c1290fe02b6c228e53aaaabec18303dc761"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:59"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:59"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/reconcile_feature.py",
+      "produces": [],
+      "sha256": "a63ea275cf944b12753ce6e90c54ef8ba84e4419315f3152c3091f548f9443ea"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:103"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:103"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/register_shared_component.py",
+      "produces": [],
+      "sha256": "da45bc2a3bcac7bae3d2ef60620055b379d1cbea89e97bf788eb76db886b816c"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/check_contract_artifacts.py:145",
+        "iff/scripts/make_worker_prompt.py:340",
+        "iff/scripts/make_worker_prompt.py:342",
+        "iff/scripts/selftest_contract_worker_anchor_gate.py:48",
+        "iff/scripts/verify_pipeline_scripts.py:132"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:132"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/resolve_interaction_anchors.py",
+      "produces": [],
+      "sha256": "d39acfd27c0c01d018371857fc85341faca8740635c3f2b69149bc1c42df8cb0"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/selftest_retire_stale_flutter_template_tests.py:53",
+        "iff/scripts/verify_pipeline_scripts.py:55"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:55"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/retire_stale_flutter_template_tests.py",
+      "produces": [],
+      "sha256": "0de0c525df18e5af19e0030b9fbadd433ee43297d94c1639a47a7dce797f01fe"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/check_api_integration.py:18",
+        "iff/scripts/check_contract_artifacts.py:10",
+        "iff/scripts/check_done_gate.py:42",
+        "iff/scripts/make_worker_prompt.py:349",
+        "iff/scripts/selftest_api_integration.py:172",
+        "iff/scripts/selftest_api_integration.py:63",
+        "iff/scripts/selftest_assembly_worker_supervisor.py:14",
+        "iff/scripts/selftest_contract_artifacts_gate.py:64",
+        "iff/scripts/selftest_feature_api_contract.py:129",
+        "iff/scripts/selftest_feature_api_contract.py:165",
+        "iff/scripts/selftest_feature_api_contract.py:190",
+        "iff/scripts/selftest_feature_api_contract.py:215",
+        "iff/scripts/selftest_feature_api_contract.py:236",
+        "iff/scripts/selftest_feature_api_contract.py:275",
+        "iff/scripts/selftest_feature_api_contract.py:85",
+        "iff/scripts/verify_pipeline_scripts.py:64"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:64"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/scope_api_contract.py",
+      "produces": [],
+      "sha256": "b44c550958a6180ef6c1ed8bd643eee4fb01e35a67df773289453bb65c786df8"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/capture_runtime_screenshot.py:19",
+        "iff/scripts/make_worker_prompt.py:487",
+        "iff/scripts/selftest_runtime_device_fallback.py:21",
+        "iff/scripts/selftest_runtime_post_wipe_readiness.py:11",
+        "iff/scripts/verify_pipeline_scripts.py:38"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:38"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/select_runtime_device.py",
+      "produces": [],
+      "sha256": "3521483fa8281b3f765ae7eeed5a1edfe155e9c9577198fbd5c0b45911c1899d"
+    },
+    {
+      "consumes": [
+        "iff/scripts/selftest_api_integration.py:144:missing_report.json"
+      ],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:66"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:66"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_api_integration.py",
+      "produces": [],
+      "sha256": "c2dbbc44d595e3db0b440a69d3fb1ed60b6eeeac87f665f2968491433ee08b7e"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:115"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:115"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_assembly_bounded_context.py",
+      "produces": [
+        "iff/scripts/selftest_assembly_bounded_context.py:70:shared_components.local.json"
+      ],
+      "sha256": "d648f4c502836bb8f05783dbe23a68785f991982abacf77ff561c65e8a670bfb"
+    },
+    {
+      "consumes": [
+        "iff/scripts/selftest_assembly_completion_evidence.py:189:interaction_test_evidence.json"
+      ],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/selftest_assembly_worker_supervisor.py:13",
+        "iff/scripts/verify_pipeline_scripts.py:116"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:116"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_assembly_completion_evidence.py",
+      "produces": [
+        "iff/scripts/selftest_assembly_completion_evidence.py:26:board_a_canvas.dart",
+        "iff/scripts/selftest_assembly_completion_evidence.py:34:feature_test.dart",
+        "iff/scripts/selftest_assembly_completion_evidence.py:73:actual.png"
+      ],
+      "sha256": "47fe48545de9bb4e7571931080c23150d34a5ced50b791a0ff05fe7b11ef9073"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_assembly_fixture_gate_order.py",
+      "produces": [],
+      "sha256": "bb5b1c340a60ab9db8151e4b72d8d655602cec958281b4e67833e817091465d1"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_assembly_fixture_runtime_target.py",
+      "produces": [],
+      "sha256": "58f3ab6c514adda542edd75274587d91d40e1d544f75821d7bf93ba4034b6ce9"
+    },
+    {
+      "consumes": [
+        "iff/scripts/selftest_assembly_packaging_gate.py:97:SFProText.ttf"
+      ],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_assembly_packaging_gate.py",
+      "produces": [
+        "iff/scripts/selftest_assembly_packaging_gate.py:31:a.png",
+        "iff/scripts/selftest_assembly_packaging_gate.py:32:b.png",
+        "iff/scripts/selftest_assembly_packaging_gate.py:33:board_a_canvas.dart",
+        "iff/scripts/selftest_assembly_packaging_gate.py:39:board_b_canvas.dart",
+        "iff/scripts/selftest_assembly_packaging_gate.py:54:home_test.dart"
+      ],
+      "sha256": "1fef9d34c3d2b55b09a0c0dcca353ebca3b3e5d96ba4d2e50330faf1a2908d85"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_assembly_packaging_prompt_order.py",
+      "produces": [],
+      "sha256": "25a80472f58a0596819dd008adda1e42189a7f2a53ba281586e98459d70fd998"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:123"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:123"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_assembly_plan_batch_apply.py",
+      "produces": [],
+      "sha256": "9986e0162fd646606b1b44d8cae998992b0dcf30e9f4fb8b600d13654375a5a8"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:124"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:124"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_assembly_plan_cli_contract.py",
+      "produces": [],
+      "sha256": "537e0339fcc58bb4bc3d6c9ce30d7493771f032a72bff1a416e19e4bd95d4eff"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:121"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:121"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_assembly_runtime_device_contract.py",
+      "produces": [],
+      "sha256": "35a627c524bb3531aa7a51a4e730a448705e9ab21d57175a4f0fe0258dc77baf"
+    },
+    {
+      "consumes": [
+        "iff/scripts/selftest_assembly_tdd_guard.py:199:interaction_test_evidence.json"
+      ],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_assembly_tdd_guard.py",
+      "produces": [
+        "iff/scripts/selftest_assembly_tdd_guard.py:31:home_canvas.dart",
+        "iff/scripts/selftest_assembly_tdd_guard.py:37:home_test.dart",
+        "iff/scripts/selftest_assembly_tdd_guard.py:40:interaction_test_plan.json",
+        "iff/scripts/selftest_assembly_tdd_guard.py:72:interaction_test_evidence.json"
+      ],
+      "sha256": "4682901f1549e76856f2707da9f18ddd99c52d0a42db05315abffe02abb32280"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_assembly_visual_repair_contract.py",
+      "produces": [],
+      "sha256": "aaedcbfa77664dc11f1efff512afda460a33e776022e85792056894c0c90f883"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:125"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:125"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_assembly_worker_board_audits.py",
+      "produces": [],
+      "sha256": "23a2176cf208d3b4ae3efb1dd119a9e9d560fea5c70ee96cbf590ad16f0c04ba"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:117"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:117"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_assembly_worker_supervisor.py",
+      "produces": [
+        "iff/scripts/selftest_assembly_worker_supervisor.py:66:api_integration_report.json"
+      ],
+      "sha256": "f0273afc464f39d363080d15d16094a87c7db5ef6ffb5d7dd5c2c1cce0600ffd"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_asset_resource_contract.py",
+      "produces": [],
+      "sha256": "a8da60dc87fbcdfc9c4cff3cb498f68e609f89a9e09dc837dbb19784f690e510"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_board_worker_canvas_generation_order.py",
+      "produces": [],
+      "sha256": "67f243ccadfa481d7287c9044673f9784cc967bd3fa1a2067aa43786195ceb70"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_board_worker_colors_isolation.py",
+      "produces": [],
+      "sha256": "80319913beaa2d7be5d5d173da3ec74a39892fc174202c8c0a674b317efb9526"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_board_worker_feature_output_root.py",
+      "produces": [],
+      "sha256": "254e18a64d61cde3323d0a69f38ddbb344328c9ab51cf1d33059ef09bf74f18f"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_board_worker_implementation_map_handoff.py",
+      "produces": [],
+      "sha256": "05ee446481f11deeaa526bba19b3d77c22aa6b10e67929806861f0fc77cd7e75"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_canvas.py",
+      "produces": [],
+      "sha256": "f2cd63a26f12c0bec3271998361aba0ee231959a56ede3d3f2e7896843c89cba"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_canvas_empty_colors.py",
+      "produces": [],
+      "sha256": "c298e0e8501ebc75a758a5c9d8012e0a1282b7d0d56036474d7b55bb6531664d"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_canvas_output_directories.py",
+      "produces": [],
+      "sha256": "9641b3405891ee5f333e45914f8ca7b50e956c4118623cd74667ada234b849fd"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_canvas_rotation_aabb.py",
+      "produces": [],
+      "sha256": "7cd060252e4ee6a0e7dadd56ad6700398b1c7f4bb12d9803964a53f1ae13fd44"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:120"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:120"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_capture_frame_stability.py",
+      "produces": [],
+      "sha256": "cd9f264abe8aec584d80b9ee8ce28d87101c06ba63f5451ab0469a404da9c297"
+    },
+    {
+      "consumes": [
+        "iff/scripts/selftest_capture_readiness.py:146:main.dart"
+      ],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:119"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:119"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_capture_readiness.py",
+      "produces": [
+        "iff/scripts/selftest_capture_readiness.py:104:main.dart",
+        "iff/scripts/selftest_capture_readiness.py:147:main.dart",
+        "iff/scripts/selftest_capture_readiness.py:165:main.dart",
+        "iff/scripts/selftest_capture_readiness.py:184:main.dart",
+        "iff/scripts/selftest_capture_readiness.py:222:system_ui.dart",
+        "iff/scripts/selftest_capture_readiness.py:271:state.dart",
+        "iff/scripts/selftest_capture_readiness.py:293:main.dart",
+        "iff/scripts/selftest_capture_readiness.py:34:pubspec.yaml",
+        "iff/scripts/selftest_capture_readiness.py:35:main.dart",
+        "iff/scripts/selftest_capture_readiness.py:39:app.dart",
+        "iff/scripts/selftest_capture_readiness.py:41:unrelated.dart",
+        "iff/scripts/selftest_capture_readiness.py:75:main.dart"
+      ],
+      "sha256": "dea2043cc4a5dd99c454e14c9c4b24570e47106474410b17f10bf69d3d95206b"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:130"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:130"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_check_done_gate_adoption.py",
+      "produces": [],
+      "sha256": "07828954986ff8f3a384d03e05f3b935aca191f6a396ee044b751081f41703ab"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_check_done_gate_dedup.py",
+      "produces": [
+        "iff/scripts/selftest_check_done_gate_dedup.py:20:diff_report.json"
+      ],
+      "sha256": "428bf28060da1ec798852356793e69c823a4893414bdbeab68152d9c359fc2a3"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:129"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:129"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_check_done_gate_real_defect_scope.py",
+      "produces": [],
+      "sha256": "d384ee46f43329add3b373849b06d1e063cbe391b21db2d2697101860970aeb8"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_check_fixture_source_root_named_test.py",
+      "produces": [],
+      "sha256": "0a98a60a8caddf9d1b897db667104bba6161ad16a443c71bb49b7db3951057fd"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:48"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:48"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_check_interaction_coverage_adoption.py",
+      "produces": [],
+      "sha256": "002deefb74c2de3d5fc64b0954275ced14808b7635d221fc5a4ab00cd0aa56e3"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_check_render_plan_paint_source.py",
+      "produces": [],
+      "sha256": "a72b428cd64413839e7b1477e932732c64422e0c4a4bd7af98072576874b3a36"
+    },
+    {
+      "consumes": [
+        "iff/scripts/selftest_component_bbox_adaptation.py:68:shared_components.local.json"
+      ],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:94"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:94"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_component_bbox_adaptation.py",
+      "produces": [],
+      "sha256": "9c4dc19c7be01662f289dbb1b2192e9888e31e8e5340d81a876d9bbb0fb217e8"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:91"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:91"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_confirmed_design_exclusion.py",
+      "produces": [],
+      "sha256": "59f87849527fb94b7f88085383ad13ba943862fb48effae0b95daad9c38c8d16"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:51"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:51"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_contract_artifacts_gate.py",
+      "produces": [
+        "iff/scripts/selftest_contract_artifacts_gate.py:125:interaction_test_plan.json",
+        "iff/scripts/selftest_contract_artifacts_gate.py:144:interaction_test_plan.json",
+        "iff/scripts/selftest_contract_artifacts_gate.py:41:interaction_contract.json",
+        "iff/scripts/selftest_contract_artifacts_gate.py:58:api_contract.json",
+        "iff/scripts/selftest_contract_artifacts_gate.py:59:row.json",
+        "iff/scripts/selftest_contract_artifacts_gate.py:60:api_endpoint_selection.json"
+      ],
+      "sha256": "23a882e5ed7b0fbc6b01e1cfecec2e7293f6181653753b24487ddc64da95fb38"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:52"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:52"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_contract_worker_anchor_gate.py",
+      "produces": [],
+      "sha256": "b4081be16b2ad9bbb0c0573bef5d2b44ee637dbd82144d00ecf6145b96e4aa6e"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_contract_worker_oas_command.py",
+      "produces": [],
+      "sha256": "fd11ac378daf0e95685985b2aca958e3c874020f99eb6f8f87bb666ac663b826"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_csv_row_status.py",
+      "produces": [],
+      "sha256": "ed6f422c8a6fb836fe5f57cae61aa70519cc579d4f7e27bf3d37ecdaafaca431"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_detect_shared_component_asset_coverage.py",
+      "produces": [],
+      "sha256": "dfd3f00dcd7d0cf169e92fa6e7d995666dc57c6bc7d33fa294a47db67e5a4560"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_export_assets_vector_priority.py",
+      "produces": [
+        "iff/scripts/selftest_export_assets_vector_priority.py:27:icon.svg",
+        "iff/scripts/selftest_export_assets_vector_priority.py:31:photo.svg",
+        "iff/scripts/selftest_export_assets_vector_priority.py:36:manifest.json"
+      ],
+      "sha256": "3b934fa436581be6a050d0813f38f86201f7080bd594896d1bab7bfd7b191139"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_export_figma_scene_real_frame.py",
+      "produces": [],
+      "sha256": "cf351d8f9bf5acffbe81efbeefa98435f5b79a03b56a898145bbbe5d5abc81d8"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:65"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:65"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_feature_api_contract.py",
+      "produces": [],
+      "sha256": "149100b888ccf1a34f087f28954b7dbc1d3d25ee73cfc9974c10f4b32d82a703"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_fetch_worker_external_blocker_contract.py",
+      "produces": [],
+      "sha256": "7b7f26f181b6dde4800198d768af650a0d47d3c98d6f450aceb681d8173670ae"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_fetch_worker_feature_parent_dir.py",
+      "produces": [],
+      "sha256": "dfbe6f50b9216ca4ad4e74783dfe43f13a6ae4bb1d6fa3f4ccfa3dbce5a78559"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_generate_canvas_logical_375.py",
+      "produces": [],
+      "sha256": "7a93a8448c77abaed041740e7ab1176ef9d61999e7ed9c5038df5991b95bd470"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:95"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:95"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_generate_canvas_text_layout.py",
+      "produces": [],
+      "sha256": "d9bf87ec581191d61e097dffd418cfe13ca323752f02db9e0d5b8f9a0e9fb507"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:72"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:72"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_interaction_contract_convergence.py",
+      "produces": [],
+      "sha256": "c4b7cd7a2efe224f5e34e7b7378942cfc3d19a93e4a1135b7971d72367966823"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:73"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:73"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_interaction_source_provenance.py",
+      "produces": [],
+      "sha256": "c4691206b616590a585af70ea0503eaa3f92a9724008278d29c441ecb01b0a7e"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:85"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:85"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_layout_trace_expected_contract.py",
+      "produces": [],
+      "sha256": "a401a64790e86cc0a3fcfef2a72a27cd41e01981466a8d65f71f1432f1c7e2b7"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:86"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:86"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_merge_shared_expected_strict.py",
+      "produces": [],
+      "sha256": "9f9c5910320c5c1e53a12fc41aa1085486feb8311f230088b9116eff2b8badff"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:63"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:63"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_normalize_api_contract.py",
+      "produces": [],
+      "sha256": "d3d62d2b340c3b089cf8e5ba9a02d4578838bf7ab8138c5b83fe57a18214469a"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:61"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:61"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_oas_ref_resource_cache.py",
+      "produces": [],
+      "sha256": "e57b416e074ea5d94a8941335221bd5c83099b2a62b43b2526660f4427dc9b0e"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_physical_device_preview.py",
+      "produces": [],
+      "sha256": "2a6207ed84723e654f9399f0ed57eabeb3000d45b4981507b0b22f8385026e59"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:93"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:93"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_prune_system_ui_components.py",
+      "produces": [],
+      "sha256": "f9cdf4f851af5417cfa1af446cba071a5e0a6cffd96265f4e92c68274340dc31"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_reference_region_fallback.py",
+      "produces": [],
+      "sha256": "40c652f1cce46bce380b0a7c1e0df165fc5c7096acfa6669080de1fd831fe150"
+    },
+    {
+      "consumes": [
+        "iff/scripts/selftest_render_fidelity_api_dynamic_content.py:65:accepted.json"
+      ],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:81"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:81"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_render_fidelity_api_dynamic_content.py",
+      "produces": [],
+      "sha256": "797ddf88660a7bb6fa316c8b189a945eb3b38437ca68bc6726dae48dde8b28c9"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:84"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:84"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_render_fidelity_asset_real_defect.py",
+      "produces": [],
+      "sha256": "d69c72b73b02866b4c8879a68046390d41c6d4a091fbfac2e299a3088a175f93"
+    },
+    {
+      "consumes": [
+        "iff/scripts/selftest_render_fidelity_trace_gate.py:134:scoped_report.json"
+      ],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_render_fidelity_trace_gate.py",
+      "produces": [],
+      "sha256": "372948671854df5e0ecd86b85cac0644595cae8f15a5ffd3a82316c98b779275"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_render_plan_root_asset.py",
+      "produces": [],
+      "sha256": "f67899ef68c46d24e681bb4aa19c4102ee0b938fd5bae03fee592443815f022a"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_repair_actionability_budget_v2.py",
+      "produces": [],
+      "sha256": "4807b7d8d5a4c35e3fcf2144b068e7ae0125cfca7907af62bb840ce86a2ad0e1"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_repair_plan_composite_actionability.py",
+      "produces": [],
+      "sha256": "c4516eabf3485e884d16e19fcfb351c12d2fdb71b24dc8f716eaf14c2f2edc82"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_repair_plan_source_bound_retry.py",
+      "produces": [],
+      "sha256": "806fb05a83541bdbb82b0793b002186ac6d4f862d7d438acaa23fae342a5665b"
+    },
+    {
+      "consumes": [
+        "iff/scripts/selftest_repair_plan_trace_gate.py:66:accepted_top.json",
+        "iff/scripts/selftest_repair_plan_trace_gate.py:69:accepted.json",
+        "iff/scripts/selftest_repair_plan_trace_gate.py:72:diff.json"
+      ],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_repair_plan_trace_gate.py",
+      "produces": [],
+      "sha256": "621febbd6ab23404191a74399cdb0b76ce0f059300173e7dbc387aea23fe3900"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:88"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:88"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_responsive_layout_contract.py",
+      "produces": [],
+      "sha256": "0760795e1bb4da3a1565d143ccc050d07847e405cb3c1126b2d3569bd5e1afb5"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_retire_stale_flutter_template_tests.py",
+      "produces": [
+        "iff/scripts/selftest_retire_stale_flutter_template_tests.py:44:main.dart",
+        "iff/scripts/selftest_retire_stale_flutter_template_tests.py:48:widget_test.dart"
+      ],
+      "sha256": "c9b8b71859080fc9f7c7fcfc7a8722275a7ab8358613214c44c93ca12c3c6ac6"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:118"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:118"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_runtime_device_fallback.py",
+      "produces": [],
+      "sha256": "2f8183f52f4bd2e97830030d8484ab77967e9f4b25a5a6d4452202578e0827f8"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_runtime_post_wipe_readiness.py",
+      "produces": [],
+      "sha256": "fac9b2099b7f1217fa58190dc425d93514d8ad1afe626920da98b7594c4ec07f"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_runtime_reference_dimensions.py",
+      "produces": [
+        "iff/scripts/selftest_runtime_reference_dimensions.py:74:runtime_device.json"
+      ],
+      "sha256": "6b98a3da3783cd3c9b64288c5cb8c2cbb71451cbed6ff310ad664b307b9c5ddc"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_runtime_release_apk_capture.py",
+      "produces": [],
+      "sha256": "8de514fb0ba377b8879ef72fc4ae8595067975a2467efc9152f4e2f5b6605925"
+    },
+    {
+      "consumes": [
+        "iff/scripts/selftest_shared_component_pipeline.py:125:jobs.json"
+      ],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:56"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:56"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_shared_component_pipeline.py",
+      "produces": [
+        "iff/scripts/selftest_shared_component_pipeline.py:42:icon.png"
+      ],
+      "sha256": "8bc7916cdc0b405f1f4c0e65823a8fb1901aca8ac58be807578c9f74677513f4"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_shared_component_prompt_isolation.py",
+      "produces": [],
+      "sha256": "7d6231c2fe61fb56adb7176f2947575ac2b20e5a6f6986d72fe42f35f87d534d"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_shared_component_root_coordinates.py",
+      "produces": [
+        "iff/scripts/selftest_shared_component_root_coordinates.py:41:icon.png"
+      ],
+      "sha256": "13a60fe536102074a817ac0111df283f423dffd34cbf6c6cbaca3308b20bff8e"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_shared_component_test_import.py",
+      "produces": [
+        "iff/scripts/selftest_shared_component_test_import.py:20:pubspec.yaml"
+      ],
+      "sha256": "5d1eb04d0386b46b917e7b8709b57a07390eb6c8350cd242c7588c50c9f722f0"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_shared_worker_compliance_writer.py",
+      "produces": [],
+      "sha256": "9f4e1e381d7e68125cd9ab39faa696f25c57a9c001f1db493cd863098226c28c"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:122"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:122"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_shared_worker_supervisor.py",
+      "produces": [],
+      "sha256": "1602bf8bb01f4ad9acd53084e8111bae87c04a1744ea51d703555784765434d5"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_status_bar_policy.py",
+      "produces": [],
+      "sha256": "325f6fca105a4887b317956c68962370d4120cd33db56f12213c20abc7b5acc6"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:90"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:90"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_system_ui_exclusion.py",
+      "produces": [],
+      "sha256": "5ec663bcd95a497940b418fd8ce34bdd641d20f8ecad8161be235722f37cfec4"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_validate_skill_structure.py",
+      "produces": [],
+      "sha256": "5bd0fce8df79b625d5931be0e49029ae49cfdff88753f971a630e43d264dd56f"
+    },
+    {
+      "consumes": [
+        "iff/scripts/selftest_visual_diff_api_dynamic_content.py:70:accepted.json"
+      ],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:82"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:82"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_visual_diff_api_dynamic_content.py",
+      "produces": [],
+      "sha256": "a396981ff1365274a2ae7ad36d90d168509392d8e41241eb2d34843587841655"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:83"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:83"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_visual_diff_asset_descendant_mask.py",
+      "produces": [],
+      "sha256": "b2ac0376921f2b0479f01fcf5f655fcf2df85cf6fa913fdfe19431b831fadaea"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/selftest_visual_repair_budget.py",
+      "produces": [],
+      "sha256": "c9237f599c587418c5491c457cef75febedf044508cab53e4b1192205c840932"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/make_worker_prompt.py:192",
+        "iff/scripts/selftest_shared_worker_supervisor.py:183",
+        "iff/scripts/verify_pipeline_scripts.py:114"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:114"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/shared_worker_supervisor.py",
+      "produces": [],
+      "sha256": "e31631c2b5840ffddfaed861e8a82e774f2b77d3b0ce25a17e0b16f7efd7d052"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/assembly_plan_batch.py:80",
+        "iff/scripts/make_worker_prompt.py:304",
+        "iff/scripts/prefill_implementation_plan.py:17",
+        "iff/scripts/verify_pipeline_scripts.py:109"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:109"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/summarize_spec_artifacts.py",
+      "produces": [],
+      "sha256": "a059e252cac09e344c21899c9211f551c6da39b090d8e5c3c5dc76561d21fa67"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:99"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:99"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/sync_project_rules.py",
+      "produces": [],
+      "sha256": "f6708b30382da2bd35f7c7d20311b28f29a9f0e889532e9b4f68d3c582d2149c"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/export_figma_scene.py:10",
+        "iff/scripts/selftest_confirmed_design_exclusion.py:13",
+        "iff/scripts/verify_pipeline_scripts.py:89"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:89"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/system_ui_filter.py",
+      "produces": [],
+      "sha256": "1940ce097cc724039ba5cf7984ec4e61bf14b71f8ff71bb410add5d1cdc7b577"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:134"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:134"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/update_flow_graph.py",
+      "produces": [],
+      "sha256": "40ad545f116a6cfb380b7e02cb480f638a2697da4986b65f25945cd8e1aea4e7"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:33"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:33"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/update_pubspec_assets.py",
+      "produces": [],
+      "sha256": "a3a44cad9c260ed37808484cca0956b5cb385674be2bce59f5a2240e16914569"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/selftest_validate_skill_structure.py:7",
+        "iff/scripts/verify_pipeline_scripts.py:40",
+        "iff/scripts/verify_pipeline_scripts.py:9"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:40"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/validate_skill_structure.py",
+      "produces": [],
+      "sha256": "5682da82fd5b36b48cfda53a58f4e1a59fb1cbad145e160148cf73e4bf9eb33a"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/check_worker_compliance.py:40",
+        "iff/scripts/make_worker_prompt.py:118",
+        "iff/scripts/make_worker_prompt.py:144",
+        "iff/scripts/make_worker_prompt.py:214",
+        "iff/scripts/make_worker_prompt.py:472",
+        "iff/scripts/make_worker_prompt.py:61",
+        "iff/scripts/selftest_shared_worker_compliance_writer.py:131",
+        "iff/scripts/selftest_shared_worker_compliance_writer.py:39"
+      ],
+      "gates": [],
+      "in_required_registry": false,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/verify_pipeline_scripts.py",
+      "produces": [],
+      "sha256": "aeed1c21329ca3996b1589eb79d1211827d66a74dd15fae9cff33b747c85f329"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/capture_runtime_screenshot.py:20",
+        "iff/scripts/selftest_capture_frame_stability.py:14",
+        "iff/scripts/selftest_render_fidelity_trace_gate.py:9",
+        "iff/scripts/selftest_visual_diff_api_dynamic_content.py:40",
+        "iff/scripts/selftest_visual_diff_asset_descendant_mask.py:11",
+        "iff/scripts/selftest_visual_diff_asset_descendant_mask.py:37",
+        "iff/scripts/verify_pipeline_scripts.py:41"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:41"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/visual_diff.py",
+      "produces": [],
+      "sha256": "1f99a64c80075711a794ac0a222c760dbb4d7597f2923a4850febc9d70fb89e5"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/make_worker_prompt.py:523",
+        "iff/scripts/selftest_assembly_visual_repair_contract.py:55",
+        "iff/scripts/selftest_repair_actionability_budget_v2.py:181",
+        "iff/scripts/selftest_repair_actionability_budget_v2.py:208",
+        "iff/scripts/selftest_repair_actionability_budget_v2.py:250",
+        "iff/scripts/selftest_repair_actionability_budget_v2.py:294",
+        "iff/scripts/selftest_repair_actionability_budget_v2.py:341",
+        "iff/scripts/selftest_repair_actionability_budget_v2.py:406",
+        "iff/scripts/selftest_visual_repair_budget.py:49",
+        "iff/scripts/verify_pipeline_scripts.py:43"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:43"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/visual_repair_budget.py",
+      "produces": [],
+      "sha256": "d4e786763fa8375c687ea7359e20705f84bc1936f505a6132a06ba0566d50a61"
+    },
+    {
+      "consumes": [],
+      "deletion_evidence": [],
+      "direct_callers_or_importers": [
+        "iff/scripts/verify_pipeline_scripts.py:16"
+      ],
+      "gates": [
+        "iff/scripts/verify_pipeline_scripts.py:16"
+      ],
+      "in_required_registry": true,
+      "migration_action": "hold",
+      "owner_candidate": "unclassified",
+      "path": "iff/scripts/write.py",
+      "produces": [],
+      "sha256": "fd325304a9d033e4ba481f2ca4f7e07450f423f9617a159a39a024a862a80fa4"
+    }
+  ],
+  "source": {
+    "iff_root": "iff",
+    "skill_md": {
+      "path": "iff/SKILL.md",
+      "sha256": "f6c23713f182d6282c4affec7fc63161a5bb914b5c421b29779ba723c4c573e3"
+    },
+    "verify_pipeline_scripts": {
+      "path": "iff/scripts/verify_pipeline_scripts.py",
+      "sha256": "aeed1c21329ca3996b1589eb79d1211827d66a74dd15fae9cff33b747c85f329"
+    }
+  },
+  "verifier": {
+    "command": [
+      "python3",
+      "iff/scripts/verify_pipeline_scripts.py",
+      "--skill-dir",
+      "iff"
+    ],
+    "exit_code": 0,
+    "stdout": "ok 111 scripts in iff/scripts\n"
+  }
+}

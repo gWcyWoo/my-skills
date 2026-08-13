@@ -1,0 +1,106 @@
+{
+  "kind": "icp-p1a-registries",
+  "schema_version": 1,
+  "task_sources": [
+    "csv"
+  ],
+  "design_sources": [
+    "lanhu-figma"
+  ],
+  "platforms": {
+    "flutter": {
+      "profiles": [
+        "flutter-standard"
+      ],
+      "default_profile": "flutter-standard",
+      "activated": true
+    },
+    "vue": {
+      "profiles": [
+        "vue-vite"
+      ],
+      "default_profile": "vue-vite",
+      "activated": true
+    },
+    "nextjs": {
+      "profiles": [
+        "nextjs-standard"
+      ],
+      "default_profile": "nextjs-standard",
+      "activated": true
+    },
+    "ios-swift": {
+      "profiles": [
+        "ios-swift-standard"
+      ],
+      "default_profile": "ios-swift-standard",
+      "activated": true
+    },
+    "ios-objc": {
+      "profiles": [
+        "ios-objc-standard"
+      ],
+      "default_profile": "ios-objc-standard",
+      "activated": true
+    },
+    "android-java": {
+      "profiles": [
+        "android-java-standard"
+      ],
+      "default_profile": "android-java-standard",
+      "activated": true
+    },
+    "android-kotlin": {
+      "profiles": [
+        "android-kotlin-standard"
+      ],
+      "default_profile": "android-kotlin-standard",
+      "activated": true
+    }
+  },
+  "operations": [
+    {
+      "id": "project_preflight"
+    },
+    {
+      "id": "visible_codegen"
+    },
+    {
+      "id": "fixture_codegen"
+    },
+    {
+      "id": "trace_harness"
+    },
+    {
+      "id": "packaging"
+    },
+    {
+      "id": "test_runner"
+    },
+    {
+      "id": "runtime_capture"
+    },
+    {
+      "id": "project_gates"
+    },
+    {
+      "id": "fan_in"
+    }
+  ],
+  "capability_states": [
+    "required",
+    "optional-with-shared-policy",
+    "unsupported"
+  ],
+  "capabilities": {
+    "project_preflight": "required",
+    "visible_codegen": "required",
+    "fixture_codegen": "required",
+    "trace_harness": "optional-with-shared-policy",
+    "packaging": "required",
+    "test_runner": "required",
+    "runtime_capture": "optional-with-shared-policy",
+    "project_gates": "required",
+    "fan_in": "required"
+  }
+}

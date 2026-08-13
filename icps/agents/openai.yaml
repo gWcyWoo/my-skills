@@ -1,0 +1,4 @@
+interface:
+  display_name: "ICPS"
+  short_description: "Schedule one row or adapt IOLE Google Sheets flows"
+  default_prompt: "Use $icps with this task sheet, or provide IOLE's exact-row multi-page flow adapter."

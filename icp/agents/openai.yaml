@@ -1,0 +1,4 @@
+interface:
+  display_name: "ICP"
+  short_description: "Implement one IOLE client page or multi-page flow"
+  default_prompt: "Use $icp to implement or revise this canonical IOLE client page or flow job."

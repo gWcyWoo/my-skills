@@ -1,0 +1,4 @@
+interface:
+  display_name: "cip"
+  short_description: "Scaffold a standard native iOS project"
+  default_prompt: "Use $cip to create a standard native iOS project through guided numbered choices."

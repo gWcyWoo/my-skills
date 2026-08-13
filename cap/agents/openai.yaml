@@ -1,0 +1,4 @@
+interface:
+  display_name: "Create Android Project"
+  short_description: "Scaffold a standard Android Kotlin project"
+  default_prompt: "Use $cap to create a standard native Android project through guided numbered choices."
