@@ -107,7 +107,7 @@ def load_mapping_v2(path: Path) -> dict[str, object]:
     if (
         not isinstance(client, dict)
         or client.get("worker_skill_name") != "icp"
-        or client.get("worker_skill") != "/Users/oklik/.agents/skills/icp/SKILL.md"
+        or client.get("worker_skill") != "~/.agents/skills/icp/SKILL.md"
         or not isinstance(client.get("queue"), dict)
     ):
         raise ValueError("client-worker-must-be-icp")
@@ -202,7 +202,7 @@ def build_schedule_plan(
         "role": role,
         "mapping_path": str(mapping_path),
         "worker_skill_name": "icp",
-        "worker_skill": "/Users/oklik/.agents/skills/icp/SKILL.md",
+        "worker_skill": "~/.agents/skills/icp/SKILL.md",
         "connector_queue": connector_queue,
         "required_connector_operations": FLOW_CONNECTOR_OPERATIONS,
         "rrule": f"FREQ=MINUTELY;INTERVAL={interval_minutes}",

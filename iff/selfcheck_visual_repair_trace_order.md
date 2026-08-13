@@ -1,6 +1,6 @@
 # iFF trace-schema and visual-repair order self-check
 
-Rules: `/Users/oklik/.agents/skills/iff/SKILL.md`
+Rules: `~/.agents/skills/iff/SKILL.md`
 
 Reviewed artifacts:
 
@@ -21,7 +21,7 @@ Reviewed artifacts:
 
 | Invariant | Artifact evidence | Verification evidence | Result |
 |---|---|---|---|
-| Generic skill scope only | All repairs are under `/Users/oklik/.agents/skills/iff`; no business project was inspected or modified. | Final status and diff checks were restricted to the iFF workspace. | PASS |
+| Generic skill scope only | All repairs are under `~/.agents/skills/iff`; no business project was inspected or modified. | Final status and diff checks were restricted to the iFF workspace. | PASS |
 | Canonical trace schema | `layout_trace_contract.py` requires a non-empty string `pageType` and a non-empty top-level `nodes` object whose non-empty node ids map to objects. | `selftest_render_fidelity_trace_gate.py` accepts canonical `pageType+nodes`. | PASS |
 | Empty and legacy traces fail closed | The shared trace contract rejects missing/empty `nodes`; render fidelity, repair planning, GREEN, and done/completion consume that shared contract. No consumer falls back to legacy `widgets`. | `selftest_render_fidelity_trace_gate.py` and `selftest_repair_plan_trace_gate.py` reject empty/legacy inputs before success outputs. | PASS |
 | Stale traces fail before repair | `assembly_tdd_guard.py` loads every board trace with `min_mtime_ns=GREEN started_at_ns` before recording GREEN success. A canonical trace created before GREEN is rejected as stale. | `selftest_assembly_tdd_guard.py` proves stale rejection, then proves a trace freshly written by GREEN passes. | PASS |
@@ -45,7 +45,7 @@ Resolved during audit:
 Final verification:
 
 - 39/39 project-independent `selftest_*.py` scripts pass; `selftest_canvas.py` is the separately recorded disposable Flutter integration.
-- `python3 scripts/verify_pipeline_scripts.py --skill-dir /Users/oklik/.agents/skills/iff` passes with 81 required scripts.
+- `python3 scripts/verify_pipeline_scripts.py --skill-dir ~/.agents/skills/iff` passes with 81 required scripts.
 - `python3 -m py_compile scripts/*.py` passes.
 - Disposable Flutter canvas integration passes both regression corpus cases.
 - Tracked diff check and untracked Python/Markdown whitespace checks pass.

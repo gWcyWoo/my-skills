@@ -75,7 +75,8 @@ RUNTIME_CAPTURE_SOURCES = {
     "nextjs": "browser_screenshot",
     "vue": "browser_screenshot",
 }
-ICP_SKILL = Path("/Users/oklik/.agents/skills/icp/SKILL.md")
+ICP_SKILL_REF = "~/.agents/skills/icp/SKILL.md"
+ICP_SKILL = Path(ICP_SKILL_REF).expanduser()
 WORKER_CONTRACT = Path(__file__).parents[1] / "references" / "worker-node-contract-v1.md"
 LEGACY_WORKER_CONTRACT_SHA256 = "211a6c71412a55133510cb0de14f733fe560c0638656282f4c5cfd3459ac4553"
 WORKER_RESULT_KEYS = {
@@ -456,7 +457,7 @@ def build_worker_prompt(
     return "\n".join(
         [
             "Use $icp to implement this one persisted flow node.",
-            f"Read the ICP Skill completely: {ICP_SKILL}",
+            f"Read the ICP Skill completely: {ICP_SKILL_REF}",
             f"Read the worker contract completely: {WORKER_CONTRACT}",
             f"Node input: {node_job_path}",
             f"Write the worker result JSON only to: {result_path}",

@@ -1,6 +1,6 @@
 # Assembly TDD Gate Self-Check
 
-Rules: `/Users/oklik/.agents/skills/iff/test_rules.md`
+Rules: `~/.agents/skills/iff/test_rules.md`
 
 Reviewed artifacts:
 
@@ -35,8 +35,8 @@ Reviewed artifacts:
 |---|---|
 | 35 standalone `scripts/selftest_*.py` tests with required `--skill-dir` arguments | ✅ 35/35 passed |
 | `python3 scripts/selftest_canvas.py --project /tmp/iff-gate-selftest.ZuJ7tl/app` | ✅ 2/2 corpus cases passed; analyze clean; fidelity pass |
-| `python3 scripts/verify_pipeline_scripts.py --skill-dir /Users/oklik/.agents/skills/iff` | ✅ `ok 75 scripts` |
+| `python3 scripts/verify_pipeline_scripts.py --skill-dir ~/.agents/skills/iff` | ✅ `ok 75 scripts` |
 | `python3 -m py_compile scripts/*.py` | ✅ exit 0 |
-| `python3 scripts/check_worker_compliance.py --manifest /tmp/iff-gate-selftest.ZuJ7tl/worker_compliance.json --skill-dir /Users/oklik/.agents/skills/iff` | ✅ `ok worker compliance` |
+| `python3 scripts/check_worker_compliance.py --manifest /tmp/iff-gate-selftest.ZuJ7tl/worker_compliance.json --skill-dir ~/.agents/skills/iff` | ✅ `ok worker compliance` |
 
 STATUS: PASS

@@ -8,7 +8,7 @@
   "roles": {
     "client": {
       "worker_skill_name": "icp",
-      "worker_skill": "/Users/oklik/.agents/skills/icp/SKILL.md",
+      "worker_skill": "~/.agents/skills/icp/SKILL.md",
       "queue": {
         "status": "frontend status",
         "pr_url": "frontend pr",

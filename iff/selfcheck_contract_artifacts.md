@@ -1,6 +1,6 @@
 # iFF contract artifact fix self-check
 
-Rules: `/Users/oklik/.agents/skills/iff/SKILL.md`
+Rules: `~/.agents/skills/iff/SKILL.md`
 
 Reviewed artifacts:
 
@@ -26,6 +26,6 @@ Reviewed artifacts:
 | Script inventory | PASS | `verify_pipeline_scripts.py` reported 64 scripts. |
 | Python syntax | PASS | `python3 -m py_compile scripts/*.py` exited 0 with cache redirected outside the skill. |
 | Diff and whitespace | PASS | Scoped `git diff --check` exited 0; trailing-whitespace scans found no matches. |
-| Scope | PASS | Edits are confined to `/Users/oklik/.agents/skills/iff`; no business project path was used. |
+| Scope | PASS | Edits are confined to `~/.agents/skills/iff`; no business project path was used. |
 
 STATUS: PASS

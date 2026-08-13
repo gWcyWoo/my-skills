@@ -112,7 +112,7 @@ Interpret `page.route` by platform while preserving the v1 field name:
 Run the lightweight page-job preparation command:
 
 ```bash
-ICP=/Users/oklik/.agents/skills/icp
+ICP=~/.agents/skills/icp
 PYTHONDONTWRITEBYTECODE=1 \
 python3 "$ICP/scripts/icp_page_job_v1.py" prepare \
   --job /absolute/path/job.json
@@ -257,7 +257,7 @@ rerunning the gate with the user until it returns `ready`, `resume-required`,
 Run this before selection, design fetch, manifest creation, or claim:
 
 ```bash
-ICP=/Users/oklik/.agents/skills/icp
+ICP=~/.agents/skills/icp
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$ICP/scripts" \
 python3 "$ICP/scripts/icp_entry_v1.py" --config /absolute/path/run-config.json
 ```
@@ -488,7 +488,7 @@ Stop without claim or new effects when:
 Focused phase checks:
 
 ```bash
-ICP=/Users/oklik/.agents/skills/icp
+ICP=~/.agents/skills/icp
 export PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$ICP/scripts"
 python3 "$ICP/scripts/selftest_entry_v1.py"
 python3 "$ICP/scripts/selftest_flow_job_v1.py"

@@ -1,6 +1,6 @@
 # ICP external page-job contract v1
 
-This is the active contract for `/Users/oklik/.agents/skills/icp`.
+This is the active contract for `~/.agents/skills/icp`.
 
 ## Ownership
 

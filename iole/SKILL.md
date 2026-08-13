@@ -42,10 +42,10 @@ same physical row because leases and terminal compare-and-set fields are also
 role-specific.
 
 Fix the `client` role to `worker_skill_name=icp` and
-`worker_skill=/Users/oklik/.agents/skills/icp/SKILL.md`; reject any mapping that
+`worker_skill=~/.agents/skills/icp/SKILL.md`; reject any mapping that
 redirects it. Resolve every non-client role from its external
 `worker_skill_name`/`worker_skill` pair so later workers require mapping changes,
-not scheduler code changes. Require the name and absolute path to be both configured
+not scheduler code changes. Require the name and home-expanded absolute path to be both configured
 or both null. The `backend` columns currently exist with a null worker pair. Reject
 schedule creation and stop before claim with `blocked/role-worker-unavailable`
 when a selected role has no callable worker.
@@ -136,7 +136,7 @@ Review and merge own that transition for every affected row.
 Build and validate the plan first:
 
 ```bash
-IOLE=/Users/oklik/.agents/skills/iole
+IOLE=~/.agents/skills/iole
 PYTHONDONTWRITEBYTECODE=1 \
 python3 "$IOLE/scripts/iole_flow_contract_v2.py" schedule-plan \
   --excel-url 'SHARED_EXCEL_URL' \
@@ -300,21 +300,21 @@ and an existing role PR URL.
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 \
-python3 /Users/oklik/.agents/skills/iole/scripts/selftest_iole_contract_v1.py
+python3 ~/.agents/skills/iole/scripts/selftest_iole_contract_v1.py
 PYTHONDONTWRITEBYTECODE=1 \
-python3 /Users/oklik/.agents/skills/iole/scripts/selftest_iole_atomic_roles_v1.py
+python3 ~/.agents/skills/iole/scripts/selftest_iole_atomic_roles_v1.py
 PYTHONDONTWRITEBYTECODE=1 \
-python3 /Users/oklik/.agents/skills/iole/scripts/selftest_iole_flow_contract_v2.py
+python3 ~/.agents/skills/iole/scripts/selftest_iole_flow_contract_v2.py
 PYTHONDONTWRITEBYTECODE=1 \
-python3 /Users/oklik/.agents/skills/icps/scripts/selftest_icps_atomic_sheets_v2.py
+python3 ~/.agents/skills/icps/scripts/selftest_icps_atomic_sheets_v2.py
 PYTHONDONTWRITEBYTECODE=1 \
-python3 /Users/oklik/.agents/skills/icp/scripts/selftest_flow_job_v1.py
+python3 ~/.agents/skills/icp/scripts/selftest_flow_job_v1.py
 PYTHONDONTWRITEBYTECODE=1 \
-python3 /Users/oklik/.agents/skills/icp/scripts/selftest_page_job_v1.py
-python3 /Users/oklik/.codex/skills/.system/skill-creator/scripts/quick_validate.py \
-  /Users/oklik/.agents/skills/iole
-python3 /Users/oklik/.codex/skills/.system/skill-creator/scripts/quick_validate.py \
-  /Users/oklik/.agents/skills/icp
-python3 /Users/oklik/.codex/skills/.system/skill-creator/scripts/quick_validate.py \
-  /Users/oklik/.agents/skills/icps
+python3 ~/.agents/skills/icp/scripts/selftest_page_job_v1.py
+python3 ~/.codex/skills/.system/skill-creator/scripts/quick_validate.py \
+  ~/.agents/skills/iole
+python3 ~/.codex/skills/.system/skill-creator/scripts/quick_validate.py \
+  ~/.agents/skills/icp
+python3 ~/.codex/skills/.system/skill-creator/scripts/quick_validate.py \
+  ~/.agents/skills/icps
 ```

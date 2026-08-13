@@ -237,7 +237,7 @@ class IoleContractV1Tests(unittest.TestCase):
         result = json.loads(completed.stdout)
         self.assertEqual(result["role"], "client")
         self.assertEqual(result["worker_skill_name"], "icp")
-        self.assertEqual(result["worker_skill"], "/Users/oklik/.agents/skills/icp/SKILL.md")
+        self.assertEqual(result["worker_skill"], "~/.agents/skills/icp/SKILL.md")
         self.assertEqual(result["rrule"], "FREQ=MINUTELY;INTERVAL=5")
         self.assertEqual(result["role_queue"]["status"], "frontend status")
         self.assertEqual(result["role_queue"]["pr_url"], "frontend pr")

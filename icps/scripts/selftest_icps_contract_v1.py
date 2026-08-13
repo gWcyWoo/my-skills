@@ -10,7 +10,7 @@ from pathlib import Path
 
 
 SCRIPT = Path(__file__).with_name("icps_contract_v1.py")
-ICP_PREPARE = Path("/Users/oklik/.agents/skills/icp/scripts/icp_page_job_v1.py")
+ICP_PREPARE = Path("~/.agents/skills/icp/scripts/icp_page_job_v1.py").expanduser()
 DEFAULT_MAPPING = Path(__file__).parents[1] / "references" / "column-mapping-v1.json"
 
 

@@ -1,6 +1,6 @@
 # iFF shared-worker supervisor self-check
 
-Rules path: `/Users/oklik/.agents/skills/iff/test_rules.md`
+Rules path: `~/.agents/skills/iff/test_rules.md`
 
 Reviewed artifacts: `SKILL.md`, `scripts/make_worker_prompt.py`, `scripts/shared_worker_supervisor.py`, `scripts/selftest_shared_worker_supervisor.py`, `scripts/verify_pipeline_scripts.py`.
 
@@ -8,7 +8,7 @@ Reviewed artifacts: `SKILL.md`, `scripts/make_worker_prompt.py`, `scripts/shared
 
 | Check | Evidence | Result |
 |---|---|---|
-| Generic skill only | All reviewed artifacts are under `/Users/oklik/.agents/skills/iff`; no business-project fixture was used. | ✅ |
+| Generic skill only | All reviewed artifacts are under `~/.agents/skills/iff`; no business-project fixture was used. | ✅ |
 | Shared-only launch change | `SKILL.md:438` makes `*.shared_invocation.json` plus `shared_worker_supervisor.py run` the sole shared launch path. | ✅ |
 | Assembly preserved | Existing `selftest_assembly_worker_supervisor.py` passed in the full standalone sweep. | ✅ |
 | Pipeline inventory | `verify_pipeline_scripts.py:84` and `:88` require the new supervisor and its focused regression. | ✅ |
@@ -43,7 +43,7 @@ Reviewed artifacts: `SKILL.md`, `scripts/make_worker_prompt.py`, `scripts/shared
 | `python3 scripts/selftest_shared_worker_supervisor.py` | PASS: hung process groups, missing/stale results, and fresh shared evidence are supervised. |
 | Full standalone `scripts/selftest_*.py` sweep | 36/36 passed; `selftest_canvas.py` excluded because it requires an external Flutter project fixture. |
 | `python3 scripts/selftest_shared_worker_compliance_writer.py` | PASS: current loaded-file evidence accepted and post-prompt drift rejected. |
-| `python3 scripts/verify_pipeline_scripts.py --skill-dir /Users/oklik/.agents/skills/iff` | `ok 77 scripts`. |
+| `python3 scripts/verify_pipeline_scripts.py --skill-dir ~/.agents/skills/iff` | `ok 77 scripts`. |
 | `python3 -m py_compile scripts/*.py` | exit 0. |
 | `git diff --check` | exit 0. |
 

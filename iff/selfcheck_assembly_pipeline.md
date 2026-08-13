@@ -1,6 +1,6 @@
 # iFF assembly pipeline self-check
 
-- Rules: `/Users/oklik/.codex/AGENTS.md`
+- Rules: `~/.codex/AGENTS.md`
 - Scope: `SKILL.md`, `scripts/make_worker_prompt.py`, `scripts/verify_pipeline_scripts.py`, `scripts/assembly_plan_batch.py`, `scripts/assembly_completion.py`, and assembly focused selftests.
 - Boundary: no business-project file was read, written, built, tested, or formatted.
 
@@ -15,7 +15,7 @@
 | Worker success is evidence-gated | Final prompt command is `assembly_completion.py issue`; it removes stale evidence, runs `check_done_gate.py`, requires non-empty `actual.png` beside `actual_source=simulator_screenshot`, then writes evidence | PASS |
 | Main rejects false success | `SKILL.md` requires `assembly_completion.py verify` regardless of worker exit status; verifier returns nonzero when evidence is absent and reruns `check_done_gate.py` when present | PASS |
 | Complete evidence stays bound to artifacts | Completion evidence records hashes for gate-critical artifacts and the done-gate report; verifier rejects missing or changed files | PASS |
-| Surgical scope | All authored paths are under `/Users/oklik/.agents/skills/iff` | PASS |
+| Surgical scope | All authored paths are under `~/.agents/skills/iff` | PASS |
 
 ## TDD evidence
 
@@ -30,7 +30,7 @@
 | Check | Evidence | Result |
 | --- | --- | --- |
 | Assembly focused selftests | 7/7 exit 0, including bounded prompt, completion evidence, batch apply, CLI contract, board audits, fixture gate order, runtime fixture target | PASS |
-| Pipeline preflight | `ok 71 scripts in /Users/oklik/.agents/skills/iff/scripts` | PASS |
+| Pipeline preflight | `ok 71 scripts in ~/.agents/skills/iff/scripts` | PASS |
 | Python syntax | `python3 -m py_compile` on all changed Python files, exit 0 | PASS |
 | Tracked whitespace | `git diff --check`, exit 0 | PASS |
 | New-file whitespace | `git diff --no-index --check` emitted no warnings for all new/updated untracked focused files | PASS |

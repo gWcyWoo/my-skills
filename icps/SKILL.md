@@ -69,7 +69,7 @@ $icps <excel_url> [im=MINUTES] [status=VALUE]
 Build and validate the schedule plan first:
 
 ```bash
-ICPS=/Users/oklik/.agents/skills/icps
+ICPS=~/.agents/skills/icps
 PYTHONDONTWRITEBYTECODE=1 \
 python3 "$ICPS/scripts/icps_contract_v1.py" schedule-plan \
   --excel-url 'SHARED_EXCEL_URL' \
@@ -173,7 +173,7 @@ execute this sequence:
    scheduler's local checkout.
 8. Run `build-job` with the canonical claim, worktree, and exact Git revision, using an
    absolute no-clobber `--output` path.
-9. Load and follow `/Users/oklik/.agents/skills/icp/SKILL.md` with that job path.
+9. Load and follow `~/.agents/skills/icp/SKILL.md` with that job path.
    Use only its current external page-job workflow and require an
    `icp.page-handoff-result.v1` with `ready-for-pr`.
 10. Independently inspect the changed files and evidence. Run the repository's
@@ -218,11 +218,11 @@ Run the contract selftest and Skill validator after changes:
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 \
-python3 /Users/oklik/.agents/skills/icps/scripts/selftest_icps_atomic_sheets_v1.py
+python3 ~/.agents/skills/icps/scripts/selftest_icps_atomic_sheets_v1.py
 PYTHONDONTWRITEBYTECODE=1 \
-python3 /Users/oklik/.agents/skills/icps/scripts/selftest_icps_atomic_sheets_v2.py
+python3 ~/.agents/skills/icps/scripts/selftest_icps_atomic_sheets_v2.py
 PYTHONDONTWRITEBYTECODE=1 \
-python3 /Users/oklik/.agents/skills/icps/scripts/selftest_icps_contract_v1.py
-python3 /Users/oklik/.codex/skills/.system/skill-creator/scripts/quick_validate.py \
-  /Users/oklik/.agents/skills/icps
+python3 ~/.agents/skills/icps/scripts/selftest_icps_contract_v1.py
+python3 ~/.codex/skills/.system/skill-creator/scripts/quick_validate.py \
+  ~/.agents/skills/icps
 ```

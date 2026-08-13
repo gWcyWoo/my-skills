@@ -82,8 +82,8 @@ must append exactly one new authoritative opinion before setting the role to
 ## Worker routing
 
 IOLE never passes raw workbook status or column names to a worker. Bind `client`
-only to `worker_skill_name=icp` and its fixed ICP path. Resolve every other role
-from its external `worker_skill_name` and absolute `worker_skill` path; require both
+only to `worker_skill_name=icp` and its fixed home-relative ICP path. Resolve every other role
+from its external `worker_skill_name` and home-expanded `worker_skill` path; require both
 or neither. Reject scheduling and stop before claim when the selected role has no
 configured worker. `role=client` produces `icp.external-page-job.v2`. Non-client
 roles load only their mapped Skill and require that Skill's declared job adapter;

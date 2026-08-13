@@ -254,7 +254,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 icp/scripts/selftest_p2c_flutter_descriptor.py
 all icp/scripts/selftest*.py individually
 PYTHONDONTWRITEBYTECODE=1 python3 icp/scripts/verify_vendor_iff_v1.py
 PYTHONDONTWRITEBYTECODE=1 python3 icp/scripts/freeze_iff_baseline.py --iff-root iff --check icp/references/baselines/iff-v1.json
-PYTHONDONTWRITEBYTECODE=1 python3 /Users/oklik/.codex/skills/.system/skill-creator/scripts/quick_validate.py icp
+PYTHONDONTWRITEBYTECODE=1 python3 ~/.codex/skills/.system/skill-creator/scripts/quick_validate.py icp
 git diff --exit-code -- iff
 find icp -name __pycache__ -print -o -name '*.pyc' -print
 ```

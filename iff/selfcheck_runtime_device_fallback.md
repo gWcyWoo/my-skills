@@ -1,6 +1,6 @@
 # Runtime Device Fallback Self-Check
 
-- Rules path: `/Users/oklik/.agents/skills/iff/SKILL.md`
+- Rules path: `~/.agents/skills/iff/SKILL.md`
 - Reviewed artifacts:
   - `SKILL.md`
   - `scripts/select_runtime_device.py`

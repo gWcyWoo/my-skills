@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 
 DEFAULT_MAPPING = Path(__file__).parents[1] / "references" / "role-mapping-v1.json"
-ICP_SKILL_PATH = "/Users/oklik/.agents/skills/icp/SKILL.md"
+ICP_SKILL_PATH = "~/.agents/skills/icp/SKILL.md"
 SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 GIT_SHA = re.compile(r"^[0-9a-fA-F]{40}$")
 REVIEW_LINE = re.compile(r"^\s*(\d+)\s*[.)、]\s*(\S(?:.*\S)?)\s*$")
@@ -194,7 +194,8 @@ def load_mapping(path: Path) -> dict[str, object]:
         ):
             raise ValueError(f"mapping role {role} worker name is invalid")
         if worker_skill is not None and (
-            not isinstance(worker_skill, str) or not Path(worker_skill).is_absolute()
+            not isinstance(worker_skill, str)
+            or not Path(worker_skill).expanduser().is_absolute()
         ):
             raise ValueError(f"mapping role {role} worker is invalid")
         if role == "client" and (
@@ -474,7 +475,7 @@ def build_schedule_plan(
     mapping = load_mapping(mapping_path)
     role_config = select_role(mapping, role)
     worker_skill = role_config["worker_skill"]
-    if not isinstance(worker_skill, str) or not Path(worker_skill).is_file():
+    if not isinstance(worker_skill, str) or not Path(worker_skill).expanduser().is_file():
         raise ValueError("role-worker-unavailable")
     platform = None
     profile = None

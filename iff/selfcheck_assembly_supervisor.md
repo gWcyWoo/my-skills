@@ -1,6 +1,6 @@
 # iFF assembly supervisor self-check
 
-Rules path: `/Users/oklik/.agents/skills/iff/test_rules.md`
+Rules path: `~/.agents/skills/iff/test_rules.md`
 
 Reviewed artifacts: `SKILL.md`, `scripts/make_worker_prompt.py`, `scripts/assembly_worker_supervisor.py`, `scripts/selftest_assembly_worker_supervisor.py`, `scripts/verify_pipeline_scripts.py`, `STATUS.md`.
 
@@ -32,7 +32,7 @@ Reviewed artifacts: `SKILL.md`, `scripts/make_worker_prompt.py`, `scripts/assemb
 |---|---|
 | `python3 scripts/selftest_assembly_worker_supervisor.py` | PASS: zero-exit without fresh evidence rejected; fresh verified evidence accepted. |
 | 21 focused/relevant `selftest_assembly_*`, `selftest_board_worker_*`, and shared-component regressions | 21/21 passed. |
-| `python3 scripts/verify_pipeline_scripts.py --skill-dir /Users/oklik/.agents/skills/iff` | `ok 74 scripts`. |
+| `python3 scripts/verify_pipeline_scripts.py --skill-dir ~/.agents/skills/iff` | `ok 74 scripts`. |
 | `python3 -m py_compile scripts/assembly_worker_supervisor.py scripts/selftest_assembly_worker_supervisor.py scripts/make_worker_prompt.py` | exit 0. |
 | `git diff --check` | exit 0. |
 
