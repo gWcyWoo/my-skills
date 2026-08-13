@@ -92,6 +92,7 @@
       "inspect_ready_flow_root",
       "inspect_flow_rows",
       "claim_flow_rows",
+      "release_flow_claim",
       "expand_flow_claim",
       "complete_flow_rows",
       "record_flow_error"

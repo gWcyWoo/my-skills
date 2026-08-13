@@ -120,6 +120,9 @@ single-row tools:
   reject missing or duplicate titles.
 - `claim_flow_rows`: set every declared member to `doing` with one shared lease in
   one batch, or mutate none.
+- `release_flow_claim`: after an explicit user-directed restart, restore every
+  locator-bound member to `ready`, clear only that role's lease/error fields, and
+  archive the active locator so the same flow can obtain a fresh lease.
 - `expand_flow_claim`: add newly discovered ready members before they are edited.
 - `complete_flow_rows`: write one PR and `review` to every member and clear all
   leases/errors in one batch, or mutate none.
@@ -136,6 +139,16 @@ matching live guarded rows; terminal reconstruction exempts only the PR value ju
 written by completion. The host-wide lock protects only schedulers on this Mac;
 external Sheet editors do not participate in a server-side compare-and-set. Require
 post-write acknowledgement.
+
+`release_flow_claim` requires the persisted flow ID, exact lease token, and the
+complete immutable expected-value snapshot. Under the same host-wide lock, accept
+only members still owned by that lease or members partially/fully reset toward
+`ready` without any different lease. Preserve PR and all business/other-role
+columns; set only the selected role status to `ready` and clear its lease expiry,
+lease token, and error. Archive rather than delete the locator. A repeated release
+must reconstruct the same success, and a fresh `claim_flow_rows` must then create a
+new lease. Never call release from an unattended tick; IOLE may call it only after
+the user explicitly says `重新开始` for the currently persisted flow.
 
 Microsoft Excel has no flow-v2 adapter yet. Return
 `blocked/flow-connector-unavailable`; never process a flow as independent rows.

@@ -151,6 +151,24 @@ class AtomicSheetFlowQueue:
         ).hexdigest()
         return self.lock_root / "flow-claims" / f"{identity}.json"
 
+    def _released_locator_path(
+        self,
+        spreadsheet_id: str,
+        sheet_name: str,
+        flow_id: str,
+        lease_token: str,
+    ) -> Path:
+        flow_identity = hashlib.sha256(
+            f"{spreadsheet_id}\0{sheet_name}\0{flow_id}".encode("utf-8")
+        ).hexdigest()
+        lease_identity = hashlib.sha256(lease_token.encode("utf-8")).hexdigest()
+        return (
+            self.lock_root
+            / "flow-claim-releases"
+            / flow_identity
+            / f"{lease_identity}.json"
+        )
+
     def _persist_locator(
         self,
         spreadsheet_id: str,
@@ -191,9 +209,16 @@ class AtomicSheetFlowQueue:
                 raise ValueError("flow claim locator collision") from exc
 
     def _load_locator(
-        self, spreadsheet_id: str, sheet_name: str, flow_id: str
+        self,
+        spreadsheet_id: str,
+        sheet_name: str,
+        flow_id: str,
+        *,
+        path: Path | None = None,
+        allowed_phases: set[str] | None = None,
     ) -> dict[str, object]:
-        path = self._locator_path(spreadsheet_id, sheet_name, flow_id)
+        path = path or self._locator_path(spreadsheet_id, sheet_name, flow_id)
+        allowed_phases = allowed_phases or {"claim-prepared", "claimed"}
         try:
             locator = json.loads(path.read_text(encoding="utf-8"))
         except FileNotFoundError as exc:
@@ -212,7 +237,7 @@ class AtomicSheetFlowQueue:
             or not locator["lease_token"]
             or not isinstance(locator.get("lease_until"), str)
             or not locator["lease_until"]
-            or locator.get("phase") not in {"claim-prepared", "claimed"}
+            or locator.get("phase") not in allowed_phases
             or not isinstance(locator.get("guard_digests"), dict)
             or not isinstance(locator.get("members"), list)
             or not locator["members"]
@@ -358,6 +383,206 @@ class AtomicSheetFlowQueue:
                 "status": "inspected",
                 "row_ids": row_ids,
                 "rows": [row.values for row in rows],
+            }
+
+    def release_flow_claim(
+        self,
+        spreadsheet_id: str,
+        sheet_name: str,
+        mapping: FlowQueueMapping,
+        flow_id: str,
+        lease_token: str,
+        expected_values: dict[str, dict[str, object]],
+    ) -> dict[str, object]:
+        if (
+            not isinstance(flow_id, str)
+            or not flow_id
+            or any(ord(character) < 32 or ord(character) == 127 for character in flow_id)
+        ):
+            raise ValueError("flow identity is invalid")
+        if not isinstance(lease_token, str) or not lease_token:
+            raise ValueError("lease token is invalid")
+
+        with self._locked(spreadsheet_id, sheet_name):
+            active_path = self._locator_path(spreadsheet_id, sheet_name, flow_id)
+            archive_path = self._released_locator_path(
+                spreadsheet_id,
+                sheet_name,
+                flow_id,
+                lease_token,
+            )
+            if not active_path.exists():
+                released_locator = self._load_locator(
+                    spreadsheet_id,
+                    sheet_name,
+                    flow_id,
+                    path=archive_path,
+                    allowed_phases={"released"},
+                )
+                if released_locator["lease_token"] != lease_token:
+                    raise ValueError("flow lease token mismatch")
+                released_members = released_locator["members"]
+                assert isinstance(released_members, list)
+                released_row_ids = [
+                    str(member["row_id"]) for member in released_members
+                ]
+                self._validate_expected_values(
+                    mapping,
+                    released_row_ids,
+                    expected_values,
+                )
+                if released_locator["guard_digests"] != self._guard_digests(
+                    expected_values
+                ):
+                    raise ValueError(
+                        "flow expected values do not match release archive"
+                    )
+                released_rows = self.store.read_rows(
+                    spreadsheet_id,
+                    sheet_name,
+                    [int(member["row_number"]) for member in released_members],
+                )
+                for row_id, row in zip(
+                    released_row_ids,
+                    released_rows,
+                    strict=True,
+                ):
+                    if canonical_row_id(row.values.get(mapping.row_id)) != row_id:
+                        raise ValueError("flow member identity drift")
+                    if any(
+                        row.values.get(column) != expected
+                        for column, expected in expected_values[row_id].items()
+                    ):
+                        raise ValueError("flow member input drift")
+                    if (
+                        row.values.get(mapping.status) != mapping.ready
+                        or row.values.get(mapping.lease_token) not in {"", None}
+                        or row.values.get(mapping.lease_until) not in {"", None}
+                        or row.values.get(mapping.last_error) not in {"", None}
+                    ):
+                        raise ValueError("released flow member state drift")
+                return {
+                    "kind": "icps.flow-release-result.v2",
+                    "schema_version": 2,
+                    "status": "released",
+                    "flow_id": flow_id,
+                    "member_row_ids": released_row_ids,
+                    "rows": [row.values for row in released_rows],
+                    "reconstructed": True,
+                }
+
+            locator = self._load_locator(
+                spreadsheet_id,
+                sheet_name,
+                flow_id,
+                allowed_phases={"claim-prepared", "claimed", "released"},
+            )
+            if locator["pending_expansion"]:
+                raise ValueError("flow claim has a pending expansion")
+            if locator["lease_token"] != lease_token:
+                raise ValueError("flow lease token mismatch")
+            members = locator["members"]
+            assert isinstance(members, list)
+            row_ids = [str(member["row_id"]) for member in members]
+            self._validate_expected_values(mapping, row_ids, expected_values)
+            if locator["guard_digests"] != self._guard_digests(expected_values):
+                raise ValueError("flow expected values do not match claim locator")
+
+            if archive_path.exists():
+                raise ValueError("flow release archive already exists")
+
+            selected = self.store.read_rows(
+                spreadsheet_id,
+                sheet_name,
+                [int(member["row_number"]) for member in members],
+            )
+            lease_until = str(locator["lease_until"])
+            already_restored = True
+            for row_id, row in zip(row_ids, selected, strict=True):
+                if canonical_row_id(row.values.get(mapping.row_id)) != row_id:
+                    raise ValueError("flow member identity drift")
+                if any(
+                    row.values.get(column) != expected
+                    for column, expected in expected_values[row_id].items()
+                ):
+                    raise ValueError("flow member input drift")
+                owned = (
+                    row.values.get(mapping.status) == mapping.doing
+                    and row.values.get(mapping.lease_token) == lease_token
+                    and row.values.get(mapping.lease_until) == lease_until
+                )
+                recoverable_ready = (
+                    row.values.get(mapping.status) == mapping.ready
+                    and row.values.get(mapping.lease_token)
+                    in {lease_token, "", None}
+                    and row.values.get(mapping.lease_until)
+                    in {lease_until, "", None}
+                )
+                restored = (
+                    recoverable_ready
+                    and row.values.get(mapping.lease_token) in {"", None}
+                    and row.values.get(mapping.lease_until) in {"", None}
+                    and row.values.get(mapping.last_error) in {"", None}
+                )
+                if not owned and not recoverable_ready:
+                    raise ValueError("flow member is not owned by release lease")
+                already_restored = already_restored and restored
+
+            if already_restored:
+                released_rows = selected
+            else:
+                released_rows = self.store.update_rows(
+                    spreadsheet_id,
+                    sheet_name,
+                    {
+                        row.row_number: {
+                            mapping.status: mapping.ready,
+                            mapping.lease_token: "",
+                            mapping.lease_until: "",
+                            mapping.last_error: "",
+                        }
+                        for row in selected
+                    },
+                )
+            if len(released_rows) != len(row_ids):
+                raise ValueError("flow release acknowledgement drift")
+            for row_id, row in zip(row_ids, released_rows, strict=True):
+                if (
+                    canonical_row_id(row.values.get(mapping.row_id)) != row_id
+                    or any(
+                        row.values.get(column) != expected
+                        for column, expected in expected_values[row_id].items()
+                    )
+                    or row.values.get(mapping.status) != mapping.ready
+                    or row.values.get(mapping.lease_token) not in {"", None}
+                    or row.values.get(mapping.lease_until) not in {"", None}
+                    or row.values.get(mapping.last_error) not in {"", None}
+                ):
+                    raise ValueError("flow release acknowledgement drift")
+            released_at = self.clock().astimezone(timezone.utc).isoformat(
+                timespec="seconds"
+            ).replace("+00:00", "Z")
+            released_locator = {
+                **locator,
+                "phase": "released",
+                "released_at": released_at,
+            }
+            self._replace_locator(
+                spreadsheet_id,
+                sheet_name,
+                flow_id,
+                released_locator,
+            )
+            archive_path.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(active_path, archive_path)
+            return {
+                "kind": "icps.flow-release-result.v2",
+                "schema_version": 2,
+                "status": "released",
+                "flow_id": flow_id,
+                "member_row_ids": row_ids,
+                "rows": [row.values for row in released_rows],
+                "reconstructed": already_restored,
             }
 
     def claim_flow(

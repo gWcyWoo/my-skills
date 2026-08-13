@@ -97,6 +97,493 @@ def page_node(title: str) -> str:
 
 
 class FlowPlanContractTests(unittest.TestCase):
+    def test_lossless_review_writeback_accepts_a_complete_icp_v2_result(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            input_path = root / "flow-input.json"
+            input_path.write_text(json.dumps(base_input()), encoding="utf-8")
+            planned = subprocess.run(
+                [sys.executable, str(SCRIPT), "build-plan", "--input", str(input_path)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            plan = json.loads(planned.stdout)
+            plan["kind"] = "iole.flow-plan.v3"
+            plan["schema_version"] = 3
+            plan_path = root / "flow-plan-v3.json"
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+            changed_path = root / "app/src/main/Screen.kt"
+            changed_path.parent.mkdir(parents=True, exist_ok=True)
+            changed_path.write_text("// complete\n", encoding="utf-8")
+            manifest_path = root / "manifest.json"
+            manifest_path.write_text("{}\n", encoding="utf-8")
+            result_path = root / "icp-result.json"
+            result_path.write_text(
+                json.dumps(
+                    {
+                        "kind": "icp.flow-handoff-result.v2",
+                        "schema_version": 2,
+                        "job_id": "fixture-job",
+                        "job_digest": "1" * 64,
+                        "flow_id": plan["flow_id"],
+                        "member_digests": plan["member_digests"],
+                        "base_revision": "2" * 40,
+                        "project_root": str(root.resolve()),
+                        "status": "ready-for-pr",
+                        "changed_files": ["app/src/main/Screen.kt"],
+                        "verification": {
+                            "node_tests": "passed",
+                            "runtime_capture": "passed",
+                            "visual": "passed",
+                            "e2e": "passed",
+                        },
+                        "evidence_manifest": str(manifest_path.resolve()),
+                        "evidence_manifest_digest": hashlib.sha256(
+                            manifest_path.read_bytes()
+                        ).hexdigest(),
+                        "implementation_contract_sha256": "4" * 64,
+                        "coverage": {
+                            "status": "passed",
+                            "required_clause_ids": ["clause-1"],
+                            "covered_clause_ids": ["clause-1"],
+                            "worker_evidence_digests": [
+                                {"node_id": node_id, "sha256": "5" * 64}
+                                for node_id in plan["execution_order"]
+                            ],
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            intent_process = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "build-review-writeback",
+                    "--plan",
+                    str(plan_path),
+                    "--lease-token",
+                    "flow-lease-1",
+                    "--pr-url",
+                    "https://git.example/team/app/pull/9",
+                    "--icp-result",
+                    str(result_path),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(intent_process.returncode, 0, intent_process.stdout + intent_process.stderr)
+        self.assertEqual(
+            json.loads(intent_process.stdout)["connector_operation"],
+            "complete_flow_rows",
+        )
+
+    def test_lossless_review_writeback_rejects_incomplete_icp_clause_coverage(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            input_path = root / "flow-input.json"
+            input_path.write_text(json.dumps(base_input()), encoding="utf-8")
+            planned = subprocess.run(
+                [sys.executable, str(SCRIPT), "build-plan", "--input", str(input_path)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            plan = json.loads(planned.stdout)
+            plan["kind"] = "iole.flow-plan.v3"
+            plan["schema_version"] = 3
+            plan_path = root / "flow-plan-v3.json"
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+            result_path = root / "icp-result.json"
+            result_path.write_text(
+                json.dumps(
+                    {
+                        "kind": "icp.flow-handoff-result.v2",
+                        "schema_version": 2,
+                        "job_id": "fixture-job",
+                        "job_digest": "1" * 64,
+                        "flow_id": plan["flow_id"],
+                        "member_digests": plan["member_digests"],
+                        "base_revision": "2" * 40,
+                        "project_root": str(root.resolve()),
+                        "status": "ready-for-pr",
+                        "changed_files": ["app/src/main/Screen.kt"],
+                        "verification": {
+                            "node_tests": "passed",
+                            "runtime_capture": "passed",
+                            "visual": "passed",
+                            "e2e": "passed",
+                        },
+                        "evidence_manifest": str((root / "manifest.json").resolve()),
+                        "evidence_manifest_digest": "3" * 64,
+                        "implementation_contract_sha256": "4" * 64,
+                        "coverage": {
+                            "status": "passed",
+                            "required_clause_ids": ["clause-1"],
+                            "covered_clause_ids": [],
+                            "worker_evidence_digests": [],
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            intent_process = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "build-review-writeback",
+                    "--plan",
+                    str(plan_path),
+                    "--lease-token",
+                    "flow-lease-1",
+                    "--pr-url",
+                    "https://git.example/team/app/pull/9",
+                    "--icp-result",
+                    str(result_path),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(intent_process.returncode, 2)
+        self.assertEqual(
+            json.loads(intent_process.stdout)["reason"],
+            "ICP result acceptance coverage is incomplete",
+        )
+
+    def test_lossless_review_writeback_requires_a_verified_icp_v2_result(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            input_path = root / "flow-input.json"
+            input_path.write_text(json.dumps(base_input()), encoding="utf-8")
+            planned = subprocess.run(
+                [sys.executable, str(SCRIPT), "build-plan", "--input", str(input_path)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            plan = json.loads(planned.stdout)
+            plan["kind"] = "iole.flow-plan.v3"
+            plan["schema_version"] = 3
+            plan_path = root / "flow-plan-v3.json"
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+
+            intent_process = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "build-review-writeback",
+                    "--plan",
+                    str(plan_path),
+                    "--lease-token",
+                    "flow-lease-1",
+                    "--pr-url",
+                    "https://git.example/team/app/pull/9",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(intent_process.returncode, 2)
+        self.assertEqual(
+            json.loads(intent_process.stdout)["reason"],
+            "lossless review writeback requires a verified ICP v2 result",
+        )
+
+    def test_lossless_build_plan_rejects_an_input_without_raw_sheet_rows(self) -> None:
+        ui_notes = "原始 UI 合同"
+        raw_row = {
+            "标题": "反馈",
+            "Route": "feedback",
+            "设计稿地址": "https://design.example/feedback",
+            "UI补充描述": ui_notes,
+            "交互描述": "原始交互合同",
+            "接口描述": "",
+            "UT": "",
+            "IT": "",
+            "E2E": "",
+            "frontend status": "ready",
+            "frontend pr": "",
+            "frontend reviews": "",
+        }
+        analysis = {
+            "kind": "iole.flow-analysis-input.v1",
+            "schema_version": 1,
+            "source_id": "google-sheets:" + "e" * 64,
+            "role": "client",
+            "root_title": "反馈",
+            "rows": [
+                {
+                    "title": "反馈",
+                    "normalized_interaction": "",
+                    "change_scope": "modify",
+                    "allowed_paths": ["app/src/main/FeedbackScreen.kt"],
+                }
+            ],
+            "component_analysis": {
+                "inventory_source": "project-scan",
+                "searched_paths": ["app/src/main"],
+                "summary": "Inspected feedback ownership.",
+            },
+            "component_plan": [],
+        }
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            raw_path = root / "raw.json"
+            analysis_path = root / "analysis.json"
+            input_path = root / "input.json"
+            raw_path.write_text(
+                json.dumps({"反馈": raw_row}, ensure_ascii=False), encoding="utf-8"
+            )
+            analysis_path.write_text(
+                json.dumps(analysis, ensure_ascii=False), encoding="utf-8"
+            )
+            mapped = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "build-input",
+                    "--raw-rows",
+                    str(raw_path),
+                    "--analysis",
+                    str(analysis_path),
+                    "--mapping",
+                    str(MAPPING),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            input_path.write_text(mapped.stdout, encoding="utf-8")
+            completed = subprocess.run(
+                [sys.executable, str(SCRIPT), "build-plan", "--input", str(input_path)],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(
+            json.loads(completed.stdout)["reason"],
+            "lossless build-plan requires raw Sheet rows and mapping",
+        )
+
+    def test_maps_raw_sheet_contract_losslessly_into_real_icp_node_job(self) -> None:
+        ui_notes = (
+            "俄语：Проблема с входом\n"
+            "Ошибка при оплате / выводе средств\n"
+            "Вопрос по договору или условиям займа\n"
+            "Не получил(а) уведомление или код\n"
+            "Другое\n"
+            "哈语：Кіру кезінде мәселе\n"
+            "Төлем немесе қаражатты шығару кезінде қате\n"
+            "Келісімшарт немесе қарыз шарттары бойынша сұрақ\n"
+            "Хабарлама немесе растау кодын алмадым\n"
+            "Басқа"
+        )
+        interaction = (
+            "提交成功：Спасибо за ваш отзыв!\n\n返回到上一页\n"
+            "检验：\n请选择问题类型：Пожалуйста, выберите категорию проблемы\n"
+            "请输入反馈内容：Пожалуйста, введите содержание отзыва\n"
+            "反馈内容不能超过500个字符："
+            "Содержание отзыва не должно превышать 500 символов"
+        )
+        raw_row = {
+            "标题": "反馈",
+            "Route": "\nfeedback",
+            "设计稿地址": "https://design.example/feedback\n",
+            "UI补充描述": ui_notes,
+            "交互描述": interaction,
+            "接口描述": "",
+            "UT": "",
+            "IT": "",
+            "E2E": "",
+            "frontend status": "ready",
+            "frontend pr": "",
+            "frontend reviews": "",
+            "frontend lease_token": "must-not-reach-icp",
+            "frontend lease_until": "2099-01-01T00:00:00Z",
+            "frontend last_error": "must-not-reach-icp",
+        }
+        analysis = {
+            "kind": "iole.flow-analysis-input.v1",
+            "schema_version": 1,
+            "source_id": "google-sheets:" + "f" * 64,
+            "role": "client",
+            "root_title": "反馈",
+            "rows": [
+                {
+                    "title": "反馈",
+                    "normalized_interaction": "",
+                    "change_scope": "modify",
+                    "allowed_paths": ["app/src/main/FeedbackScreen.kt"],
+                }
+            ],
+            "component_analysis": {
+                "inventory_source": "project-scan",
+                "searched_paths": ["app/src/main"],
+                "summary": "Inspected the feedback feature boundary.",
+            },
+            "component_plan": [],
+        }
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            raw_path = root / "raw-rows.json"
+            analysis_path = root / "analysis.json"
+            input_path = root / "flow-input.json"
+            plan_path = root / "flow-plan.json"
+            job_path = root / "flow-job.json"
+            raw_path.write_text(
+                json.dumps({"反馈": raw_row}, ensure_ascii=False), encoding="utf-8"
+            )
+            analysis_path.write_text(
+                json.dumps(analysis, ensure_ascii=False), encoding="utf-8"
+            )
+            mapped = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "build-input",
+                    "--raw-rows",
+                    str(raw_path),
+                    "--analysis",
+                    str(analysis_path),
+                    "--mapping",
+                    str(MAPPING),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(mapped.returncode, 0, mapped.stdout + mapped.stderr)
+            input_path.write_text(mapped.stdout, encoding="utf-8")
+            planned = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "build-plan",
+                    "--input",
+                    str(input_path),
+                    "--raw-rows",
+                    str(raw_path),
+                    "--mapping",
+                    str(MAPPING),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(planned.returncode, 0, planned.stdout + planned.stderr)
+            plan_path.write_text(planned.stdout, encoding="utf-8")
+
+            worktree = root / "worktree"
+            worktree.mkdir()
+            (worktree / "README.md").write_text("fixture\n", encoding="utf-8")
+            subprocess.run(["git", "init", "-q"], cwd=worktree, check=True)
+            subprocess.run(["git", "add", "README.md"], cwd=worktree, check=True)
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.name=IOLE Lossless Selftest",
+                    "-c",
+                    "user.email=iole-lossless@example.invalid",
+                    "commit",
+                    "-qm",
+                    "fixture",
+                ],
+                cwd=worktree,
+                check=True,
+            )
+            revision = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=worktree,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            built = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "build-job",
+                    "--plan",
+                    str(plan_path),
+                    "--worktree",
+                    str(worktree.resolve()),
+                    "--base-revision",
+                    revision,
+                    "--platform",
+                    "android-kotlin",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
+            job_path.write_text(built.stdout, encoding="utf-8")
+            job = json.loads(built.stdout)
+            self.assertEqual(job["kind"], "icp.external-flow-job.v5")
+            self.assertEqual(job["schema_version"], 5)
+            member = job["members"][0]
+            source_contract = member["source_contract"]
+            self.assertEqual(source_contract["title"], raw_row["标题"])
+            self.assertEqual(source_contract["route"], raw_row["Route"])
+            self.assertEqual(source_contract["design_ref"], raw_row["设计稿地址"])
+            self.assertEqual(source_contract["interaction"], interaction)
+            self.assertEqual(
+                source_contract["requirement_sections"],
+                [
+                    {"label": "UI补充描述", "value": ui_notes},
+                    {"label": "交互描述", "value": interaction},
+                    {"label": "接口描述", "value": ""},
+                ],
+            )
+            self.assertEqual(
+                source_contract["acceptance_sections"],
+                [
+                    {"prefix": "UT", "value": ""},
+                    {"prefix": "IT", "value": ""},
+                    {"prefix": "E2E", "value": ""},
+                ],
+            )
+            self.assertEqual(member["interaction"], interaction)
+            self.assertIn(ui_notes, member["requirement"])
+            self.assertNotIn("must-not-reach-icp", built.stdout)
+
+            prepared = subprocess.run(
+                [sys.executable, str(ICP_FLOW_SCRIPT), "prepare", "--job", str(job_path)],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(prepared.returncode, 0, prepared.stdout + prepared.stderr)
+            next_node = subprocess.run(
+                [sys.executable, str(ICP_FLOW_SCRIPT), "next-node", "--job", str(job_path)],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(next_node.returncode, 0, next_node.stdout + next_node.stderr)
+            node_decision = json.loads(next_node.stdout)
+            self.assertEqual(node_decision["status"], "contract-compilation-required")
+            self.assertNotIn("worker_prompt", node_decision)
+            compiler_input = json.loads(
+                Path(node_decision["compiler_input"]).read_text(encoding="utf-8")
+            )
+            self.assertEqual(compiler_input["kind"], "icp.contract-compiler-input.v1")
+            self.assertEqual(
+                compiler_input["members"][0]["source_contract"], source_contract
+            )
+            self.assertFalse(Path(node_decision["implementation_contract"]).exists())
+
     def test_extracts_title_only_references_without_document_page_ids(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             row_path = Path(temporary_directory) / "root-row.json"
@@ -237,6 +724,7 @@ class FlowPlanContractTests(unittest.TestCase):
                 "inspect_ready_flow_root",
                 "inspect_flow_rows",
                 "claim_flow_rows",
+                "release_flow_claim",
                 "expand_flow_claim",
                 "complete_flow_rows",
                 "record_flow_error",

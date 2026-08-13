@@ -58,7 +58,7 @@ client tick. Resume an existing v1 claim with the legacy v1 path below; never
 convert or take over its locator.
 
 For Google Sheets, require `inspect_ready_flow_root`, `inspect_flow_rows`,
-`claim_flow_rows`, `expand_flow_claim`, `complete_flow_rows`, and
+`claim_flow_rows`, `release_flow_claim`, `expand_flow_claim`, `complete_flow_rows`, and
 `record_flow_error`. Microsoft Excel flow work is
 `blocked/flow-connector-unavailable` until its adapter exposes equivalent
 operations; never downgrade a multi-page flow to independent single-row claims.
@@ -88,7 +88,19 @@ Run one new client flow in this order:
    summary, then decide `reuse`, `extend`, `create-shared`, or `create-local` for
    each component demand. Give every real edit one non-overlapping project-relative
    owner path. Classify reachable pages as `modify` or `navigate-only`.
-5. Run `build-plan`. Treat `needs-reopen` as a user-owned state change: a
+5. Persist the exact raw inspected member rows without normalization. Create a
+   separate `iole.flow-analysis-input.v1` containing only exact member titles,
+   normalized interaction references for graph discovery, change scope, owned
+   paths, and component analysis/decisions. Run `build-input --raw-rows ...
+   --analysis ... --mapping ...`; never hand-write or summarize `requirement`,
+   interaction copy, design fields, or UT/IT/E2E. Require
+   `iole.flow-plan-input.v3`, then run `build-plan --input ... --raw-rows ...
+   --mapping ...` so the plan gate rechecks every source contract against the same
+   raw rows. The exact raw-rows envelope, analysis JSON shape, `source-id` command,
+   component-decision fields, and runnable commands are published under
+   **Lossless input envelopes** in the required flow contract; use that public
+   shape without probing validator errors or reading implementation/tests. Treat
+   `needs-reopen` as a user-owned state change: a
    `review`/`done` page that must change has to be explicitly returned to `ready`.
    Stop on active leases, page graph errors, path ownership conflicts, or different
    non-empty member PRs.
@@ -103,22 +115,34 @@ Run one new client flow in this order:
    the common existing PR is not both open and backed by a present source branch,
    run v2 `pr-recovery-plan` against the exact fetched revision. All flow members
    always share the same branch and PR.
-8. Let `build-plan` derive opaque internal page keys from normalized titles. Run
-   v2 `build-job` to publish `icp.external-flow-job.v3`, then load ICP. ICP
+8. Let `build-plan` derive opaque internal page keys from normalized titles and
+   require `iole.flow-plan.v3`. Run `build-job` to publish
+   `icp.external-flow-job.v5`, then load ICP. ICP first returns
+   `contract-compilation-required`; the main ICP session freezes the exact
+   source/design implementation contract before any production edit. ICP then
    persists the execution DAG and returns one worker prompt at a time. Spawn exactly
    one child agent for each `ready` node, wait for its result, record it, and only
    then request the next node. The returned prompt requires every child to invoke
    and follow `$icp`; a page child is not complete without its page-level design,
    real-runtime, and visual evidence. Child agents never access Sheet state or
    Git/PR.
-   If `record-node` rejects a result or returns `node-failed`, do not dispatch or
-   repair another node; treat it as the controlled failure handled in step 11.
+   Page children own ICP's complete measured visual repair loop. An intermediate
+   mismatch never reaches IOLE. If `record-node` rejects a terminal result or
+   returns `node-failed` after ICP's blocker/no-progress boundary, do not dispatch
+   or repair another node; treat it as the controlled failure handled in step 11.
+   Every node receives the unchanged `iole.sheet-member-contract.v1`; it is
+   authoritative over derived prose. Missing, changed, summarized, or inconsistent
+   mapping-declared Sheet job content must fail before node dispatch. Queue, lease,
+   PR, error, ignored, and other-role cells remain outside ICP.
 9. If a changed child is discovered after claim, stop before editing it and call
    `expand_flow_claim`; never modify an unclaimed page.
-10. Require `icp.flow-handoff-result.v1`, independently verify its declared files
+10. Require `icp.flow-handoff-result.v2`, independently verify its declared files,
+    frozen implementation-contract SHA, exact required/covered clause equality,
     and full-flow evidence, then commit/push only those files. Reuse or create one
     PR against `dev`; never create one PR per page.
-11. Run `build-review-writeback`, reuse the exact bound `expected_values` for every
+11. Run `build-review-writeback --icp-result /absolute/result.json`; it fails
+    unless the canonical v2 result matches the flow/member digests and has complete
+    coverage. Reuse the exact bound `expected_values` for every
     member, and call `complete_flow_rows`. Move all members
     to `review` with the same PR and clear every lease/error, or mutate none. On a
     controlled failure run `build-error-writeback`, then call `record_flow_error`;
@@ -130,6 +154,29 @@ Run one new client flow in this order:
 
 Navigation-only targets do not change status or PR. IOLE never writes `done`.
 Review and merge own that transition for every affected row.
+
+## Explicit user-directed restart
+
+Treat the exact user instruction `重新开始` for the currently blocked persisted
+flow as authorization to call `release_flow_claim`; it is not authorization to
+release any other flow. Never simulate release by editing Sheet cells or deleting
+a locator.
+
+Use the persisted `flow_id`, original shared `lease_token`, and exact complete bound
+`expected_values` snapshot. The connector must atomically verify every member and
+either:
+
+- restore all members to the selected role's `ready`, clear that role's lease and
+  error fields, preserve PR/business/other-role fields, archive the active locator,
+  and return `icps.flow-release-result.v2/released`; or
+- mutate nothing and return a controlled mismatch.
+
+Accept the release result only when it names the exact persisted flow and members.
+Then preserve the old worktree and ICP evidence as an abandoned execution, create a
+fresh execution state, and call `claim_flow_rows` normally so the restarted flow
+gets a new lease. A repeated release may return `reconstructed=true`. Do not call
+release automatically from a scheduled tick or in response to an ordinary worker
+failure; explicit `重新开始` is the authority boundary.
 
 ## Install a schedule
 

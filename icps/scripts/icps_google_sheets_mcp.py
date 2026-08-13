@@ -555,6 +555,47 @@ def claim_flow_rows(
 
 
 @mcp.tool()
+def release_flow_claim(
+    spreadsheet_id: str,
+    sheet_name: str,
+    row_id_column: str,
+    status_column: str,
+    lease_token_column: str,
+    lease_until_column: str,
+    pr_url_column: str,
+    last_error_column: str,
+    flow_id: str,
+    lease_token: str,
+    expected_values: dict[str, dict[str, object]],
+    ready_value: str = "ready",
+    doing_value: str = "doing",
+    review_value: str = "review",
+    done_value: str = "done",
+) -> dict[str, object]:
+    """Restore one bound flow to ready and reset its connector claim state."""
+    mapping = flow_mapping_from_arguments(
+        row_id_column,
+        status_column,
+        lease_token_column,
+        lease_until_column,
+        pr_url_column,
+        last_error_column,
+        ready_value,
+        doing_value,
+        review_value,
+        done_value,
+    )
+    return build_flow_queue().release_flow_claim(
+        spreadsheet_id,
+        sheet_name,
+        mapping,
+        flow_id,
+        lease_token,
+        expected_values,
+    )
+
+
+@mcp.tool()
 def expand_flow_claim(
     spreadsheet_id: str,
     sheet_name: str,

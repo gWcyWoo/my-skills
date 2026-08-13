@@ -31,10 +31,13 @@ owned paths, and never touched Sheet or Git/PR ownership. Shared/integration nod
 must produce focused-test/self-check evidence. Every page node must additionally
 bind the exact design reference, a real platform runtime capture, and a passed
 visual comparison covering layout, typography, color, spacing, assets, and states
-through ICP's existing `icp.visual-evidence.v1` artifact and
-`icp.worker-node-result.v1`. Behavior-only page results and prose disclaimers about
-missing visual access are invalid. A failed node blocks the flow; later nodes do
-not run.
+through `icp.visual-verification.v1`: exact calibration, state contracts, anchors,
+regional metrics, repair history, and two independent passed
+`icp.visual-evidence.v1` runs per state. A first mismatch is not terminal; the page
+worker owns measured root-cause repair until pass, a real external/contract
+blocker, or two consecutive no-progress targeted repairs for the same mismatch.
+Behavior-only page results and prose disclaimers about missing visual access are
+invalid. A terminal failed node blocks the flow; later nodes do not run.
 
 After every node passes, the main ICP agent runs trusted full-flow tests, real
 browser/simulator/emulator capture, visual comparison, and E2E. Publish four

@@ -10,22 +10,34 @@ selected client role lease and an isolated Git worktree. ICP never polls Excel,
 selects or claims rows, mutates task status, commits, pushes, creates a PR, or writes
 URLs back.
 
-## Multi-page flow v3
+## Multi-page flow v5
 
-For `icp.external-flow-job.v3`, read
-[flow-job-contract-v3.md](references/flow-job-contract-v3.md),
+For every new `icp.external-flow-job.v5`, read
+[flow-job-contract-v5.md](references/flow-job-contract-v5.md),
+[flow-job-contract-v4.md](references/flow-job-contract-v4.md),
+[implementation-contract-v1.md](references/implementation-contract-v1.md),
 [page-graph-contract-v1.md](references/page-graph-contract-v1.md),
 [component-reuse-contract-v1.md](references/component-reuse-contract-v1.md), and
-[worker-node-contract-v1.md](references/worker-node-contract-v1.md).
+[worker-node-contract-v2.md](references/worker-node-contract-v2.md), plus
+[visual-verification-contract-v1.md](references/visual-verification-contract-v1.md)
+for every page node.
 
 Require component inventory evidence before implementation. Keep the interaction
 graph separate from the implementation DAG. Execute shared-component edits first,
 then modified leaf pages, then parents/navigation, and finally main-agent E2E.
 Require one non-overlapping owner for every changed path.
 
-Use the prepare, next-node, record-node, and finalize commands in the flow contract.
+Use prepare, next-node, record-contract, record-node, and finalize.
 Handle `next-node` exactly:
 
+- `contract-compilation-required`: remain in the main ICP session, read the
+  returned compiler prompt/input, inspect current public project contracts
+  read-only, fetch each exact design once, and compile the full implementation
+  contract before any test or production edit. Existing project behavior or an
+  explicit user decision that truly applies but is absent from Sheet/design must
+  be a provenance-backed task-local `context_source_clause`; never turn it into a
+  universal platform capability. Pass `record-contract`. Do not spawn an
+  implementation child yet.
 - `ready`: spawn exactly one child agent with the returned `worker_prompt`; wait
   for that child to finish before dispatching another node.
 - `resume-required`: resume the same child task from its persisted prompt/result
@@ -34,15 +46,21 @@ Handle `next-node` exactly:
 - `ready-for-finalize`: run main-agent full-flow verification and finalize.
 
 Every child agent must invoke and follow `$icp` for its one node; loading the Skill
-hash alone is not compliance. A page child must fetch the exact design reference,
-implement with integration-contract-first RED-GREEN slices, capture the real page
-from the browser/simulator/emulator, compare layout/typography/color/spacing/assets/
-states with the design, and repair all mismatches. It reuses ICP's existing
-`icp.visual-evidence.v1` artifact and writes `icp.worker-node-result.v1`; do not
-invent a worker-specific page workflow or evidence schema. If design access or
-real capture is unavailable, the implementation is a scaffold, or any
-visual mismatch remains, it must write `status=failed`; behavior tests cannot make
-that page pass. The main agent must reject any contrary result and stop immediately.
+hash alone is not compliance. The main ICP session, not an implementation child,
+has already frozen public targets, ownership, source clauses, exact acceptance
+cases, TDD slices, and the complete design-state matrix. A child consumes only its
+bound IDs and implements them in serial integration-contract-first RED-GREEN
+slices, then runs the measured root-cause loop in the visual contract.
+An intermediate mismatch is diagnostic evidence, not a worker result. Keep
+repairing one classified root cause at a time while the same metric improves.
+Only a real external/contract blocker or two consecutive no-progress repairs for
+the same target may return `status=failed`.
+
+The page child writes `icp.worker-node-result.v2` with exact clause evidence only
+after every state passes anchors and regional pixels in two independent
+capture/reset runs sealed by
+`icp.visual-verification.v1`. Behavior tests or one global pixel comparison cannot
+make a page pass. The main agent rejects any contrary result immediately.
 
 Shared-component and integration children still edit only their `allowed_paths`
 and run focused tests/self-check. No child reads or writes Sheet/Excel state, lease
@@ -53,8 +71,17 @@ After every node passes, the main ICP agent runs trusted full-flow tests, real
 browser/simulator/emulator capture, visual comparison, and E2E. Seal the four
 artifacts in `icp.flow-evidence-manifest.v1`; the exact union of worker-declared
 changed files becomes the flow handoff. Return only
-`icp.flow-handoff-result.v1/ready-for-pr`. IOLE alone owns Git/PR and multi-row
+`icp.flow-handoff-result.v2/ready-for-pr` with computed exact clause coverage. IOLE alone owns Git/PR and multi-row
 `review` writeback.
+
+Every v5 member contains an exact `source_contract` generated from mapping-declared
+Sheet job fields. Treat it as authoritative over every derived view. Preserve its
+copy, lists, newlines, whitespace, Unicode, and empty mapped sections exactly;
+never replace it with a summary or read Sheet state to reconstruct it. ICP verifies
+the source-contract digest, reconstructs every derived member field, recomputes the
+member digest, and fails before node dispatch on any mismatch. Continue accepting
+`icp.external-flow-job.v3` and v4 only for persisted legacy flows; never migrate
+their saved state in place.
 
 ## Single-page v2 compatibility
 
@@ -139,14 +166,19 @@ After `ready` or `resume-required`:
    existing code and make the smallest change that satisfies the supplied latest
    review; do not perform an unrelated redesign.
 3. Fetch and normalize only the supplied `design_ref` when the design step begins.
-4. Analyze layout, typography, assets, responsive behavior, and visible states.
+4. Define the public target/ownership boundary and exact observable visual-state
+   matrix; analyze layout, typography, assets, responsive behavior, and states.
 5. Implement only the requested page target in the supplied worktree using the
    selected platform's existing page, navigation, or component conventions.
 6. Package page assets and fonts with platform-native configuration.
 7. Run focused page tests and the minimum build/type gate needed for the page.
 8. Capture the real page from a browser, simulator, or emulator when verification
    reaches runtime capture. Never use the design image as the implemented UI.
-9. Produce visual comparison evidence and repair within one bounded repair cycle.
+9. Calibrate capture, take a baseline, then classify and repair one root cause per
+   measured iteration while the target metric improves. Pass only after anchors
+   and regional pixels are green in two independent capture/reset runs; use the
+   visual contract's controlled failure boundary for blockers or repeated
+   no-progress.
 
 Design access, platform tools, dependencies, and capture runtime are checked at the
 step that uses them, not in a monolithic startup preflight. A step failure becomes a

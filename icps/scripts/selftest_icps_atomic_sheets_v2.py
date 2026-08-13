@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from datetime import datetime, timezone
@@ -110,6 +111,30 @@ class FailBeforeUpdateFlowSheetStore(MemoryFlowSheetStore):
         return super().update_rows(spreadsheet_id, sheet_name, updates)
 
 
+class DriftAfterUpdateFlowSheetStore(MemoryFlowSheetStore):
+    def __init__(self, rows: list[SheetRow]) -> None:
+        super().__init__(rows)
+        self.drift_next_update = False
+
+    def update_rows(
+        self,
+        spreadsheet_id: str,
+        sheet_name: str,
+        updates: dict[int, dict[str, str]],
+    ) -> list[SheetRow]:
+        super().update_rows(spreadsheet_id, sheet_name, updates)
+        if self.drift_next_update:
+            self.drift_next_update = False
+            self.rows[1].values.update(
+                {
+                    "frontend status": "doing",
+                    "frontend lease_token": "other-worker",
+                    "frontend lease_until": "later",
+                }
+            )
+        return self.read_rows(spreadsheet_id, sheet_name, list(updates))
+
+
 def mapping() -> FlowQueueMapping:
     return FlowQueueMapping(
         row_id="编号",
@@ -160,6 +185,399 @@ def guards(*row_ids: str) -> dict[str, dict[str, object]]:
 
 
 class AtomicSheetFlowQueueTests(unittest.TestCase):
+    def test_releases_claimed_flow_and_allows_a_fresh_claim(self) -> None:
+        rows = ready_rows()
+        rows[0].values["业务字段"] = "保留"
+        rows[0].values["backend status"] = "doing"
+        rows[0].values["backend lease_token"] = "backend-lease"
+        store = MemoryFlowSheetStore(rows)
+        lease_tokens = iter(["flow-lease-1", "flow-lease-2"])
+        all_guards = guards("PAGE-001", "PAGE-002", "PAGE-003")
+        with tempfile.TemporaryDirectory() as lock_directory:
+            queue = AtomicSheetFlowQueue(
+                store=store,
+                lock_root=Path(lock_directory),
+                clock=lambda: datetime(2026, 8, 13, 8, 0, tzinfo=timezone.utc),
+                token_factory=lambda: next(lease_tokens),
+            )
+            claimed = queue.claim_flow(
+                "book",
+                "Tasks",
+                mapping(),
+                flow_id="iole-flow-abc",
+                row_ids=["PAGE-001", "PAGE-002", "PAGE-003"],
+                lease_seconds=3600,
+                expected_values=all_guards,
+            )
+            queue.record_flow_error(
+                "book",
+                "Tasks",
+                mapping(),
+                flow_id="iole-flow-abc",
+                lease_token=claimed["lease_token"],
+                error_code="worker/node-failed",
+                expected_values=all_guards,
+            )
+
+            released = queue.release_flow_claim(
+                "book",
+                "Tasks",
+                mapping(),
+                flow_id="iole-flow-abc",
+                lease_token="flow-lease-1",
+                expected_values=all_guards,
+            )
+
+            self.assertEqual(released["status"], "released")
+            self.assertFalse(released["reconstructed"])
+            self.assertEqual(
+                released["member_row_ids"],
+                ["PAGE-001", "PAGE-002", "PAGE-003"],
+            )
+            for row in store.rows:
+                self.assertEqual(row.values["frontend status"], "ready")
+                self.assertEqual(row.values["frontend pr"], "")
+                self.assertEqual(row.values["frontend lease_token"], "")
+                self.assertEqual(row.values["frontend lease_until"], "")
+                self.assertEqual(row.values["frontend last_error"], "")
+            self.assertEqual(store.rows[0].values["业务字段"], "保留")
+            self.assertEqual(store.rows[0].values["backend status"], "doing")
+            self.assertEqual(
+                store.rows[0].values["backend lease_token"], "backend-lease"
+            )
+
+            restarted = queue.claim_flow(
+                "book",
+                "Tasks",
+                mapping(),
+                flow_id="iole-flow-abc",
+                row_ids=["PAGE-001", "PAGE-002", "PAGE-003"],
+                lease_seconds=3600,
+                expected_values=all_guards,
+            )
+
+        self.assertEqual(restarted["status"], "claimed")
+        self.assertEqual(restarted["lease_token"], "flow-lease-2")
+        self.assertFalse(restarted["reconstructed"])
+        self.assertTrue(
+            all(row.values["frontend status"] == "doing" for row in store.rows)
+        )
+
+    def test_releases_a_claim_whose_members_were_already_reset_to_ready(self) -> None:
+        store = MemoryFlowSheetStore(ready_rows())
+        lease_tokens = iter(["flow-lease-1", "flow-lease-2"])
+        all_guards = guards("PAGE-001", "PAGE-002", "PAGE-003")
+        with tempfile.TemporaryDirectory() as lock_directory:
+            queue = AtomicSheetFlowQueue(
+                store=store,
+                lock_root=Path(lock_directory),
+                token_factory=lambda: next(lease_tokens),
+            )
+            queue.claim_flow(
+                "book",
+                "Tasks",
+                mapping(),
+                flow_id="iole-flow-abc",
+                row_ids=["PAGE-001", "PAGE-002", "PAGE-003"],
+                lease_seconds=3600,
+                expected_values=all_guards,
+            )
+            for row in store.rows:
+                row.values.update(
+                    {
+                        "frontend status": "ready",
+                        "frontend lease_token": "",
+                        "frontend lease_until": "",
+                        "frontend last_error": "",
+                    }
+                )
+
+            released = queue.release_flow_claim(
+                "book",
+                "Tasks",
+                mapping(),
+                flow_id="iole-flow-abc",
+                lease_token="flow-lease-1",
+                expected_values=all_guards,
+            )
+            restarted = queue.claim_flow(
+                "book",
+                "Tasks",
+                mapping(),
+                flow_id="iole-flow-abc",
+                row_ids=["PAGE-001", "PAGE-002", "PAGE-003"],
+                lease_seconds=3600,
+                expected_values=all_guards,
+            )
+
+        self.assertEqual(released["status"], "released")
+        self.assertEqual(restarted["lease_token"], "flow-lease-2")
+        self.assertEqual(len(store.batch_updates), 2)
+
+    def test_releases_mixed_members_that_still_belong_to_the_same_claim(self) -> None:
+        store = MemoryFlowSheetStore(ready_rows())
+        all_guards = guards("PAGE-001", "PAGE-002", "PAGE-003")
+        with tempfile.TemporaryDirectory() as lock_directory:
+            queue = AtomicSheetFlowQueue(
+                store=store,
+                lock_root=Path(lock_directory),
+                token_factory=lambda: "flow-lease-1",
+            )
+            queue.claim_flow(
+                "book",
+                "Tasks",
+                mapping(),
+                flow_id="iole-flow-abc",
+                row_ids=["PAGE-001", "PAGE-002", "PAGE-003"],
+                lease_seconds=3600,
+                expected_values=all_guards,
+            )
+            store.rows[1].values.update(
+                {
+                    "frontend status": "ready",
+                    "frontend lease_token": "",
+                    "frontend lease_until": "",
+                }
+            )
+            store.rows[2].values.update(
+                {
+                    "frontend status": "ready",
+                    "frontend last_error": "verification/visual-mismatch",
+                }
+            )
+
+            released = queue.release_flow_claim(
+                "book",
+                "Tasks",
+                mapping(),
+                flow_id="iole-flow-abc",
+                lease_token="flow-lease-1",
+                expected_values=all_guards,
+            )
+
+        self.assertEqual(released["status"], "released")
+        self.assertEqual(len(store.batch_updates), 2)
+        self.assertEqual(set(store.batch_updates[1]), {2, 3, 4})
+        for row in store.rows:
+            self.assertEqual(row.values["frontend status"], "ready")
+            self.assertEqual(row.values["frontend lease_token"], "")
+            self.assertEqual(row.values["frontend lease_until"], "")
+            self.assertEqual(row.values["frontend last_error"], "")
+
+    def test_reconstructs_a_released_flow_when_the_response_was_lost(self) -> None:
+        store = MemoryFlowSheetStore(ready_rows())
+        all_guards = guards("PAGE-001", "PAGE-002", "PAGE-003")
+        with tempfile.TemporaryDirectory() as lock_directory:
+            queue = AtomicSheetFlowQueue(
+                store=store,
+                lock_root=Path(lock_directory),
+                token_factory=lambda: "flow-lease-1",
+            )
+            queue.claim_flow(
+                "book",
+                "Tasks",
+                mapping(),
+                flow_id="iole-flow-abc",
+                row_ids=["PAGE-001", "PAGE-002", "PAGE-003"],
+                lease_seconds=3600,
+                expected_values=all_guards,
+            )
+            queue.release_flow_claim(
+                "book",
+                "Tasks",
+                mapping(),
+                flow_id="iole-flow-abc",
+                lease_token="flow-lease-1",
+                expected_values=all_guards,
+            )
+
+            reconstructed = queue.release_flow_claim(
+                "book",
+                "Tasks",
+                mapping(),
+                flow_id="iole-flow-abc",
+                lease_token="flow-lease-1",
+                expected_values=all_guards,
+            )
+
+        self.assertEqual(reconstructed["status"], "released")
+        self.assertTrue(reconstructed["reconstructed"])
+        self.assertEqual(len(store.batch_updates), 2)
+        self.assertTrue(
+            all(row.values["frontend status"] == "ready" for row in store.rows)
+        )
+
+    def test_reconstructs_release_after_the_sheet_update_response_was_lost(self) -> None:
+        store = LostResponseFlowSheetStore(ready_rows())
+        all_guards = guards("PAGE-001", "PAGE-002", "PAGE-003")
+        with tempfile.TemporaryDirectory() as lock_directory:
+            queue = AtomicSheetFlowQueue(
+                store=store,
+                lock_root=Path(lock_directory),
+                token_factory=lambda: "flow-lease-1",
+            )
+            queue.claim_flow(
+                "book",
+                "Tasks",
+                mapping(),
+                flow_id="iole-flow-abc",
+                row_ids=["PAGE-001", "PAGE-002", "PAGE-003"],
+                lease_seconds=3600,
+                expected_values=all_guards,
+            )
+            store.lose_next_update_response = True
+            with self.assertRaisesRegex(RuntimeError, "simulated lost response"):
+                queue.release_flow_claim(
+                    "book",
+                    "Tasks",
+                    mapping(),
+                    flow_id="iole-flow-abc",
+                    lease_token="flow-lease-1",
+                    expected_values=all_guards,
+                )
+
+            reconstructed = queue.release_flow_claim(
+                "book",
+                "Tasks",
+                mapping(),
+                flow_id="iole-flow-abc",
+                lease_token="flow-lease-1",
+                expected_values=all_guards,
+            )
+
+        self.assertEqual(reconstructed["status"], "released")
+        self.assertTrue(reconstructed["reconstructed"])
+        self.assertEqual(len(store.batch_updates), 2)
+
+    def test_release_rejects_a_member_owned_by_another_lease_without_mutation(self) -> None:
+        store = MemoryFlowSheetStore(ready_rows())
+        all_guards = guards("PAGE-001", "PAGE-002", "PAGE-003")
+        with tempfile.TemporaryDirectory() as lock_directory:
+            queue = AtomicSheetFlowQueue(
+                store=store,
+                lock_root=Path(lock_directory),
+                token_factory=lambda: "flow-lease-1",
+            )
+            queue.claim_flow(
+                "book",
+                "Tasks",
+                mapping(),
+                flow_id="iole-flow-abc",
+                row_ids=["PAGE-001", "PAGE-002", "PAGE-003"],
+                lease_seconds=3600,
+                expected_values=all_guards,
+            )
+            store.rows[1].values["frontend lease_token"] = "other-worker"
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "flow member is not owned by release lease",
+            ):
+                queue.release_flow_claim(
+                    "book",
+                    "Tasks",
+                    mapping(),
+                    flow_id="iole-flow-abc",
+                    lease_token="flow-lease-1",
+                    expected_values=all_guards,
+                )
+
+        self.assertEqual(len(store.batch_updates), 1)
+        self.assertTrue(
+            all(row.values["frontend status"] == "doing" for row in store.rows)
+        )
+
+    def test_finishes_archiving_a_release_interrupted_after_sheet_restore(self) -> None:
+        store = MemoryFlowSheetStore(ready_rows())
+        all_guards = guards("PAGE-001", "PAGE-002", "PAGE-003")
+        with tempfile.TemporaryDirectory() as lock_directory:
+            queue = AtomicSheetFlowQueue(
+                store=store,
+                lock_root=Path(lock_directory),
+                token_factory=lambda: "flow-lease-1",
+            )
+            queue.claim_flow(
+                "book",
+                "Tasks",
+                mapping(),
+                flow_id="iole-flow-abc",
+                row_ids=["PAGE-001", "PAGE-002", "PAGE-003"],
+                lease_seconds=3600,
+                expected_values=all_guards,
+            )
+            queue.release_flow_claim(
+                "book",
+                "Tasks",
+                mapping(),
+                flow_id="iole-flow-abc",
+                lease_token="flow-lease-1",
+                expected_values=all_guards,
+            )
+            active_path = queue._locator_path("book", "Tasks", "iole-flow-abc")
+            archive_path = queue._released_locator_path(
+                "book",
+                "Tasks",
+                "iole-flow-abc",
+                "flow-lease-1",
+            )
+            os.replace(archive_path, active_path)
+
+            reconstructed = queue.release_flow_claim(
+                "book",
+                "Tasks",
+                mapping(),
+                flow_id="iole-flow-abc",
+                lease_token="flow-lease-1",
+                expected_values=all_guards,
+            )
+            active_exists = active_path.exists()
+            archive_exists = archive_path.exists()
+
+        self.assertEqual(reconstructed["status"], "released")
+        self.assertTrue(reconstructed["reconstructed"])
+        self.assertFalse(active_exists)
+        self.assertTrue(archive_exists)
+
+    def test_release_keeps_locator_when_post_write_acknowledgement_drifts(self) -> None:
+        store = DriftAfterUpdateFlowSheetStore(ready_rows())
+        all_guards = guards("PAGE-001", "PAGE-002", "PAGE-003")
+        with tempfile.TemporaryDirectory() as lock_directory:
+            queue = AtomicSheetFlowQueue(
+                store=store,
+                lock_root=Path(lock_directory),
+                token_factory=lambda: "flow-lease-1",
+            )
+            queue.claim_flow(
+                "book",
+                "Tasks",
+                mapping(),
+                flow_id="iole-flow-abc",
+                row_ids=["PAGE-001", "PAGE-002", "PAGE-003"],
+                lease_seconds=3600,
+                expected_values=all_guards,
+            )
+            store.drift_next_update = True
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "flow release acknowledgement drift",
+            ):
+                queue.release_flow_claim(
+                    "book",
+                    "Tasks",
+                    mapping(),
+                    flow_id="iole-flow-abc",
+                    lease_token="flow-lease-1",
+                    expected_values=all_guards,
+                )
+            locator_remains = queue._locator_path(
+                "book",
+                "Tasks",
+                "iole-flow-abc",
+            ).exists()
+
+        self.assertTrue(locator_remains)
+
     def test_claims_flow_members_by_unique_titles_without_a_number_column(self) -> None:
         rows = [
             SheetRow(

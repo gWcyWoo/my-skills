@@ -12,10 +12,12 @@ from urllib.parse import urlparse
 
 
 DEFAULT_MAPPING = Path(__file__).parents[1] / "references" / "role-mapping-v2.json"
+ICP_SKILL_PATH = "~/.agents/skills/icp/SKILL.md"
 FLOW_CONNECTOR_OPERATIONS = [
     "inspect_ready_flow_root",
     "inspect_flow_rows",
     "claim_flow_rows",
+    "release_flow_claim",
     "expand_flow_claim",
     "complete_flow_rows",
     "record_flow_error",
@@ -35,6 +37,8 @@ PLATFORM_PROFILES = {
     "vue": "vue-vite",
 }
 TITLE_REFERENCE = re.compile(r"→[ \t]*「(?P<title>[^」\r\n]+)」")
+REVIEW_LINE = re.compile(r"^\s*(?P<number>[1-9][0-9]*)\.\s*(?P<text>\S(?:.*\S)?)\s*$")
+SHA256_HEX = re.compile(r"[0-9a-f]{64}")
 
 
 def canonical_bytes(value: object) -> bytes:
@@ -100,14 +104,50 @@ def load_mapping_v2(path: Path) -> dict[str, object]:
     if (
         not isinstance(page, dict)
         or common["row_id"] != page.get("title")
+        or not isinstance(page.get("interaction"), str)
+        or not page["interaction"]
         or flow.get("reference_syntax") != "→「页面标题」"
     ):
         raise ValueError("flow title mapping is invalid")
+    if not isinstance(job.get("design_ref"), str) or not job["design_ref"]:
+        raise ValueError("flow mapping design reference is invalid")
+    design_source = job.get("design_source")
+    if (
+        not isinstance(design_source, dict)
+        or set(design_source) != {"constant"}
+        or not isinstance(design_source["constant"], str)
+        or not design_source["constant"]
+    ):
+        raise ValueError("flow mapping design source is invalid")
+    route_source = page.get("route")
+    if not (
+        isinstance(route_source, str)
+        and route_source
+        or isinstance(route_source, list)
+        and route_source
+        and all(isinstance(alias, str) and alias for alias in route_source)
+    ):
+        raise ValueError("flow mapping route is invalid")
+    for section_name, section_keys in (
+        ("requirement_sections", {"label", "source"}),
+        ("acceptance_sections", {"prefix", "source"}),
+    ):
+        sections = job.get(section_name)
+        if not isinstance(sections, list) or any(
+            not isinstance(section, dict)
+            or set(section) != section_keys
+            or any(
+                not isinstance(section[key], str) or not section[key]
+                for key in section_keys
+            )
+            for section in sections
+        ):
+            raise ValueError(f"flow mapping {section_name} is invalid")
     client = roles.get("client")
     if (
         not isinstance(client, dict)
         or client.get("worker_skill_name") != "icp"
-        or client.get("worker_skill") != "~/.agents/skills/icp/SKILL.md"
+        or client.get("worker_skill") != ICP_SKILL_PATH
         or not isinstance(client.get("queue"), dict)
     ):
         raise ValueError("client-worker-must-be-icp")
@@ -138,6 +178,189 @@ def load_mapping_v2(path: Path) -> dict[str, object]:
     ):
         raise ValueError("flow mapping columns are invalid")
     return mapping
+
+
+def exact_cell(row: dict[str, object], source: str, label: str) -> str:
+    if source not in row:
+        raise ValueError(f"raw Sheet field is missing: {label}")
+    value = row[source]
+    if not isinstance(value, str):
+        raise ValueError(f"raw Sheet field must be a string: {label}")
+    return value
+
+
+def resolve_exact_source(row: dict[str, object], source: object, label: str) -> str:
+    if isinstance(source, str):
+        return exact_cell(row, source, label)
+    if not isinstance(source, list) or not source or any(
+        not isinstance(alias, str) or not alias for alias in source
+    ):
+        raise ValueError(f"mapping {label} source is invalid")
+    present = [alias for alias in source if alias in row]
+    if len(present) != 1:
+        raise ValueError(f"raw Sheet {label} alias is missing or ambiguous")
+    return exact_cell(row, present[0], label)
+
+
+def exact_sections(
+    row: dict[str, object], sections: object, label_key: str
+) -> list[dict[str, str]]:
+    if not isinstance(sections, list):
+        raise ValueError("mapping sections are invalid")
+    result: list[dict[str, str]] = []
+    for section in sections:
+        if not isinstance(section, dict):
+            raise ValueError("mapping section is invalid")
+        source = section.get("source")
+        label = section.get(label_key)
+        if not isinstance(source, str) or not isinstance(label, str):
+            raise ValueError("mapping section fields are invalid")
+        result.append({label_key: label, "value": exact_cell(row, source, label)})
+    return result
+
+
+def parse_latest_review(value: str) -> dict[str, object] | None:
+    if not value.strip():
+        return None
+    parsed: list[tuple[int, str]] = []
+    previous = 0
+    for line in value.splitlines():
+        if not line.strip():
+            continue
+        match = REVIEW_LINE.fullmatch(line)
+        if match is None:
+            raise ValueError("reviews must use numbered non-empty lines")
+        number = int(match.group("number"))
+        if number <= previous:
+            raise ValueError("review numbers must be strictly increasing")
+        previous = number
+        parsed.append((number, match.group("text")))
+    if not parsed:
+        return None
+    number, text = parsed[-1]
+    return {"number": number, "text": text}
+
+
+def source_contract_digest(contract: dict[str, object]) -> str:
+    payload = {key: value for key, value in contract.items() if key != "contract_digest"}
+    return hashlib.sha256(canonical_bytes(payload)).hexdigest()
+
+
+def validate_source_contract(contract: object) -> dict[str, object]:
+    expected_keys = {
+        "acceptance_sections",
+        "contract_digest",
+        "design_ref",
+        "interaction",
+        "kind",
+        "requirement_sections",
+        "route",
+        "schema_version",
+        "title",
+    }
+    if not isinstance(contract, dict) or set(contract) != expected_keys:
+        raise ValueError("Sheet source contract is invalid")
+    if (
+        contract["kind"] != "iole.sheet-member-contract.v1"
+        or contract["schema_version"] != 1
+    ):
+        raise ValueError("Sheet source contract version is invalid")
+    for field in ("title", "route", "design_ref", "interaction"):
+        if not isinstance(contract[field], str):
+            raise ValueError(f"Sheet source contract {field} is invalid")
+    for field, label_key in (
+        ("requirement_sections", "label"),
+        ("acceptance_sections", "prefix"),
+    ):
+        sections = contract[field]
+        if not isinstance(sections, list) or any(
+            not isinstance(section, dict)
+            or set(section) != {label_key, "value"}
+            or not isinstance(section[label_key], str)
+            or not section[label_key]
+            or not isinstance(section["value"], str)
+            for section in sections
+        ):
+            raise ValueError(f"Sheet source contract {field} is invalid")
+    digest = contract["contract_digest"]
+    if (
+        not isinstance(digest, str)
+        or SHA256_HEX.fullmatch(digest) is None
+        or digest != source_contract_digest(contract)
+    ):
+        raise ValueError("Sheet source contract digest mismatch")
+    return contract
+
+
+def source_contract_from_raw(
+    raw_row: dict[str, object], job_mapping: dict[str, object]
+) -> dict[str, object]:
+    page_mapping = job_mapping["page"]
+    assert isinstance(page_mapping, dict)
+    contract: dict[str, object] = {
+        "kind": "iole.sheet-member-contract.v1",
+        "schema_version": 1,
+        "title": resolve_exact_source(raw_row, page_mapping["title"], "title"),
+        "route": resolve_exact_source(raw_row, page_mapping["route"], "route"),
+        "design_ref": exact_cell(
+            raw_row, str(job_mapping["design_ref"]), "design_ref"
+        ),
+        "interaction": exact_cell(
+            raw_row, str(page_mapping["interaction"]), "interaction"
+        ),
+        "requirement_sections": exact_sections(
+            raw_row, job_mapping["requirement_sections"], "label"
+        ),
+        "acceptance_sections": exact_sections(
+            raw_row, job_mapping["acceptance_sections"], "prefix"
+        ),
+    }
+    contract["contract_digest"] = source_contract_digest(contract)
+    return validate_source_contract(contract)
+
+
+def verify_flow_input_against_raw(
+    document: dict[str, object], raw_rows_path: Path, mapping_path: Path
+) -> None:
+    if document.get("kind") != "iole.flow-plan-input.v3":
+        return
+    mapping = load_mapping_v2(mapping_path)
+    if document.get("mapping_digest") != hashlib.sha256(mapping_path.read_bytes()).hexdigest():
+        raise ValueError("flow input mapping digest mismatch")
+    raw_rows = load_input_document(raw_rows_path, "raw Sheet rows")
+    job_mapping = mapping["job"]
+    assert isinstance(job_mapping, dict)
+    page_mapping = job_mapping["page"]
+    assert isinstance(page_mapping, dict)
+    indexed_raw: dict[str, dict[str, object]] = {}
+    for external_title, raw_row in raw_rows.items():
+        if not isinstance(external_title, str) or not isinstance(raw_row, dict):
+            raise ValueError("raw Sheet rows are invalid")
+        title = normalize_title(
+            resolve_exact_source(raw_row, page_mapping["title"], "title")
+        )
+        if normalize_title(external_title) != title or title in indexed_raw:
+            raise ValueError("raw Sheet row identity is invalid")
+        indexed_raw[title] = raw_row
+    input_rows = document.get("rows")
+    if not isinstance(input_rows, list):
+        raise ValueError("flow rows are required")
+    input_titles: list[str] = []
+    for row in input_rows:
+        if not isinstance(row, dict):
+            raise ValueError("flow row must be an object")
+        title = normalize_title(row.get("title"))
+        input_titles.append(title)
+        raw_row = indexed_raw.get(title)
+        if raw_row is None:
+            raise ValueError(f"raw Sheet row is missing: {title}")
+        expected = source_contract_from_raw(raw_row, job_mapping)
+        if row.get("source_contract") != expected:
+            raise ValueError(
+                f"flow input source contract does not match raw Sheet: {title}"
+            )
+    if len(input_titles) != len(set(input_titles)) or set(input_titles) != set(indexed_raw):
+        raise ValueError("raw Sheet rows and flow input rows do not match")
 
 
 def build_schedule_plan(
@@ -202,12 +425,167 @@ def build_schedule_plan(
         "role": role,
         "mapping_path": str(mapping_path),
         "worker_skill_name": "icp",
-        "worker_skill": "~/.agents/skills/icp/SKILL.md",
+        "worker_skill": ICP_SKILL_PATH,
         "connector_queue": connector_queue,
         "required_connector_operations": FLOW_CONNECTOR_OPERATIONS,
         "rrule": f"FREQ=MINUTELY;INTERVAL={interval_minutes}",
         "prompt": "Use $iole run-once with "
         + json.dumps(prompt_payload, ensure_ascii=False, sort_keys=True),
+    }
+
+
+def build_flow_input(
+    raw_rows_path: Path,
+    analysis_path: Path,
+    mapping_path: Path,
+) -> dict[str, object]:
+    raw_rows = load_input_document(raw_rows_path, "raw Sheet rows")
+    analysis = load_input_document(analysis_path, "flow analysis")
+    if (
+        analysis.get("kind") != "iole.flow-analysis-input.v1"
+        or analysis.get("schema_version") != 1
+    ):
+        raise ValueError("flow analysis contract version is invalid")
+    if not isinstance(analysis.get("source_id"), str) or SOURCE_ID.fullmatch(
+        str(analysis["source_id"])
+    ) is None:
+        raise ValueError("flow source identity is invalid")
+    if analysis.get("role") != "client":
+        raise ValueError("flow role must be client")
+    analysis_rows = analysis.get("rows")
+    if not isinstance(analysis_rows, list) or not analysis_rows:
+        raise ValueError("flow analysis rows are required")
+    if not isinstance(analysis.get("component_plan"), list):
+        raise ValueError("component plan must be a list")
+    component_analysis = analysis.get("component_analysis")
+    if not isinstance(component_analysis, dict):
+        raise ValueError("component analysis is required")
+
+    mapping = load_mapping_v2(mapping_path)
+    common = mapping["common"]
+    roles = mapping["roles"]
+    job_mapping = mapping["job"]
+    assert isinstance(common, dict) and isinstance(roles, dict) and isinstance(job_mapping, dict)
+    client = roles["client"]
+    assert isinstance(client, dict)
+    queue = client["queue"]
+    page_mapping = job_mapping["page"]
+    design_source_mapping = job_mapping["design_source"]
+    assert isinstance(queue, dict) and isinstance(page_mapping, dict)
+    assert isinstance(design_source_mapping, dict)
+    status_values = queue["status_values"]
+    assert isinstance(status_values, dict)
+
+    indexed_raw_rows: dict[str, dict[str, object]] = {}
+    for external_title, raw_row in raw_rows.items():
+        if not isinstance(external_title, str) or not isinstance(raw_row, dict):
+            raise ValueError("raw Sheet rows are invalid")
+        exact_title = resolve_exact_source(raw_row, page_mapping["title"], "title")
+        normalized_title = normalize_title(exact_title)
+        if normalize_title(external_title) != normalized_title:
+            raise ValueError("raw Sheet row key does not match its title")
+        if normalized_title in indexed_raw_rows:
+            raise ValueError(f"duplicate raw Sheet title: {normalized_title}")
+        indexed_raw_rows[normalized_title] = raw_row
+
+    normalized_rows: list[dict[str, object]] = []
+    selected_titles: list[str] = []
+    for analysis_row in analysis_rows:
+        if not isinstance(analysis_row, dict) or set(analysis_row) != {
+            "allowed_paths",
+            "change_scope",
+            "normalized_interaction",
+            "title",
+        }:
+            raise ValueError("flow analysis row is invalid")
+        title = normalize_title(analysis_row["title"])
+        if title in selected_titles:
+            raise ValueError(f"duplicate page title: {title}")
+        selected_titles.append(title)
+        raw_row = indexed_raw_rows.get(title)
+        if raw_row is None:
+            raise ValueError(f"raw Sheet row is missing: {title}")
+        normalized_interaction = analysis_row["normalized_interaction"]
+        if not isinstance(normalized_interaction, str):
+            raise ValueError("normalized interaction must be a string")
+        if analysis_row["change_scope"] not in {"modify", "navigate-only"}:
+            raise ValueError("page change scope is invalid")
+        allowed_paths = analysis_row["allowed_paths"]
+        if (
+            not isinstance(allowed_paths, list)
+            or not allowed_paths
+            or any(
+                not isinstance(path, str)
+                or not path
+                or Path(path).is_absolute()
+                or ".." in Path(path).parts
+                for path in allowed_paths
+            )
+        ):
+            raise ValueError("page allowed paths are invalid")
+
+        source_contract = source_contract_from_raw(raw_row, job_mapping)
+        exact_title = str(source_contract["title"])
+        exact_route = str(source_contract["route"])
+        exact_design_ref = str(source_contract["design_ref"])
+        requirements = source_contract["requirement_sections"]
+        acceptance = source_contract["acceptance_sections"]
+        assert isinstance(requirements, list) and isinstance(acceptance, list)
+
+        status = exact_cell(raw_row, str(queue["status"]), "status").strip()
+        if status not in status_values.values():
+            raise ValueError(f"page status is invalid: {title}")
+        pr_url = exact_cell(raw_row, str(queue["pr_url"]), "pr_url").strip()
+        reviews = exact_cell(raw_row, str(queue["reviews"]), "reviews")
+        latest_review = parse_latest_review(reviews)
+        if bool(pr_url) != (latest_review is not None):
+            raise ValueError("review and PR URL must either both exist or both be empty")
+        if pr_url:
+            parsed_pr = urlparse(pr_url)
+            if parsed_pr.scheme not in {"http", "https"} or not parsed_pr.hostname:
+                raise ValueError(f"page PR URL is invalid: {title}")
+
+        requirement = "\n".join(
+            f"{section['label']}: {section['value']}"
+            for section in requirements
+            if str(section["value"]).strip()
+        )
+        acceptance_criteria = [
+            f"{section['prefix']}: {section['value']}"
+            for section in acceptance
+            if str(section["value"]).strip()
+        ]
+        normalized_rows.append(
+            {
+                "title": title,
+                "status": status,
+                "pr_url": pr_url,
+                "design_ref": exact_design_ref.strip(),
+                "route": exact_route.strip(),
+                "interaction": normalized_interaction,
+                "change_scope": analysis_row["change_scope"],
+                "requirement": requirement,
+                "acceptance_criteria": acceptance_criteria,
+                "design_source": design_source_mapping["constant"],
+                "mode": "revise" if latest_review is not None else "implement",
+                "review": latest_review,
+                "allowed_paths": allowed_paths,
+                "source_contract": source_contract,
+            }
+        )
+    if set(indexed_raw_rows) != set(selected_titles):
+        raise ValueError("raw Sheet rows and flow analysis rows do not match")
+
+    return {
+        "kind": "iole.flow-plan-input.v3",
+        "schema_version": 3,
+        "source_id": analysis["source_id"],
+        "role": analysis["role"],
+        "root_title": normalize_title(analysis.get("root_title")),
+        "rows": normalized_rows,
+        "component_analysis": component_analysis,
+        "component_plan": analysis["component_plan"],
+        "mapping_digest": hashlib.sha256(mapping_path.read_bytes()).hexdigest(),
     }
 
 
@@ -222,9 +600,11 @@ def load_input(path: Path) -> dict[str, object]:
         raise ValueError("flow input is not valid JSON") from exc
     if not isinstance(document, dict):
         raise ValueError("flow input must be a JSON object")
-    if document.get("kind") != "iole.flow-plan-input.v2" or document.get(
-        "schema_version"
-    ) != 2:
+    input_version = (document.get("kind"), document.get("schema_version"))
+    if input_version not in {
+        ("iole.flow-plan-input.v2", 2),
+        ("iole.flow-plan-input.v3", 3),
+    }:
         raise ValueError("flow input contract version is invalid")
     if not isinstance(document.get("source_id"), str) or SOURCE_ID.fullmatch(
         document["source_id"]
@@ -237,6 +617,10 @@ def load_input(path: Path) -> dict[str, object]:
         raise ValueError("flow rows are required")
     if not isinstance(document.get("component_plan"), list):
         raise ValueError("component plan must be a list")
+    if input_version == ("iole.flow-plan-input.v3", 3):
+        mapping_digest = document.get("mapping_digest")
+        if not isinstance(mapping_digest, str) or SHA256_HEX.fullmatch(mapping_digest) is None:
+            raise ValueError("flow input mapping digest is invalid")
     component_analysis = document.get("component_analysis")
     if (
         not isinstance(component_analysis, dict)
@@ -289,15 +673,15 @@ def page_id_from_title(title: str) -> str:
     return "page-" + hashlib.sha256(title.encode("utf-8")).hexdigest()[:20]
 
 
-def page_member(row: dict[str, object], page_id: str) -> dict[str, object]:
-    required_strings = (
-        "title",
-        "route",
-        "requirement",
-        "design_source",
-        "design_ref",
-    )
+def page_member(
+    row: dict[str, object], page_id: str, *, lossless: bool
+) -> dict[str, object]:
+    required_strings = ("title", "route", "design_source", "design_ref")
     if any(not isinstance(row.get(field), str) or not str(row[field]).strip() for field in required_strings):
+        raise ValueError("page implementation fields are invalid")
+    if not isinstance(row.get("requirement"), str) or (
+        not lossless and not str(row["requirement"]).strip()
+    ):
         raise ValueError("page implementation fields are invalid")
     acceptance = row.get("acceptance_criteria")
     if not isinstance(acceptance, list) or any(
@@ -333,7 +717,7 @@ def page_member(row: dict[str, object], page_id: str) -> dict[str, object]:
         )
     ):
         raise ValueError("page allowed paths are invalid")
-    return {
+    member = {
         "page_id": page_id,
         "title": row["title"],
         "route": row["route"],
@@ -344,9 +728,22 @@ def page_member(row: dict[str, object], page_id: str) -> dict[str, object]:
         "mode": row["mode"],
         "review": review,
     }
+    if lossless:
+        if not isinstance(row.get("interaction"), str):
+            raise ValueError("page interaction is invalid")
+        source_contract = validate_source_contract(row.get("source_contract"))
+        member["interaction"] = source_contract["interaction"]
+        member["source_contract"] = source_contract
+    return member
 
 
 def build_plan(document: dict[str, object]) -> dict[str, object]:
+    lossless = (
+        document.get("kind") == "iole.flow-plan-input.v3"
+        and document.get("schema_version") == 3
+    )
+    plan_kind = "iole.flow-plan.v3" if lossless else "iole.flow-plan.v2"
+    plan_schema_version = 3 if lossless else 2
     raw_rows = document["rows"]
     assert isinstance(raw_rows, list)
     rows: dict[str, dict[str, object]] = {}
@@ -426,7 +823,8 @@ def build_plan(document: dict[str, object]) -> dict[str, object]:
         if title in visited and rows[title]["change_scope"] == "navigate-only"
     ]
     members = [
-        page_member(rows[title], page_ids[title]) for title in claim_page_titles
+        page_member(rows[title], page_ids[title], lossless=lossless)
+        for title in claim_page_titles
     ]
     member_digests = {
         str(member["page_id"]): hashlib.sha256(canonical_bytes(member)).hexdigest()
@@ -463,8 +861,8 @@ def build_plan(document: dict[str, object]) -> dict[str, object]:
     root_page_id = page_ids[root_title]
     if blocked_page_titles:
         return {
-            "kind": "iole.flow-plan.v2",
-            "schema_version": 2,
+            "kind": plan_kind,
+            "schema_version": plan_schema_version,
             "flow_id": flow_id,
             "decision": "blocked",
             "reason": "active-member-claim",
@@ -478,8 +876,8 @@ def build_plan(document: dict[str, object]) -> dict[str, object]:
         }
     if len(distinct_pr_urls) > 1:
         return {
-            "kind": "iole.flow-plan.v2",
-            "schema_version": 2,
+            "kind": plan_kind,
+            "schema_version": plan_schema_version,
             "flow_id": flow_id,
             "decision": "blocked",
             "reason": "pr-conflict",
@@ -624,8 +1022,8 @@ def build_plan(document: dict[str, object]) -> dict[str, object]:
         *page_execution_order,
     ]
     return {
-        "kind": "iole.flow-plan.v2",
-        "schema_version": 2,
+        "kind": plan_kind,
+        "schema_version": plan_schema_version,
         "flow_id": flow_id,
         "decision": decision,
         "source_id": document["source_id"],
@@ -655,7 +1053,11 @@ def build_job(
     platform: str,
 ) -> dict[str, object]:
     plan = load_input_document(plan_path, "flow plan")
-    if plan.get("kind") != "iole.flow-plan.v2" or plan.get("schema_version") != 2:
+    plan_version = (plan.get("kind"), plan.get("schema_version"))
+    if plan_version not in {
+        ("iole.flow-plan.v2", 2),
+        ("iole.flow-plan.v3", 3),
+    }:
         raise ValueError("flow plan contract version is invalid")
     if plan.get("decision") != "ready":
         raise ValueError("flow plan is not ready")
@@ -682,10 +1084,20 @@ def build_job(
     member_digests = plan["member_digests"]
     if not isinstance(member_digests, dict) or not member_digests:
         raise ValueError("flow plan member digests are invalid")
+    if plan_version == ("iole.flow-plan.v3", 3):
+        members = plan["members"]
+        if not isinstance(members, list) or any(
+            not isinstance(member, dict)
+            or member_digests.get(str(member.get("page_id")))
+            != hashlib.sha256(canonical_bytes(member)).hexdigest()
+            for member in members
+        ):
+            raise ValueError("flow plan member digest mismatch")
     aggregate_digest = hashlib.sha256(canonical_bytes(member_digests)).hexdigest()
+    lossless = plan_version == ("iole.flow-plan.v3", 3)
     return {
-        "kind": "icp.external-flow-job.v3",
-        "schema_version": 3,
+        "kind": "icp.external-flow-job.v5" if lossless else "icp.external-flow-job.v3",
+        "schema_version": 5 if lossless else 3,
         "job_id": f"iole:client:{plan['flow_id']}:{aggregate_digest[:12]}",
         "flow_id": plan["flow_id"],
         "project_root": str(worktree.resolve()),
@@ -706,7 +1118,10 @@ def build_job(
 
 def build_branch_name(plan_path: Path) -> dict[str, object]:
     plan = load_input_document(plan_path, "flow plan")
-    if plan.get("kind") != "iole.flow-plan.v2" or plan.get("schema_version") != 2:
+    if (plan.get("kind"), plan.get("schema_version")) not in {
+        ("iole.flow-plan.v2", 2),
+        ("iole.flow-plan.v3", 3),
+    }:
         raise ValueError("flow plan contract version is invalid")
     source_id = plan.get("source_id")
     role = plan.get("role")
@@ -785,14 +1200,137 @@ def build_review_writeback(
     plan_path: Path,
     lease_token: str,
     pr_url: str,
+    icp_result_path: Path | None = None,
 ) -> dict[str, object]:
     plan = load_input_document(plan_path, "flow plan")
     if (
-        plan.get("kind") != "iole.flow-plan.v2"
-        or plan.get("schema_version") != 2
+        (plan.get("kind"), plan.get("schema_version"))
+        not in {("iole.flow-plan.v2", 2), ("iole.flow-plan.v3", 3)}
         or plan.get("decision") != "ready"
     ):
         raise ValueError("flow plan is not ready")
+    if (
+        (plan.get("kind"), plan.get("schema_version"))
+        == ("iole.flow-plan.v3", 3)
+        and icp_result_path is None
+    ):
+        raise ValueError(
+            "lossless review writeback requires a verified ICP v2 result"
+        )
+    if (plan.get("kind"), plan.get("schema_version")) == ("iole.flow-plan.v3", 3):
+        assert icp_result_path is not None
+        if icp_result_path.is_symlink() or not icp_result_path.is_file():
+            raise ValueError("ICP result contract is invalid")
+        result = load_input_document(icp_result_path, "ICP result")
+        expected_result_keys = {
+            "kind",
+            "schema_version",
+            "job_id",
+            "job_digest",
+            "flow_id",
+            "member_digests",
+            "base_revision",
+            "project_root",
+            "status",
+            "changed_files",
+            "verification",
+            "evidence_manifest",
+            "evidence_manifest_digest",
+            "implementation_contract_sha256",
+            "coverage",
+        }
+        if set(result) != expected_result_keys or (
+            result.get("kind"), result.get("schema_version"), result.get("status")
+        ) != ("icp.flow-handoff-result.v2", 2, "ready-for-pr"):
+            raise ValueError("ICP result contract is invalid")
+        if (
+            result.get("flow_id") != plan.get("flow_id")
+            or result.get("member_digests") != plan.get("member_digests")
+        ):
+            raise ValueError("ICP result does not match the claimed flow")
+        verification = result.get("verification")
+        if (
+            not isinstance(verification, dict)
+            or set(verification) != {"e2e", "node_tests", "runtime_capture", "visual"}
+            or set(verification.values()) != {"passed"}
+        ):
+            raise ValueError("ICP result verification is incomplete")
+        for field in (
+            "job_digest",
+            "evidence_manifest_digest",
+            "implementation_contract_sha256",
+        ):
+            if not isinstance(result.get(field), str) or SHA256_HEX.fullmatch(
+                str(result[field])
+            ) is None:
+                raise ValueError("ICP result digest is invalid")
+        coverage = result.get("coverage")
+        if not isinstance(coverage, dict) or set(coverage) != {
+            "status",
+            "required_clause_ids",
+            "covered_clause_ids",
+            "worker_evidence_digests",
+        }:
+            raise ValueError("ICP result acceptance coverage is incomplete")
+        required_clause_ids = coverage["required_clause_ids"]
+        covered_clause_ids = coverage["covered_clause_ids"]
+        if (
+            coverage["status"] != "passed"
+            or not isinstance(required_clause_ids, list)
+            or not required_clause_ids
+            or len(required_clause_ids) != len(set(required_clause_ids))
+            or covered_clause_ids != required_clause_ids
+        ):
+            raise ValueError("ICP result acceptance coverage is incomplete")
+        worker_digests = coverage["worker_evidence_digests"]
+        expected_node_ids = plan.get("execution_order")
+        if (
+            not isinstance(worker_digests, list)
+            or not isinstance(expected_node_ids, list)
+            or [item.get("node_id") for item in worker_digests if isinstance(item, dict)]
+            != expected_node_ids
+            or any(
+                not isinstance(item, dict)
+                or set(item) != {"node_id", "sha256"}
+                or not isinstance(item["sha256"], str)
+                or SHA256_HEX.fullmatch(item["sha256"]) is None
+                for item in worker_digests
+            )
+        ):
+            raise ValueError("ICP result worker evidence is incomplete")
+        project_root = result.get("project_root")
+        changed_files = result.get("changed_files")
+        if (
+            not isinstance(project_root, str)
+            or not Path(project_root).is_absolute()
+            or not Path(project_root).is_dir()
+            or not isinstance(changed_files, list)
+            or not changed_files
+            or len(changed_files) != len(set(changed_files))
+        ):
+            raise ValueError("ICP result changed files are invalid")
+        resolved_project = Path(project_root).resolve()
+        for relative in changed_files:
+            if not isinstance(relative, str) or not relative or Path(relative).is_absolute():
+                raise ValueError("ICP result changed files are invalid")
+            target = Path(project_root) / relative
+            try:
+                target.resolve(strict=True).relative_to(resolved_project)
+            except (OSError, ValueError) as exc:
+                raise ValueError("ICP result changed files are invalid") from exc
+            if target.is_symlink() or not target.is_file():
+                raise ValueError("ICP result changed files are invalid")
+        evidence_manifest = result.get("evidence_manifest")
+        if not isinstance(evidence_manifest, str) or not Path(evidence_manifest).is_absolute():
+            raise ValueError("ICP result evidence manifest is invalid")
+        manifest_path = Path(evidence_manifest)
+        if (
+            manifest_path.is_symlink()
+            or not manifest_path.is_file()
+            or hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+            != result["evidence_manifest_digest"]
+        ):
+            raise ValueError("ICP result evidence manifest is invalid")
     if (
         not isinstance(lease_token, str)
         or not lease_token
@@ -833,8 +1371,8 @@ def build_error_writeback(
 ) -> dict[str, object]:
     plan = load_input_document(plan_path, "flow plan")
     if (
-        plan.get("kind") != "iole.flow-plan.v2"
-        or plan.get("schema_version") != 2
+        (plan.get("kind"), plan.get("schema_version"))
+        not in {("iole.flow-plan.v2", 2), ("iole.flow-plan.v3", 3)}
         or plan.get("decision") != "ready"
     ):
         raise ValueError("flow plan is not ready")
@@ -891,8 +1429,14 @@ def main(argv: list[str] | None = None) -> int:
     schedule_parser.add_argument("--im", type=int, default=10)
     schedule_parser.add_argument("--project-root", required=True, type=Path)
     schedule_parser.add_argument("--mapping", type=Path, default=DEFAULT_MAPPING)
+    input_parser = subparsers.add_parser("build-input")
+    input_parser.add_argument("--raw-rows", required=True, type=Path)
+    input_parser.add_argument("--analysis", required=True, type=Path)
+    input_parser.add_argument("--mapping", type=Path, default=DEFAULT_MAPPING)
     plan_parser = subparsers.add_parser("build-plan")
     plan_parser.add_argument("--input", required=True, type=Path)
+    plan_parser.add_argument("--raw-rows", type=Path)
+    plan_parser.add_argument("--mapping", type=Path)
     job_parser = subparsers.add_parser("build-job")
     job_parser.add_argument("--plan", required=True, type=Path)
     job_parser.add_argument("--worktree", required=True, type=Path)
@@ -913,6 +1457,7 @@ def main(argv: list[str] | None = None) -> int:
     writeback_parser.add_argument("--plan", required=True, type=Path)
     writeback_parser.add_argument("--lease-token", required=True)
     writeback_parser.add_argument("--pr-url", required=True)
+    writeback_parser.add_argument("--icp-result", type=Path)
     error_parser = subparsers.add_parser("build-error-writeback")
     error_parser.add_argument("--plan", required=True, type=Path)
     error_parser.add_argument("--lease-token", required=True)
@@ -925,6 +1470,12 @@ def main(argv: list[str] | None = None) -> int:
                 arguments.role,
                 arguments.im,
                 arguments.project_root,
+                arguments.mapping,
+            )
+        elif arguments.command == "build-input":
+            result = build_flow_input(
+                arguments.raw_rows,
+                arguments.analysis,
                 arguments.mapping,
             )
         elif arguments.command == "extract-refs":
@@ -945,6 +1496,7 @@ def main(argv: list[str] | None = None) -> int:
                 arguments.plan,
                 arguments.lease_token,
                 arguments.pr_url,
+                arguments.icp_result,
             )
         elif arguments.command == "build-error-writeback":
             result = build_error_writeback(
@@ -953,7 +1505,16 @@ def main(argv: list[str] | None = None) -> int:
                 arguments.error_code,
             )
         elif arguments.command == "build-plan":
-            result = build_plan(load_input(arguments.input))
+            flow_input = load_input(arguments.input)
+            if flow_input.get("kind") == "iole.flow-plan-input.v3":
+                if arguments.raw_rows is None or arguments.mapping is None:
+                    raise ValueError(
+                        "lossless build-plan requires raw Sheet rows and mapping"
+                    )
+                verify_flow_input_against_raw(
+                    flow_input, arguments.raw_rows, arguments.mapping
+                )
+            result = build_plan(flow_input)
         else:
             result = build_job(
                 arguments.plan,

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import asyncio
 import unittest
 
-from icps_google_sheets_mcp import GoogleSheetStore
+from icps_google_sheets_mcp import GoogleSheetStore, mcp
 
 
 class FakeRequest:
@@ -48,6 +49,17 @@ class FakeSheetsService:
 
 
 class GoogleSheetStoreTests(unittest.TestCase):
+    def test_registers_guarded_flow_release_tool(self) -> None:
+        tools = {tool.name: tool for tool in asyncio.run(mcp.list_tools())}
+
+        self.assertIn("release_flow_claim", tools)
+        schema = tools["release_flow_claim"].inputSchema
+        self.assertTrue(
+            {"flow_id", "lease_token", "expected_values"}.issubset(
+                set(schema["required"])
+            )
+        )
+
     def test_ready_lookup_reads_only_status_column_then_selected_row(self) -> None:
         responses = {
             "'Tasks'!1:1": {"values": [["编号", "状态", "标题"]]},

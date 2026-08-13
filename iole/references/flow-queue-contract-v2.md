@@ -38,7 +38,141 @@ to set it to `ready`. Never reopen it silently. If any member is already `doing`
 block without mutation. Non-empty member PRs must be empty or all identical;
 different PRs are `blocked/pr-conflict`.
 
+## Lossless input envelopes
+
+`build-input` has two separate JSON inputs. Do not wrap the raw rows in a
+`kind`/`rows` document. The raw-rows file is a JSON object whose keys are the
+exact normalized member titles returned by the connector and whose values are
+the complete, unchanged row objects returned for those titles:
+
+```json
+{
+  "反馈": {
+    "标题": "反馈",
+    "Route": "feedback",
+    "设计稿地址": "https://design.example/feedback",
+    "UI补充描述": "",
+    "交互描述": "",
+    "接口描述": "",
+    "UT": "",
+    "IT": "",
+    "E2E": "",
+    "frontend status": "ready",
+    "frontend pr": "",
+    "frontend reviews": "",
+    "frontend lease_token": "",
+    "frontend lease_until": "",
+    "frontend last_error": ""
+  }
+}
+```
+
+The field names above come from the selected `iole.role-mapping.v2`; a different
+mapping means using that mapping's exact field names. Preserve additional
+connector-returned columns too. Every mapped value must remain a JSON string,
+including empty cells. For an aliased source such as `页面路由`/`Route`, include
+exactly the one alias that existed in the inspected row. The top-level key must
+equal the row's mapped title after Unicode NFC and surrounding-whitespace
+normalization; never repair the row by changing either value.
+
+Generate `source_id` from the connector-returned spreadsheet identity and exact
+sheet name; do not invent its digest:
+
+```sh
+python3 ~/.agents/skills/iole/scripts/iole_contract_v1.py \
+  source-id --provider google-sheets \
+  --spreadsheet-id '<connector spreadsheet identity>' \
+  --sheet-name '<exact sheet name>'
+```
+
+The separate analysis file has this exact public shape:
+
+```json
+{
+  "kind": "iole.flow-analysis-input.v1",
+  "schema_version": 1,
+  "source_id": "google-sheets:<64 lowercase hex characters from source-id>",
+  "role": "client",
+  "root_title": "反馈",
+  "rows": [
+    {
+      "title": "反馈",
+      "normalized_interaction": "",
+      "change_scope": "modify",
+      "allowed_paths": ["app/src/main/FeedbackScreen.kt"]
+    }
+  ],
+  "component_analysis": {
+    "inventory_source": "project-scan",
+    "searched_paths": ["app/src/main"],
+    "summary": "Inspected existing shared and feature-local components."
+  },
+  "component_plan": []
+}
+```
+
+Every `rows` item has exactly `title`, `normalized_interaction`, `change_scope`,
+and `allowed_paths`. `change_scope` is `modify` or `navigate-only`; paths are
+non-empty, project-relative ownership scopes. `component_analysis` has exactly
+the three fields shown, with at least one searched project-relative path. An
+empty `component_plan` is valid. Each non-empty component decision has exactly:
+
+```json
+{
+  "component_id": "shared-form-card",
+  "name": "FormCard",
+  "decision": "extend",
+  "code_path": "app/src/main/ui/FormCard.kt",
+  "allowed_paths": ["app/src/main/ui/FormCard.kt"],
+  "consumers": ["反馈"],
+  "evidence": "Existing shared component is the closest semantic match."
+}
+```
+
+`decision` is one of `reuse`, `extend`, `create-shared`, or `create-local`.
+Consumers are exact selected titles; `create-local` has exactly one consumer.
+All paths are project-relative, `code_path` is included in `allowed_paths`, and
+execution-node ownership scopes may not overlap. The analysis file contains no
+Sheet-derived requirement, acceptance, design, status, PR, or review prose.
+
+Run the lossless pair from absolute file paths:
+
+```sh
+python3 ~/.agents/skills/iole/scripts/iole_flow_contract_v2.py \
+  build-input --raw-rows /absolute/raw-rows.json \
+  --analysis /absolute/analysis.json \
+  --mapping /absolute/role-mapping-v2.json > /absolute/flow-input.json
+python3 ~/.agents/skills/iole/scripts/iole_flow_contract_v2.py \
+  build-plan --input /absolute/flow-input.json \
+  --raw-rows /absolute/raw-rows.json \
+  --mapping /absolute/role-mapping-v2.json > /absolute/flow-plan.json
+```
+
 ## Claim and expansion
+
+Before `build-plan`, pass the exact raw inspected member rows and a separate
+analysis document to `build-input` with the fixed role mapping. The analysis may
+contain only page identity, normalized reference prose, change scope, allowed
+paths, and component decisions; it must not author `requirement`, acceptance copy,
+or other Sheet-derived job values. `build-input` copies every mapping-declared job
+cell into `iole.sheet-member-contract.v1` without trimming or rewriting, preserves
+empty sections, and produces `iole.flow-plan-input.v3`. Normalized interaction is
+used only to construct the graph and never replaces the exact Sheet interaction.
+
+`build-plan` requires those same raw rows and mapping again, then publishes
+`iole.flow-plan.v3`; `build-job` publishes
+`icp.external-flow-job.v5`. Both member and source-contract digests cover exact
+values. ICP independently reconstructs derived fields and recomputes those digests
+before compiling an immutable implementation contract. The main ICP session binds
+every source clause to public behavior, acceptance cases, strict TDD slices, and
+frozen design states before any worker dispatch. Missing, summarized, inconsistent,
+or unbound content fails before implementation. V2 plan input and v3/v4 ICP jobs
+are legacy recovery formats only.
+
+Losslessness covers mapping-declared title, route, design reference, interaction,
+requirement sections, and UT/IT/E2E sections. Queue status, PR, reviews, lease,
+error, ignored columns, unrelated business cells, and other-role fields stay
+outside ICP.
 
 Call `claim_flow_rows` once with every `modify` identity, one raw guard snapshot, one
 deterministic `flow_id`, and one lease duration. Under the connector's host-wide
@@ -69,13 +203,37 @@ expansion before the batch update, then commit them to locator membership only
 after a successful acknowledgement or a fully matching lost-response read. A
 pre-write failure is safely replayable; partial state fails closed.
 
+## User-directed release and restart
+
+`release_flow_claim` is the only supported connector restart boundary for one v2
+flow. IOLE may call it only after the user explicitly says `重新开始` for the exact
+persisted flow. Pass its original flow ID, shared lease token, and complete bound
+immutable guard snapshot.
+
+Under the host-wide lock, require every member identity and guard to match the
+locator. A member may still be `doing` under the exact old lease or may be partially
+or fully reset toward `ready`, but it must not carry a different lease or a terminal
+status. Restore all members in one batch to `ready`, clear only the selected role's
+lease token, lease expiry, and error, and preserve its PR plus all business and
+other-role columns. Then atomically move the active locator to a durable release
+archive. Repeated calls for the same released lease reconstruct success; the next
+claim for that flow must create a fresh lease.
+
+On identity, guard, PR, terminal-state, or foreign-lease drift, mutate neither the
+Sheet nor locator. An unattended tick never releases a claim. After release, IOLE
+archives the failed ICP execution evidence and starts a fresh execution instead of
+resuming a terminal failed DAG.
+
 ## Terminal transitions
 
 Keep every member `doing` throughout implementation. Partial node success never
 writes `review`. On a controlled failure, call `record_flow_error` so every active
 member retains `doing` and the shared lease while receiving the same bounded error.
 
-After ICP verification and one PR succeed, call `complete_flow_rows` with every
+After ICP returns `icp.flow-handoff-result.v2`, run
+`build-review-writeback --icp-result` first. It rejects wrong flow/member identity,
+generic pass claims, invalid digests, and any required/covered clause difference.
+After that gate and one PR succeed, call `complete_flow_rows` with every
 member's immutable guards. Under one lock, require every row to remain `doing` with
 the shared lease and unchanged guards, then set the same PR URL and `review` status
 on every member and clear all leases/errors in one batch. One mismatch produces
