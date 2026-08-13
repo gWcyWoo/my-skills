@@ -1,0 +1,4 @@
+interface:
+  display_name: "Goal Review Workflow"
+  short_description: "Iterative regression-aware review and fixes"
+  default_prompt: "Use $grw to review and fix the current change until one clean review pass."

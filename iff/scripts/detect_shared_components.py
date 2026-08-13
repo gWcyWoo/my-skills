@@ -51,18 +51,7 @@ def canonical_subtree(root_id: str, by_id: dict[str, dict]) -> list[dict]:
         bbox = rel_bbox(node)
         return (bbox[1], bbox[0], str(node.get("type") or ""))
 
-    def has_paint_source(node: dict) -> bool:
-        if node.get("asset") or node.get("text"):
-            return True
-        return any(
-            bool(node.get(field))
-            for field in (
-                "fills", "rawFills", "solidFills", "gradientFills", "imageFills",
-                "border", "shadow", "effects",
-            )
-        )
-
-    def walk(node_id: str, depth: int, seen: set[str], covered_by_asset: bool) -> None:
+    def walk(node_id: str, depth: int, seen: set[str]) -> None:
         if node_id in seen:
             return
         seen.add(node_id)
@@ -78,18 +67,23 @@ def canonical_subtree(root_id: str, by_id: dict[str, dict]) -> list[dict]:
                 "has_asset": bool(node.get("asset")),
                 "is_text": bool(node.get("text")),
                 "exportable": bool(node.get("exportable")),
-                "has_paint_source": has_paint_source(node),
-                "covered_by_asset": covered_by_asset,
-                "is_leaf": not bool(node.get("children")),
-                "visible": node.get("effectiveVisible", node.get("visible", True)) is not False,
+                "text": node.get("text"),
+                "solidFills": node.get("solidFills"),
+                "gradientFills": node.get("gradientFills"),
+                "border": node.get("border"),
+                "radius": node.get("radius"),
+                "shadow": node.get("shadow"),
+                "opacity": node.get("opacity"),
+                "asset": node.get("asset"),
+                "componentProperties": node.get("componentProperties"),
+                "variantProperties": node.get("variantProperties"),
             }
         )
         children = [by_id[c] for c in (node.get("children") or []) if c in by_id]
-        descendants_covered = covered_by_asset or bool(node.get("asset"))
         for child in sorted(children, key=child_key):
-            walk(child["id"], depth + 1, seen, descendants_covered)
+            walk(child["id"], depth + 1, seen)
 
-    walk(root_id, 0, set(), False)
+    walk(root_id, 0, set())
     return records
 
 
@@ -107,6 +101,54 @@ def signature_of(root_id: str, by_id: dict[str, dict]) -> tuple[str, list[dict]]
     return "struct:" + hashlib.sha256(payload.encode("utf-8")).hexdigest(), records
 
 
+def loose_signature_of(records: list[dict]) -> str:
+    """Candidate-only skeleton that ignores optional leaf multiplicity and geometry."""
+    payload = sorted(
+        {
+            (int(record.get("depth") or 0), str(record.get("type") or ""), bool(record.get("is_text")))
+            for record in records
+        }
+    )
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    return "loose:" + hashlib.sha256(encoded).hexdigest()
+
+
+def variation_matrix(rows: list[dict]) -> list[dict]:
+    fields = (
+        "text",
+        "solidFills",
+        "gradientFills",
+        "border",
+        "radius",
+        "shadow",
+        "opacity",
+        "asset",
+        "componentProperties",
+        "variantProperties",
+    )
+    variations: list[dict] = []
+    record_count = min(len(row["records"]) for row in rows)
+    for index in range(record_count):
+        changed: dict[str, list[object]] = {}
+        for field in fields:
+            values_by_json = {
+                json.dumps(row["records"][index].get(field), ensure_ascii=False, sort_keys=True):
+                row["records"][index].get(field)
+                for row in rows
+            }
+            if len(values_by_json) > 1:
+                changed[field] = [values_by_json[key] for key in sorted(values_by_json)]
+        if changed:
+            variations.append(
+                {
+                    "index": index,
+                    "type": rows[0]["records"][index]["type"],
+                    "fields": changed,
+                }
+            )
+    return variations
+
+
 def load_registry(path: Path) -> dict:
     try:
         registry = load_json(path)
@@ -117,71 +159,10 @@ def load_registry(path: Path) -> dict:
     return registry
 
 
-def _legacy_registry_entry(
-    registered: dict[str, dict], rows: list[dict]
-) -> tuple[str, dict] | None:
-    """Bind a registry entry after signature-algorithm evolution.
-
-    Source spec + canonical node order is a deterministic identity for the
-    component that originally produced the registry entry.  It lets detector
-    upgrades reuse verified components without trusting fuzzy names or bboxes.
-    """
-    matches: list[tuple[str, dict]] = []
-    for old_signature, candidate in registered.items():
-        source = candidate.get("source_spec_dir")
-        canonical = candidate.get("canonical_nodes")
-        if not source or not isinstance(canonical, list) or not canonical:
-            continue
-        for row in rows:
-            row_nodes = [record["node"] for record in row["records"]]
-            if Path(source).resolve() == Path(row["spec_dir"]).resolve() and row_nodes == canonical:
-                matches.append((old_signature, candidate))
-                break
-    return matches[0] if len(matches) == 1 else None
-
-
-def _registered_entry_covers_paint(entry: dict | None, positions: list[int]) -> bool:
-    if not entry:
-        return False
-    canonical = entry.get("canonical_nodes") or []
-    expected = entry.get("expected_nodes") or {}
-    paint_markers = ("image", "asset", "svg", "png", "reference_region")
-    for position in positions:
-        if position >= len(canonical):
-            return False
-        implementation = str((expected.get(canonical[position]) or {}).get("impl") or "").lower()
-        if not any(marker in implementation for marker in paint_markers):
-            return False
-    return True
-
-
-def normalize_component_bbox(
-    bbox: object, artboard_width: object, kind: str
-) -> tuple[object, dict | None]:
-    """Adapt a common malformed right-edge-as-x export for header components."""
-    if not isinstance(bbox, list) or len(bbox) != 4 or kind != "header":
-        return bbox, None
-    try:
-        x, y, width, height = (float(value) for value in bbox)
-        boundary = float(artboard_width)
-    except (TypeError, ValueError):
-        return bbox, None
-    if not (0 <= x <= boundary and width > 0 and x + width > boundary and x - width >= 0):
-        return bbox, None
-    normalized = [x - width, y, width, height]
-    return normalized, {
-        "reason": "right_edge_encoded_as_x",
-        "originalBbox": bbox,
-        "normalizedBbox": normalized,
-        "artboardWidth": boundary,
-    }
-
-
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--spec-dirs", nargs="+", required=True,
-                        help="spec_dir paths of the current batch rows "
-                             "(each needs scene.json + groups.json + assets_manifest.json)")
+                        help="spec_dir paths of the current batch rows (each needs scene.json + groups.json)")
     parser.add_argument("--registry", required=True,
                         help="project shared-component registry, e.g. <project>/.iff/shared_components.json")
     parser.add_argument("--kinds", default=",".join(DEFAULT_KINDS),
@@ -195,6 +176,13 @@ def main() -> int:
     registry_path = Path(args.registry).expanduser()
     registry = load_registry(registry_path)
     registered = registry["components"]
+    registered_aliases: dict[str, dict] = {}
+    for registered_entry in registered.values():
+        for alias in registered_entry.get("source_aliases") or []:
+            existing_alias = registered_aliases.get(alias)
+            if existing_alias and existing_alias.get("family_id") != registered_entry.get("family_id"):
+                raise SystemExit(f"ERROR: source alias belongs to multiple component families: {alias}")
+            registered_aliases[alias] = registered_entry
 
     # occurrences[signature] -> list of {spec_dir, group..., records}
     occurrences: dict[str, list[dict]] = {}
@@ -206,30 +194,15 @@ def main() -> int:
         try:
             scene = load_json(spec / "scene.json")
             groups_doc = load_json(spec / "groups.json")
-            assets = load_json(spec / "assets_manifest.json")
         except FileNotFoundError as exc:
             errors.append(f"{spec}: missing artifact ({exc})")
             continue
         by_id = {node["id"]: node for node in (scene.get("nodes") or [])}
-        asset_ids = set(assets.keys()) if isinstance(assets, dict) else set()
-        covered_by_asset = {
-            record["node"]
-            for asset_id in asset_ids
-            for record in canonical_subtree(asset_id, by_id)
-            if record["node"] != asset_id
-        }
         for group in groups_doc.get("groups") or []:
             root_id = str(group.get("node") or "")
             if not root_id or root_id not in by_id:
                 continue
-            if root_id in covered_by_asset:
-                continue
             signature, records = signature_of(root_id, by_id)
-            component_bbox, bbox_adaptation = normalize_component_bbox(
-                group.get("bbox"),
-                (scene.get("artboard") or {}).get("width"),
-                str(group.get("kind") or "region"),
-            )
             exportable = [r for r in records if r["exportable"]]
             occurrences.setdefault(signature, []).append(
                 {
@@ -238,8 +211,7 @@ def main() -> int:
                     "group_node": root_id,
                     "group_name": (by_id.get(root_id) or {}).get("name"),
                     "kind": group.get("kind"),
-                    "bbox": component_bbox,
-                    "bbox_adaptation": bbox_adaptation,
+                    "bbox": group.get("bbox"),
                     "records": records,
                     "exportable_nodes": len(exportable),
                     "asset_nodes": sum(1 for r in records if r["has_asset"]),
@@ -254,7 +226,7 @@ def main() -> int:
     for signature, rows in sorted(occurrences.items()):
         row_dirs = {row["spec_dir"] for row in rows}
         kind = kind_by_signature[signature]
-        is_candidate = kind in kinds or len(row_dirs) >= 2 or signature in registered
+        is_candidate = kind in kinds or len(row_dirs) >= 2 or signature in registered or signature in registered_aliases
         if not is_candidate:
             continue
 
@@ -263,46 +235,48 @@ def main() -> int:
         # that has one.
         pooled_assets: dict[str, dict] = {}
         missing_positions: list[int] = []
-        paint_missing_positions: list[int] = []
         record_count = min(len(row["records"]) for row in rows)
         for index in range(record_count):
-            records_at_position = [row["records"][index] for row in rows]
-            if any(record["exportable"] or record["has_asset"] for record in records_at_position):
-                source = next((row for row in rows if row["records"][index]["has_asset"]), None)
-                if source is None:
-                    missing_positions.append(index)
-                else:
-                    pooled_assets[str(index)] = {
-                        "spec_dir": source["spec_dir"],
-                        "node": source["records"][index]["node"],
-                    }
-            visible_leaf = any(record["visible"] and record["is_leaf"] for record in records_at_position)
-            if visible_leaf and not any(
-                record["has_paint_source"] or record["covered_by_asset"]
-                for record in records_at_position
-            ):
-                paint_missing_positions.append(index)
+            if not any(row["records"][index]["exportable"] or row["records"][index]["has_asset"] for row in rows):
+                continue
+            source = next((row for row in rows if row["records"][index]["has_asset"]), None)
+            if source is None:
+                missing_positions.append(index)
+            else:
+                pooled_assets[str(index)] = {
+                    "spec_dir": source["spec_dir"],
+                    "node": source["records"][index]["node"],
+                }
         best = max(rows, key=lambda row: row["asset_nodes"])
-        entry = registered.get(signature)
-        if entry is None:
-            legacy = _legacy_registry_entry(registered, rows)
-            if legacy is not None:
-                old_signature, entry = legacy
-                print(f"INFO: rebound verified shared component {old_signature} -> {signature} "
-                      "by source spec + canonical node identity")
-        registered_paint_covered = _registered_entry_covers_paint(
-            entry, paint_missing_positions
-        ) if paint_missing_positions else False
-        unresolved_paint_positions = (
-            [] if registered_paint_covered else paint_missing_positions
-        )
-        reusable_entry = entry if entry and not unresolved_paint_positions else None
+        entry = registered.get(signature) or registered_aliases.get(signature)
+        status = "reuse" if entry else ("candidate" if signature.startswith("struct:") else "missing")
+        model_decision = None
+        if status == "candidate":
+            model_decision = {"required": True, "reason": "structural_match_only"}
         # canonical order gives a positional bijection page-node <-> source-node,
         # so consuming pages can verify the mounted shared widget (whose canvas
         # keys are SOURCE node ids) against their OWN scene geometry.
         node_maps: dict[str, dict[str, str]] = {}
-        source_nodes = (reusable_entry or {}).get("canonical_nodes") or []
-        if source_nodes:
+        source_nodes = (entry or {}).get("canonical_nodes") or []
+        node_role_nodes = (entry or {}).get("node_role_nodes") or {}
+        alias_role_indices = ((entry or {}).get("alias_role_indices") or {}).get(signature)
+        if alias_role_indices:
+            for row in rows:
+                mapped: dict[str, str] = {}
+                for role, index in alias_role_indices.items():
+                    source_node = node_role_nodes.get(role)
+                    if source_node is None:
+                        raise SystemExit(
+                            f"ERROR: role {role} has no canonical node for {signature}"
+                        )
+                    if not isinstance(index, int) or not 0 <= index < len(row["records"]):
+                        raise SystemExit(
+                            f"ERROR: role {role} has invalid canonical index {index} "
+                            f"for {signature} in {row['spec_dir']}"
+                        )
+                    mapped[row["records"][index]["node"]] = source_node
+                node_maps[row["spec_dir"]] = mapped
+        elif source_nodes:
             for row in rows:
                 row_nodes = [r["node"] for r in row["records"]]
                 if len(row_nodes) != len(source_nodes):
@@ -314,12 +288,15 @@ def main() -> int:
             {
                 "signature": signature,
                 "kind": kind,
-                "status": "reuse" if reusable_entry else "missing",
-                "widget": reusable_entry,
+                "status": status,
+                "model_decision": model_decision,
+                "loose_signature": loose_signature_of(rows[0]["records"]),
+                "variations": variation_matrix(rows),
+                "widget": entry,
                 "rows": [
                     {
                         **{k: row[k] for k in ("spec_dir", "group_id", "group_node", "group_name", "kind", "bbox",
-                                               "bbox_adaptation", "exportable_nodes", "asset_nodes")},
+                                               "exportable_nodes", "asset_nodes")},
                         "canonical_nodes": [r["node"] for r in row["records"]],
                         "node_map": node_maps.get(row["spec_dir"]),
                     }
@@ -327,11 +304,19 @@ def main() -> int:
                 ],
                 "best_asset_source": best["spec_dir"],
                 "pooled_assets": pooled_assets,
-                "assets_incomplete": bool(missing_positions or unresolved_paint_positions),
+                "assets_incomplete": bool(missing_positions),
                 "assets_missing_positions": missing_positions,
-                "paint_missing_positions": unresolved_paint_positions,
-                "source_paint_missing_positions": paint_missing_positions,
             }
+        )
+
+    by_loose: dict[str, list[str]] = {}
+    for component in components:
+        by_loose.setdefault(component["loose_signature"], []).append(component["signature"])
+    for component in components:
+        component["related_signatures"] = sorted(
+            signature
+            for signature in by_loose[component["loose_signature"]]
+            if signature != component["signature"]
         )
 
     resolution = {
@@ -351,11 +336,11 @@ def main() -> int:
                         "signature": comp["signature"],
                         "kind": comp["kind"],
                         "status": comp["status"],
+                        "model_decision": comp.get("model_decision"),
                         "name": (comp["widget"] or {}).get("name"),
                         "widget_path": (comp["widget"] or {}).get("widget_path"),
                         "group_node": row["group_node"],
                         "bbox": row["bbox"],
-                        "bbox_adaptation": row.get("bbox_adaptation"),
                         "node_map": row.get("node_map"),
                         "expected_nodes": (comp["widget"] or {}).get("expected_nodes"),
                     }
@@ -368,10 +353,14 @@ def main() -> int:
 
     reuse = sum(1 for c in components if c["status"] == "reuse")
     missing = sum(1 for c in components if c["status"] == "missing")
+    candidates = sum(1 for c in components if c["status"] == "candidate")
     incomplete = [c["signature"] for c in components if c["assets_incomplete"]]
-    print(f"ok shared components: {len(components)} candidates, {reuse} reuse, {missing} missing")
+    print(
+        f"ok shared components: {len(components)} total, {reuse} reuse, "
+        f"{missing} missing, {candidates} semantic candidate(s)"
+    )
     if incomplete:
-        print("WARNING assets_incomplete (missing slice asset or visible leaf paint source): "
+        print("WARNING assets_incomplete (no row has a slice export for some icon positions): "
               + ", ".join(incomplete))
     return 0
 

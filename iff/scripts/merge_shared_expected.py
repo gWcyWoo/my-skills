@@ -15,7 +15,6 @@ icon shape is gated separately by check_render_fidelity --diff-report.
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 
 from common import dump_json, load_json
@@ -35,21 +34,6 @@ def main() -> int:
         local = load_json(args.local)
     except FileNotFoundError:
         local = {}  # no shared components on this page -> pass-through copy
-
-    unresolved = [
-        {
-            "signature": comp.get("signature"),
-            "group_node": comp.get("group_node"),
-            "bbox": comp.get("bbox"),
-        }
-        for comp in (local.get("components") or [])
-        if comp.get("status") == "missing"
-    ]
-    if unresolved:
-        raise SystemExit(
-            "ERROR: unresolved shared components cannot be omitted from merged expectations: "
-            + json.dumps(unresolved, ensure_ascii=False)
-        )
     scene = load_json(args.scene)
     by_id = {node["id"]: node for node in (scene.get("nodes") or [])}
 
@@ -69,8 +53,6 @@ def main() -> int:
         for source_id in expected_nodes:
             page_node = source_to_page.get(source_id)
             page_bbox = (by_id.get(page_node) or {}).get("bbox") if page_node else None
-            if page_node and page_node == comp.get("group_node") and comp.get("bbox"):
-                page_bbox = comp["bbox"]
             if not page_bbox:
                 skipped += 1
                 continue

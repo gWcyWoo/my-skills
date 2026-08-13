@@ -13,54 +13,93 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 
-from scope_api_contract import ApiScopeError, feature_operations, file_sha256, load_object
+
+COMMENTS = re.compile(r"//[^\n]*|/\*.*?\*/", re.S)
+
+
+def has_call(text: str, method: str, endpoint: str) -> bool:
+    endpoint_pattern = re.escape(endpoint)
+    endpoint_pattern = re.sub(r"\\\{[^}]+\\\}", r"[^'\"]+", endpoint_pattern)
+    return bool(
+        re.search(
+            rf"\b{re.escape(method.lower())}\s*\([^)]{{0,200}}['\"]{endpoint_pattern}['\"]",
+            text,
+            re.I | re.S,
+        )
+    )
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--api-contract", required=True)
     ap.add_argument("--lib-root", default="lib")
+    ap.add_argument("--runtime-manifest")
     ap.add_argument("--out")
     args = ap.parse_args()
 
     contract_path = Path(args.api_contract)
-    try:
-        contract = load_object(contract_path, "feature API contract")
-        operations = feature_operations(contract)
-    except (ApiScopeError, OSError) as exc:
-        report = {
-            "contractScope": None,
-            "apiRequired": None,
-            "endpointCount": 0,
-            "operationCount": 0,
-            "integrated": [],
-            "missing": [],
-            "ok": False,
-            "contractError": str(exc),
-        }
-        if args.out:
-            Path(args.out).write_text(
-                json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-            )
-        print(f"FAIL api integration: invalid feature-scoped contract: {exc}")
+    if not contract_path.is_file():
+        print(f"FAIL api integration: {contract_path} not found (run normalize_api_contract.py first)")
+        return 1
+    contract = json.loads(contract_path.read_text(encoding="utf-8"))
+    operations = [
+        (path, method)
+        for path, methods in (contract.get("endpoints") or {}).items()
+        for method, operation in (methods or {}).items()
+        if isinstance(operation, dict)
+    ]
+    if not operations:
+        print("FAIL api integration: contract has no endpoints")
         return 1
 
     lib_root = Path(args.lib_root)
-    blob = "\n".join(p.read_text(encoding="utf-8", errors="ignore") for p in lib_root.rglob("*.dart"))
+    sources = []
+    for path in lib_root.rglob("*.dart"):
+        lower_name = path.name.lower()
+        if "mock" in lower_name or "fixture" in lower_name or path.name.endswith("_test.dart"):
+            continue
+        sources.append(COMMENTS.sub("", path.read_text(encoding="utf-8", errors="ignore")))
+    blob = "\n".join(sources)
 
-    selected = [f"{method} {path}" for path, method in operations]
-    missing = [f"{method} {path}" for path, method in operations if path not in blob]
-    integrated = [f"{method} {path}" for path, method in operations if path in blob]
+    operation_sources = None
+    if args.runtime_manifest:
+        runtime = json.loads(Path(args.runtime_manifest).read_text(encoding="utf-8"))
+        operation_sources = {}
+        operations = []
+        for operation in runtime.get("operations") or []:
+            key = (
+                str(operation.get("endpoint") or ""),
+                str(operation.get("method") or "").upper(),
+            )
+            operations.append(key)
+            real_path = lib_root.parent / str(operation.get("real") or "")
+            operation_sources[key] = (
+                COMMENTS.sub("", real_path.read_text(encoding="utf-8", errors="ignore"))
+                if real_path.is_file()
+                else ""
+            )
+
+    def source_for(path: str, method: str) -> str:
+        if operation_sources is None:
+            return blob
+        return operation_sources.get((path, method.upper()), "")
+
+    missing = [
+        f"{method} {path}"
+        for path, method in operations
+        if not has_call(source_for(path, method), method, path)
+    ]
+    integrated = [
+        f"{method} {path}"
+        for path, method in operations
+        if has_call(source_for(path, method), method, path)
+    ]
 
     report = {
-        "contractScope": "feature",
-        "apiRequired": contract["apiRequired"],
-        "contractSha256": file_sha256(contract_path),
-        "endpointCount": contract["endpointCount"],
         "operationCount": len(operations),
-        "selected": selected,
         "integrated": integrated,
         "missing": missing,
         "ok": not missing,
@@ -69,12 +108,12 @@ def main() -> int:
         Path(args.out).write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     if missing:
-        print(f"FAIL api integration: {len(missing)}/{len(operations)} selected operation(s) have no repository "
+        print(f"FAIL api integration: {len(missing)}/{len(operations)} operation(s) have no repository "
               f"call site in {lib_root}/:")
         for ep in missing:
             print(f"  - {ep}")
         return 1
-    print(f"ok api integration: all {len(operations)} selected operation(s) referenced in {lib_root}/")
+    print(f"ok api integration: all {len(operations)} operation(s) called in {lib_root}/")
     return 0
 
 

@@ -3,7 +3,7 @@
 instead of the raw multi-hundred-KB JSONs.
 
 Measured on real runs: scene.json 72-260KB, render_plan.json 67-227KB,
-layout_contract.json 40-100KB, oas.json + oas_ref_resources.json may be large, repair_plan.json up to 177KB —
+layout_contract.json 40-100KB, oas.json ~92KB, repair_plan.json up to 177KB —
 mandating full reads of those burned 100-250k tokens per page while the model
 only ever needed counts, ids and schema shape (the visible layer is generated
 by generate_canvas.py, not hand-drawn from node data). Big JSONs stay

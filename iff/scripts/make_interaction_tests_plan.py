@@ -14,6 +14,52 @@ VARIANTS = {
     "failure": "mocked API failure or invalid state renders the specified error/blocked result",
 }
 
+OUTCOME_FIELDS = {
+    "happy": "observableOutcome",
+    "boundary": "boundaryOutcome",
+    "failure": "failureOutcome",
+}
+
+
+def validate_plan(contract: dict, plan: dict) -> list[str]:
+    expected = {
+        f"{rule['id']}-{variant.upper()}"
+        for rule in contract.get("rules") or []
+        for variant in VARIANTS
+    }
+    actual = {
+        str(case.get("id"))
+        for case in plan.get("cases") or []
+        if isinstance(case, dict) and case.get("id")
+    }
+    failures = [f"missing interaction case: {case_id}" for case_id in sorted(expected - actual)]
+    failures.extend(f"unexpected interaction case: {case_id}" for case_id in sorted(actual - expected))
+    rules = {str(rule.get("id")): rule for rule in contract.get("rules") or []}
+    cases = {
+        str(case.get("id")): case
+        for case in plan.get("cases") or []
+        if isinstance(case, dict) and case.get("id")
+    }
+    for case_id in sorted(expected & actual):
+        interaction_id, variant_upper = case_id.rsplit("-", 1)
+        variant = variant_upper.lower()
+        rule = rules[interaction_id]
+        case = cases[case_id]
+        expected_fields = {
+            "interactionId": interaction_id,
+            "variant": variant,
+            "precondition": rule.get("precondition"),
+            "action": rule.get("action"),
+            "actionTarget": rule.get("actionTarget"),
+            "expectedObservable": rule.get(OUTCOME_FIELDS[variant]),
+            "expectedObservableTarget": (rule.get("observableTargets") or {}).get(variant),
+            "surface": "public_ui",
+        }
+        for field, value in expected_fields.items():
+            if case.get(field) != value:
+                failures.append(f"{case_id}: {field} mismatch")
+    return failures
+
 
 def main() -> int:
     parser = argparse.ArgumentParser()
@@ -38,10 +84,14 @@ def main() -> int:
                     "id": case_id,
                     "interactionId": rule["id"],
                     "variant": variant,
-                    "trigger": rule.get("trigger"),
-                    "expectation": rule.get("expectation"),
+                    "precondition": rule.get("precondition"),
+                    "action": rule.get("action"),
+                    "actionTarget": rule.get("actionTarget"),
+                    "expectedObservable": rule.get(OUTCOME_FIELDS[variant]),
+                    "expectedObservableTarget": (rule.get("observableTargets") or {}).get(variant),
+                    "surface": "public_ui",
                     "purpose": purpose,
-                    "testIdMustAppearInTestNameOrComment": case_id,
+                    "testIdMustAppearInTestWidgetsName": case_id,
                     "usesApiContract": bool(api_contract),
                 }
             )

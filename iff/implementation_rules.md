@@ -2,7 +2,7 @@
 
 > 本文件是 iFF 落地 Flutter 代码的**强制实现规范(MUST)**,所有 worker 写代码前必须加载并遵守。
 > 由 `scripts/sync_project_rules.py` **注入到目标工程的 `AGENTS.md`**(分隔块内),工程内所有 agent 统一遵守;改规范只改本文件再同步,不在工程副本里直接改。
-> 规则 ID `IMPL-<类>-<n>` 供:worker 按 ID 精确引用、`worker_compliance.json` 核对、`check_static.py` 与结构 QA 映射。
+> 规则 ID `IMPL-<类>-<n>` 供 worker 角色合同精确引用;v3 worker receipt 绑定本文件当前 SHA,`check_static.py` 与结构 QA 映射。
 
 ## 速查索引
 
@@ -61,7 +61,7 @@
 - **IMPL-LAYOUT-3 结构选择**:自然成行/列/栈的内容优先 `Column`/`Row`/`Flex`/`Wrap`+gap;仅当线性布局无法表达真实遮挡或复杂精确定位(如卡片角部装饰、复杂 artboard)才用 `Align`/`Stack`,且坐标用关系换算值。**简单页面(弹窗/表单/列表项)严禁 Stack 还原坐标。**
 - **IMPL-LAYOUT-4 宽度自适应**:组件宽度交父级约束,不写死设计稿宽度;整行/整块容器(覆盖整行的 Rectangle)铺满父容器,不只包裹文本。
 - **IMPL-SYSTEM-UI-1 系统区域双态合同**:设计稿、切图或矢量资产中的状态栏时间/信号/Wi-Fi/电量、摄像头挖孔/刘海/灵动岛等设备系统 UI 必须在 scene 编译阶段由 `system_ui_filter.py` 标记并剔除；生成的 render plan 中只能是 `implementation=hidden` 且 `required=false`，Flutter 页面不得加载对应资产或重复绘制。每张画板必须用 `make_status_bar_policy.py` 从 scene 生成独立 Dart 策略常量,上线页只能引用该常量,禁止模型手填 `true/false`。运行时严格消费生成的双态策略:① scene 含 `systemUiExclusions[*].role=status_bar` 时,真实系统状态栏保持可见,使用 `SystemUiMode.edgeToEdge` 和透明 `statusBarColor`,业务页面从屏幕顶部开始并绘制到状态栏背后；页面根部禁止默认 `SafeArea`、`MediaQuery.*.top` 或未启用 `extendBodyBehindAppBar` 的 AppBar 预留顶部空间,仅保护侧边/底部时必须 `SafeArea(top:false,...)`。② scene 明确不含状态栏时,使用 `SystemUiMode.manual` 且 overlays 只保留 `SystemUiOverlay.bottom`,完全隐藏顶部状态栏,同样不预留 top inset。入口必须在 `runApp` 前 `await` 初始策略并把同一控制器传给页面复用；Android `LaunchTheme`/`NormalTheme` 和实际 `FlutterActivity` 必须同步初始生成策略：hidden 必须使用系统 `NoTitleBar.Fullscreen` 父主题，并同时设置 `windowFullscreen=true`、`windowDrawsSystemBarBackgrounds=true`、透明 `statusBarColor`（只写 fullscreen item 不足以覆盖 Android 12+ 系统 SplashScreen），还必须在 `super.onCreate` 前设置 `FLAG_FULLSCREEN`，在其后安全隐藏 Insets，并在 `onPostResume`/`onWindowFocusChanged` 持续恢复隐藏直到 `onFlutterUiDisplayed` 关闭一次性启动守卫；禁止在 `super.onCreate` 前访问 InsetsController（DecorView 尚未创建会崩溃），也禁止永久守卫破坏后续 overlay 页面。overlay 必须为非 fullscreen + 透明 statusBarColor + drawsSystemBarBackgrounds 且不得原生强制隐藏；`check_capture_readiness.py` 必须同时验证主题、Activity 与调用时序，禁止原生启动窗口或首帧后切换造成系统栏闪现/消失；混合页面逐页应用对应生成策略,禁止用全局单态误配其它路由。摄像头/挖孔只属于真实设备或模拟器外观，不能由 App 绘制或遮盖。设计导出异常导致设备/截图伪影脱离顶部区域时，模型只能依据用户确认和当前 scene 节点证据调用 `system_ui_filter.py --exclude-node <node-id>` 显式排除；不得扩大全局几何启发式误删普通黑色 Logo、星形或业务装饰，未知节点必须失败。缓存工程中完全由这些节点组成的旧共享组件，必须由 `prune_system_ui_components.py` 连同生成测试、expected、独占资产和注册项一起退役；禁止残留不可达伪状态栏实现。
-- **IMPL-SYSTEM-UI-2 Android hidden 启动过渡**：`LaunchTheme` 必须使用 `Theme.Translucent.NoTitleBar.Fullscreen`（或显式 `windowIsTranslucent=true`）并设置 `windowAnimationStyle=@null`，用于绕过 Android 12+ 系统 SplashScreen，同时禁止透明启动窗口进场动画把桌面状态栏带入 App 过渡帧；`NormalTheme` 必须保持不透明 fullscreen。`check_capture_readiness.py` 必须验证该组合。
+- **IMPL-SYSTEM-UI-2 Android hidden 启动过渡**:`LaunchTheme` 必须使用 `Theme.Translucent.NoTitleBar.Fullscreen`（或显式 `windowIsTranslucent=true`）并设置 `windowAnimationStyle=@null`，用于绕过 Android 12+ 系统 SplashScreen，同时禁止透明启动窗口进场动画把桌面状态栏带入 App 过渡帧；`NormalTheme` 必须保持不透明 fullscreen。`check_capture_readiness.py` 必须验证该组合。
 - **IMPL-LAYOUT-5 文字垂直关系**:`TextStyle` **禁加 `height`**;垂直关系靠父级布局/`padding`/间距/约束表达,避免跨平台字体裁切漂移。
 - **IMPL-LAYOUT-6 像素级定义**:验收"像素级"指**元素/尺寸/层级/关系逐像素准**;字形边缘抗锯齿差属渲染引擎(Impeller≠Figma),不计缺陷,也不得为消除它牺牲响应式或写死坐标。
 
@@ -133,15 +133,17 @@
 - **IMPL-CMPB-4** 组件 typed props + 业务默认值 + 中文注释(作用/默认值语义/何时覆盖/错配影响)。
 
 ## DATA 数据驱动槽位
-- **IMPL-DATA-1** 动态槽 = 字段 + 变换 + 出现条件;来源 `data_slot_bindings.json`,`needsModelBinding` 每条须模型按交互规则确认(如 INT-010 `level_money`→`max_money` 回退)。
+- **IMPL-DATA-1** 动态槽 = 当前 OAS 的完整字段身份(endpoint/method/status/variant/JSON path/type)+已注册且类型兼容的 transform+出现状态;每槽恰好一次。歧义 binding 或静态化理由须模型通过≤8KB单 action packet确认,模型不得发明字段。
+- **IMPL-DATA-1a 多状态合并**:同 feature 多 board 必须用 `merge_feature_data.py` 产一份 feature-root manifest/bindings;`(state,node)` 是唯一键,同 node 的每个状态分别测试与 Android/iOS 客户端验收。禁止任选一个 board 或后写覆盖先写。
 - **IMPL-DATA-1b 槽位广度(凡接口字段皆动态)**:`make_component_manifest` 的正则只自动标出数字/金额/日期类动态文本;**凡是取值来自 OAS 数据字段的可见文本——包括纯文本(产品名/标题/状态文案/问候语/姓名等)——都必须被确认为 `dynamic_text_slot`**(在 `component_manifest.json` 里 `confirmedByModel=true` 并补绑定),由 `generate_canvas` 走 `slotText` 注入。**只有真正的 UI chrome(按钮文案、分区标题、固定 copy)才保持静态字面量**。把接口数据字段(如卡片产品名、状态)当静态画死=数据未驱动,违反不变量④。
 - **IMPL-DATA-2** 文本值走 DTO,不写字面量;格式化(₦千分位/日期/百分比)在领域层,组件只呈现。
 - **IMPL-DATA-3** 动态槽**先钉死设计宽度**(暂不放宽 flex);变长真数据裁切的取舍验证后再定。
 
 ## API 接口对接
 - **IMPL-API-1** DTO 由 Apifox 真 OAS codegen,字段以 OAS 为准,禁手搓与后端漂移。
-- **IMPL-API-2** Repository 真 HTTP + mock **同源**(同 DTO 形);可注入单例(IMPL-INFRA-3),保留测试注入与 reset。
-- **IMPL-API-3** 每个声明端点必须有 repo 调用点(`check_api_integration`);loading/error/empty/轮询/禁截图按交互规则接。
+- **IMPL-API-2** Repository 真 HTTP + mock **同 interface/DTO/mapper**;设计 fixture 只提供展示 seed,不冒充生产 response;可注入单例(IMPL-INFRA-3),保留测试注入与 reset。
+- **IMPL-API-3** 每个 OAS operation 恰好一个 runtime manifest entry;声明的 real repository 必须有正确 method+path 调用且从 main 可达。loading/success/error 固定必测;数组 response 强制 empty;retry/polling/refresh 按当前业务事实补。
+- **IMPL-API-4** `check_data_feature` 重算 OAS/bindings/runtime/fixture/API/RED-GREEN/目标 Android/iOS 客户端 evidence。无 live contract report 时必须记录 `liveApiVerified=false`,不得宣称测试/生产服务器已验证。
 
 ## WIRE 交互接线
 - **IMPL-WIRE-1** 每条交互规则的领域逻辑必须接到**运行时调用点**(组件事件/页面编排/repository),不能只被测试引用(`check_interaction_wiring`)。

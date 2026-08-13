@@ -128,7 +128,7 @@ def main() -> int:
             "Material default icons / placeholder boxes for exported assets",
             "tests inventing their own data instead of the shared fixture",
             "parallel edits to shared files (pubspec/routes/DI/codegen)",
-            "whole-file reads of scene.json/render_plan.json/layout_contract.json/repair_plan.json/oas.json/oas_ref_resources.json",
+            "whole-file reads of scene.json/render_plan.json/layout_contract.json/repair_plan.json/oas.json",
         ],
         "modelFields": [
             "projectAlignment.*",

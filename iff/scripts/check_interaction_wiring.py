@@ -133,7 +133,7 @@ def main() -> int:
         "interactionRuleCount": int_rules,
         "unwired": [rel(p) for p in unwired],
         "excludedTestDoubles": [rel(p) for p in excluded_doubles],
-        "ok": not unwired,
+        "ok": not unwired and not (int_rules > 0 and not tested),
     }
     if args.out:
         Path(args.out).write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -145,6 +145,13 @@ def main() -> int:
             print(f"  - {rel(p)}")
         print("Wire each into a runtime path from the entry (component event / page orchestration / "
               "repository), or justify why it is entry-unreachable.")
+        return 1
+
+    if int_rules > 0 and not tested:
+        print(
+            "FAIL interaction wiring: interaction rules exist but tests import no runtime "
+            "feature unit from lib/"
+        )
         return 1
 
     print(f"ok interaction wiring: {len(tested)} tested unit(s) all reachable from {rel(entry)}")

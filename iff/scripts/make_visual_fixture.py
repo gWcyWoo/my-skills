@@ -17,6 +17,7 @@ Feature-agnostic: pass --feature and one slots.json per visible state.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
@@ -42,14 +43,23 @@ def main() -> int:
                          "(use generate_canvas's <canvas>.dart.slots.json design seeds)")
 
     states: dict[str, dict] = {}
+    state_sources: dict[str, dict] = {}
     for spec in a.slots:
         if "=" not in spec:
             raise SystemExit(f"ERROR: --slots must be STATE=path, got: {spec}")
         state, path = spec.split("=", 1)
+        state = state.strip()
+        if state in states:
+            raise SystemExit(f"ERROR: duplicate state: {state}")
         seed = json.loads(Path(path).read_text(encoding="utf-8"))
         if not isinstance(seed, dict):
             raise SystemExit(f"ERROR: slots seed is not a node->value map: {path}")
-        states[state.strip()] = seed
+        states[state] = seed
+        state_sources[state] = {
+            "path": str(Path(path).resolve()),
+            "sha256": hashlib.sha256(Path(path).read_bytes()).hexdigest(),
+            "slotCount": len(seed),
+        }
 
     cls = pascal(a.feature) + "VisualFixture"
     lines = [
@@ -77,8 +87,24 @@ def main() -> int:
     out = Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    source_out = Path(str(out) + ".source.json")
+    source_out.write_text(
+        json.dumps(
+            {
+                "feature": a.feature,
+                "fixture": str(out),
+                "fixtureSha256": hashlib.sha256(out.read_bytes()).hexdigest(),
+                "states": state_sources,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     print(json.dumps({"out": str(out), "class": cls, "states": list(states),
-                      "slotCounts": {s: len(v) for s, v in states.items()}}))
+                      "slotCounts": {s: len(v) for s, v in states.items()},
+                      "source": str(source_out)}))
     return 0
 
 

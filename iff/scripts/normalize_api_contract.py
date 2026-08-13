@@ -1,184 +1,122 @@
 #!/usr/bin/env python3
-"""Normalize Apifox OpenAPI root+ref resources into the compact iFF API contract.
+"""Normalize a real Apifox/OpenAPI export into the iFF api_contract.json the pipeline consumes.
 
-The worker saves read_project_oas as oas.json and read_project_oas_ref_resources as
-oas_ref_resources.json. This script resolves those machine-consumed documents, then flattens the OAS
-into the endpoint/field/type/enum shape
+The worker first uses the Apifox OAS capability exposed by the current Codex environment and
+saves its exact result as oas.json. This script flattens that OAS into the endpoint/field/type/enum shape
 that make_visual_fixture / make_interaction_tests_plan / bind_data_slots / check_api_integration
 read. Replacing the previously DERIVED contract with the real one is what makes the node->field
 binding rest on the actual schema instead of inference.
 
-If oas.json is absent, or an external ref lacks a resource-map entry, this fails loudly. (The
+If oas.json is absent, this fails loudly: the worker must call the available Apifox OAS tool first. (The
 downstream scripts still degrade gracefully on a missing contract, but a real run must not silently
 ship a guessed contract.)
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
-import posixpath
-import sys
 from pathlib import Path
-from urllib.parse import unquote, urldefrag, urljoin, urlparse
 
 
-class OasRefError(ValueError):
-    """An OAS reference cannot be resolved deterministically."""
+HTTP_METHODS = {"delete", "get", "head", "options", "patch", "post", "put", "trace"}
 
 
-def load_json_value(path: Path, label: str) -> object:
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(value, str):
-            value = json.loads(value)
+def resolve_local_reference(value: dict, document: dict, depth: int = 0) -> dict:
+    if depth > 20:
+        raise ValueError("unresolved $ref: reference depth exceeded 20")
+    if not isinstance(value, dict) or "$ref" not in value:
         return value
-    except (OSError, json.JSONDecodeError) as exc:
-        raise OasRefError(f"invalid {label} JSON at {path}: {exc}") from exc
+    ref = str(value["$ref"])
+    if not ref.startswith("#/"):
+        raise ValueError(f"unsupported external $ref: {ref}")
+    current: object = document
+    for token in ref[2:].split("/"):
+        token = token.replace("~1", "/").replace("~0", "~")
+        if not isinstance(current, dict) or token not in current:
+            raise ValueError(f"unresolved $ref: {ref}")
+        current = current[token]
+    if not isinstance(current, dict):
+        raise ValueError(f"unresolved $ref: {ref} is not an object")
+    return resolve_local_reference(current, document, depth + 1)
 
 
-class RefResolver:
-    ROOT = "<root>"
+def json_media_type(content: dict) -> str | None:
+    if "application/json" in content:
+        return "application/json"
+    candidates = sorted(
+        media_type
+        for media_type in content
+        if media_type.split(";", 1)[0].strip().lower().endswith("+json")
+    )
+    if len(candidates) > 1:
+        raise ValueError(f"ambiguous JSON media types: {candidates}")
+    return candidates[0] if candidates else None
 
-    def __init__(self, root: dict, resources: dict) -> None:
-        self.documents: dict[str, object] = {self.ROOT: root}
-        self.cache: dict[str, object] = {}
-        for raw_key, value in resources.items():
-            if not isinstance(raw_key, str):
-                raise OasRefError("ref resource keys must be strings")
-            document_ref, fragment = urldefrag(raw_key)
-            if fragment:
-                raise OasRefError(f"ref resource key must not contain a fragment: {raw_key}")
-            key = self._document_key(document_ref, self.ROOT)
-            if key in self.documents:
-                raise OasRefError(f"duplicate ref resource: {key}")
-            if isinstance(value, str):
-                try:
-                    value = json.loads(value)
-                except json.JSONDecodeError as exc:
-                    raise OasRefError(f"invalid ref resource JSON: {raw_key}: {exc}") from exc
-            if not isinstance(value, (dict, list)):
-                raise OasRefError(f"ref resource must be a JSON object or array: {raw_key}")
-            self.documents[key] = value
-        self.bundle_root = self._make_bundle_root(root)
 
-    def _make_bundle_root(self, root: dict) -> dict:
-        bundle_root = dict(root)
-        for key, document in self.documents.items():
-            if key == self.ROOT or not key.startswith("/"):
-                continue
-            parts = key.strip("/").split("/")
-            if len(parts) < 2 or parts[-1] != "index.json":
-                continue
-            cursor = bundle_root
-            for segment in parts[:-2]:
-                existing = cursor.get(segment)
-                branch = dict(existing) if isinstance(existing, dict) else {}
-                cursor[segment] = branch
-                cursor = branch
-            cursor[parts[-2]] = document
-        return bundle_root
+def normalized_type(spec: dict) -> tuple[str, bool]:
+    raw_type = spec.get("type")
+    nullable = bool(spec.get("nullable", False))
+    if isinstance(raw_type, list):
+        non_null = [value for value in raw_type if value != "null"]
+        if len(non_null) != 1:
+            raise ValueError(f"ambiguous schema type union: {raw_type}")
+        return str(non_null[0]), True
+    if raw_type:
+        return str(raw_type), nullable
+    return ("object" if spec.get("properties") else "unknown"), nullable
 
-    def resolve(self, value: object, current_document: str = ROOT) -> object:
-        return self._resolve_node(value, current_document, ())
 
-    def _resolve_node(self, value: object, current_document: str, stack: tuple[str, ...]) -> object:
-        if isinstance(value, list):
-            return [self._resolve_node(item, current_document, stack) for item in value]
-        if not isinstance(value, dict):
-            return value
-        if "$ref" not in value:
-            return {
-                key: self._resolve_node(item, current_document, stack)
-                for key, item in value.items()
+def resolve_schema(schema: dict, defs: dict, depth: int = 0) -> dict:
+    if depth > 20:
+        raise ValueError("unresolved $ref: reference depth exceeded 20")
+    if not isinstance(schema, dict):
+        return {}
+    ref = schema.get("$ref")
+    if not ref:
+        return schema
+    name = str(ref).split("/")[-1]
+    if name not in defs:
+        raise ValueError(f"unresolved $ref: {ref}")
+    return resolve_schema(defs[name], defs, depth + 1)
+
+
+def schema_field_paths(
+    schema: dict, defs: dict, path: str = "$", path_required: bool = True
+) -> dict:
+    """Return traceable scalar response fields keyed by their JSON path."""
+    resolved = resolve_schema(schema, defs)
+    if resolved.get("allOf"):
+        fields = {}
+        for member in resolved["allOf"]:
+            fields.update(schema_field_paths(member, defs, path, path_required))
+        return fields
+    required = set(resolved.get("required") or [])
+    fields = {}
+    for name, raw_spec in (resolved.get("properties") or {}).items():
+        if not isinstance(raw_spec, dict):
+            continue
+        spec = resolve_schema(raw_spec, defs)
+        field_path = f"{path}.{name}"
+        field_type, nullable = normalized_type(spec)
+        field_required = path_required and name in required
+        if field_type == "array":
+            fields.update(
+                schema_field_paths(
+                    spec.get("items") or {}, defs, field_path + "[]", field_required
+                )
+            )
+        elif field_type == "object" or spec.get("properties"):
+            fields.update(schema_field_paths(spec, defs, field_path, field_required))
+        else:
+            fields[field_path] = {
+                "type": field_type,
+                "format": spec.get("format"),
+                "required": field_required,
+                "nullable": nullable,
+                "enum": spec.get("enum"),
             }
-
-        resolved = self._resolve_ref(value["$ref"], current_document, stack)
-        siblings = {key: item for key, item in value.items() if key != "$ref"}
-        if not siblings:
-            return resolved
-        if not isinstance(resolved, dict):
-            raise OasRefError(f"$ref siblings require an object target: {value['$ref']}")
-        return {
-            **resolved,
-            **{
-                key: self._resolve_node(item, current_document, stack)
-                for key, item in siblings.items()
-            },
-        }
-
-    def _resolve_ref(self, ref: object, current_document: str, stack: tuple[str, ...]) -> object:
-        if not isinstance(ref, str) or not ref:
-            raise OasRefError("$ref must be a non-empty string")
-        document_ref, fragment = urldefrag(ref)
-        try:
-            fragment = unquote(fragment, encoding="utf-8", errors="strict")
-        except UnicodeDecodeError as exc:
-            raise OasRefError(f"invalid UTF-8 in URI fragment: {ref}") from exc
-        target_document = (
-            self._document_key(document_ref, current_document) if document_ref else current_document
-        )
-        if target_document not in self.documents:
-            raise OasRefError(f"missing external ref resource: {target_document}")
-        pointer_document = (
-            self.bundle_root if target_document == self.ROOT else self.documents[target_document]
-        )
-        try:
-            target = self._json_pointer(pointer_document, fragment, target_document)
-        except OasRefError:
-            if document_ref or not fragment or target_document == self.ROOT:
-                raise
-            target_document = self.ROOT
-            target = self._json_pointer(self.bundle_root, fragment, target_document)
-        identity = self._identity(target_document, fragment)
-        if identity in stack:
-            cycle = stack[stack.index(identity) :] + (identity,)
-            raise OasRefError(f"reference cycle: {' -> '.join(cycle)}")
-        if identity in self.cache:
-            return self.cache[identity]
-        resolved = self._resolve_node(target, target_document, stack + (identity,))
-        self.cache[identity] = resolved
-        return resolved
-
-    @classmethod
-    def _document_key(cls, document_ref: str, current_document: str) -> str:
-        if not document_ref:
-            return current_document
-        if urlparse(document_ref).scheme:
-            return document_ref
-        if current_document != cls.ROOT and urlparse(current_document).scheme:
-            return urljoin(current_document, document_ref)
-        if document_ref.startswith("/"):
-            return posixpath.normpath(document_ref)
-        base = "/" if current_document == cls.ROOT else posixpath.dirname(current_document)
-        return posixpath.normpath(posixpath.join(base, document_ref))
-
-    @classmethod
-    def _identity(cls, document: str, fragment: str) -> str:
-        if document == cls.ROOT:
-            return f"#{fragment}" if fragment else cls.ROOT
-        return f"{document}#{fragment}" if fragment else document
-
-    @staticmethod
-    def _json_pointer(document: object, fragment: str, document_key: str) -> object:
-        if not fragment:
-            return document
-        if not fragment.startswith("/"):
-            raise OasRefError(f"unsupported JSON pointer in {document_key}: #{fragment}")
-        current = document
-        for raw_token in fragment[1:].split("/"):
-            token = raw_token.replace("~1", "/").replace("~0", "~")
-            try:
-                if isinstance(current, list):
-                    current = current[int(token)]
-                elif isinstance(current, dict):
-                    current = current[token]
-                else:
-                    raise KeyError(token)
-            except (KeyError, IndexError, ValueError) as exc:
-                raise OasRefError(
-                    f"missing JSON pointer #{fragment} in ref resource: {document_key}"
-                ) from exc
-        return current
+    return fields
 
 
 def schema_fields(schema: dict, defs: dict, depth: int = 0) -> dict:
@@ -207,62 +145,110 @@ def schema_fields(schema: dict, defs: dict, depth: int = 0) -> dict:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--oas", required=True, help="oas.json saved from Apifox MCP read_project_oas")
-    ap.add_argument(
-        "--ref-resources",
-        help="JSON map saved from Apifox MCP read_project_oas_ref_resources",
-    )
+    ap.add_argument("--oas", required=True, help="oas.json saved from the available Apifox OAS tool")
     ap.add_argument("--out", required=True)
+    ap.add_argument("--check", action="store_true")
     args = ap.parse_args()
 
     oas_path = Path(args.oas)
     if not oas_path.is_file():
-        print(f"FAIL: {oas_path} not found. Call the Apifox MCP tool "
-              "mcp__apifox-new-mcp__read_project_oas and save its result to oas.json first.")
+        print(
+            f"FAIL: {oas_path} not found. Call the Apifox OAS tool exposed by the "
+            "current environment and save its exact result to oas.json first."
+        )
         return 1
 
-    try:
-        oas = load_json_value(oas_path, "OAS root")
-        if not isinstance(oas, dict):
-            raise OasRefError("OAS root must be a JSON object")
-        resources: object = {}
-        if args.ref_resources:
-            resources = load_json_value(Path(args.ref_resources), "OAS ref resources")
-        if not isinstance(resources, dict):
-            raise OasRefError("OAS ref resources must be a JSON object mapping refs to documents")
-        resolver = RefResolver(oas, resources)
-    except OasRefError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 2
-
+    oas = json.loads(oas_path.read_text(encoding="utf-8"))
     defs = (oas.get("components") or {}).get("schemas") or oas.get("definitions") or {}
     endpoints = {}
-    try:
-        for path, methods in (oas.get("paths") or {}).items():
-            methods = resolver.resolve(methods)
-            if not isinstance(methods, dict):
-                raise OasRefError(f"resolved path item must be a JSON object: {path}")
-            for method, op in methods.items():
-                if not isinstance(op, dict):
+    for path, methods in (oas.get("paths") or {}).items():
+        if not isinstance(methods, dict):
+            continue
+        methods = resolve_local_reference(methods, oas)
+        path_parameters = methods.get("parameters") or []
+        for method, op in methods.items():
+            if method.lower() not in HTTP_METHODS or not isinstance(op, dict):
+                continue
+            normalized_responses = {}
+            primary_schema = {}
+            for status, resp in (op.get("responses") or {}).items():
+                if not isinstance(resp, dict):
                     continue
-                resp = (op.get("responses") or {}).get("200") or {}
-                content = (resp.get("content") or {}).get("application/json") or {}
-                schema = content.get("schema") or resp.get("schema") or {}
-                endpoints.setdefault(path, {})[method.upper()] = {
-                    "summary": op.get("summary") or op.get("operationId"),
-                    "responseFields": schema_fields(schema, defs),
+                resp = resolve_local_reference(resp, oas)
+                content = resp.get("content") or {}
+                media_type = json_media_type(content)
+                media = content.get(media_type) if media_type else {}
+                schema = (media or {}).get("schema") or resp.get("schema") or {}
+                normalized_response = {
+                    "mediaType": media_type,
+                    "fields": schema_field_paths(schema, defs),
                 }
-    except OasRefError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 2
+                for variant_kind in ("oneOf", "anyOf"):
+                    if schema.get(variant_kind):
+                        normalized_response["schemaKind"] = variant_kind
+                        normalized_response["variants"] = [
+                            {
+                                "index": index,
+                                "fields": schema_field_paths(variant, defs),
+                            }
+                            for index, variant in enumerate(schema[variant_kind])
+                        ]
+                        break
+                normalized_responses[str(status)] = normalized_response
+                if not primary_schema and str(status).startswith("2"):
+                    primary_schema = schema
+            parameters = []
+            for parameter in [*path_parameters, *(op.get("parameters") or [])]:
+                if not isinstance(parameter, dict):
+                    continue
+                parameter = resolve_local_reference(parameter, oas)
+                parameter_schema = parameter.get("schema") or {}
+                parameter_type, _ = normalized_type(parameter_schema)
+                parameters.append(
+                    {
+                        "name": parameter.get("name"),
+                        "in": parameter.get("in"),
+                        "required": bool(parameter.get("required", False)),
+                        "type": parameter_type,
+                        "format": parameter_schema.get("format"),
+                    }
+                )
+            request_body = resolve_local_reference(op.get("requestBody") or {}, oas)
+            request_content = request_body.get("content") or {}
+            request_media_type = json_media_type(request_content)
+            request_media = request_content.get(request_media_type) if request_media_type else {}
+            endpoints.setdefault(path, {})[method.upper()] = {
+                "summary": op.get("summary") or op.get("operationId"),
+                "parameters": parameters,
+                "requestBody": {
+                    "required": bool(request_body.get("required", False)),
+                    "mediaType": request_media_type,
+                    "fields": schema_field_paths((request_media or {}).get("schema") or {}, defs),
+                }
+                if request_body
+                else None,
+                "responseFields": schema_fields(primary_schema, defs),
+                "responses": normalized_responses,
+            }
 
     contract = {
         "source": "normalize_api_contract.py (real Apifox OAS)",
-        "contractScope": "project",
+        "sourceFingerprint": {
+            "sha256": hashlib.sha256(oas_path.read_bytes()).hexdigest(),
+            "openapi": oas.get("openapi") or oas.get("swagger"),
+        },
         "endpointCount": len(endpoints),
-        "operationCount": sum(len(methods) for methods in endpoints.values()),
         "endpoints": endpoints,
     }
+    if args.check:
+        out_path = Path(args.out)
+        if not out_path.is_file() or json.loads(
+            out_path.read_text(encoding="utf-8")
+        ) != contract:
+            print(f"FAIL api contract is not canonical for current OAS: {args.out}")
+            return 1
+        print(f"ok canonical api_contract endpoints={len(endpoints)}: {args.out}")
+        return 0
     Path(args.out).write_text(json.dumps(contract, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"ok api_contract endpoints={len(endpoints)} -> {args.out}")
     return 0

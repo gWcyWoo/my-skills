@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Deterministic render_plan.json -> responsive Flutter UI compiler (关系换算).
 
-Emits, per the project implementation rules (see iff/implementation_rules.md):
+Emits, per the project implementation rules (see iFF/implementation_rules.md):
   - lib/<feature>/.../app_colors.dart   : centralized color tokens (IMPL-TOKEN)
   - the home artboard widget            : a RESPONSIVE canvas where every size /
     position is `设计像素 * u`, with `u = LayoutBuilder.maxWidth / 设计宽度`
@@ -28,11 +28,6 @@ from pathlib import Path
 BOOL_KW = re.compile(r"subtract|union|intersect|exclude|boolean", re.I)
 SKIP_IMPL = {"covered_by_asset", "covered_by_text", "covered_by_shared_component", "hidden"}
 ASSET_IMPL = {"image_png", "image_webp", "svg", "asset", "image", "image_fill"}
-
-
-def write_output(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
 
 
 # ---------------------------------------------------------------- color tokens
@@ -92,37 +87,8 @@ def rgba_dict_argb(c, opacity: float = 1.0) -> int | None:
 
 # --------------------------------------------------------------- value helpers
 def m(v: float) -> str:
-    """A design-export pixel converted once to a 375-based logical unit."""
+    """A length expressed via 关系换算: 设计像素 * 响应单位 u (IMPL-LAYOUT-1)."""
     return f"{v:.2f} * u"
-
-
-def horizontal_anchor_contract(bbox: list, artboard_width: float, design_pixel_scale: float) -> dict:
-    """Choose a deterministic horizontal constraint without viewport-wide scaling."""
-    x, _, width, _ = [float(value) for value in bbox]
-    right = artboard_width - x - width
-    center_offset = x + width / 2.0 - artboard_width / 2.0
-    if x >= 0 and right >= 0 and width >= artboard_width * 0.60:
-        mode = "stretch"
-    elif abs(center_offset) <= artboard_width * 0.03:
-        mode = "center"
-    elif right >= 0 and right <= artboard_width * 0.18 and x >= artboard_width * 0.45:
-        mode = "right"
-    else:
-        mode = "left"
-    scale = design_pixel_scale if design_pixel_scale > 0 else 1.0
-    return {
-        "mode": mode,
-        "left": round(x / scale, 2),
-        "right": round(right / scale, 2),
-        "centerOffset": round(center_offset / scale, 2),
-    }
-
-
-def emitted_uses_svg(root_widgets: list[str], band_widgets: dict[str, list[str]]) -> bool:
-    return any(
-        "SvgPicture.asset(" in widget
-        for widget in root_widgets + [widget for widgets in band_widgets.values() for widget in widgets]
-    )
 
 
 def weight_to_flutter(w) -> str:
@@ -217,136 +183,6 @@ def esc(s: str) -> str:
     return s.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n").replace("$", "\\$")
 
 
-def _rough_text_width(text: str, font_size: float) -> float:
-    def factor(char: str) -> float:
-        if char.isspace() or char in "ilI.,:;!|'":
-            return 0.28
-        if char in "MW@#%&":
-            return 0.85
-        if char.isupper():
-            return 0.62
-        return 0.52
-    return sum(factor(char) for char in text) * font_size
-
-
-def _wrap_plain_text(text: str, line_count: int, width: float, font_size: float) -> str:
-    words = text.split()
-    if line_count <= 1 or len(words) <= 1:
-        return text
-    # Exported text bboxes are rounded ink bounds, while Flutter shapes with
-    # kerning/side bearings. Reserve a small em-based guard so borderline words
-    # do not migrate to the preceding line solely because of metric rounding.
-    wrap_width = max(0.0, width - max(4.0, font_size * 0.2))
-    lines: list[str] = []
-    remaining = words[:]
-    for line_index in range(line_count - 1):
-        slots_after = line_count - line_index - 1
-        line_words: list[str] = []
-        while len(remaining) > slots_after:
-            word = remaining[0]
-            candidate = " ".join([*line_words, word])
-            if _rough_text_width(candidate, font_size) <= wrap_width:
-                line_words.append(remaining.pop(0))
-                continue
-            hyphen_parts = word.split("-")
-            split: tuple[str, str] | None = None
-            for part_index in range(1, len(hyphen_parts)):
-                prefix = "-".join(hyphen_parts[:part_index]) + "-"
-                remainder = "-".join(hyphen_parts[part_index:])
-                hyphen_candidate = " ".join([*line_words, prefix])
-                if remainder and _rough_text_width(hyphen_candidate, font_size) <= wrap_width:
-                    split = (prefix, remainder)
-            if split:
-                line_words.append(split[0])
-                remaining[0] = split[1]
-            break
-        if not line_words and remaining:
-            line_words.append(remaining.pop(0))
-        lines.append(" ".join(line_words))
-    lines.append(" ".join(remaining))
-    return "\n".join(lines)
-
-
-def _map_wrapped_text_runs(source_text: str, source_runs: list[dict], wrapped: str) -> list[dict]:
-    run_text = "".join(str(run.get("content") or "") for run in source_runs)
-    if run_text != source_text or not source_runs:
-        return []
-    run_indices: list[int] = []
-    for run_index, run in enumerate(source_runs):
-        run_indices.extend([run_index] * len(str(run.get("content") or "")))
-
-    result: list[dict] = []
-    result_indices: list[int] = []
-
-    def append(run_index: int, content: str) -> None:
-        if result and result_indices[-1] == run_index:
-            result[-1]["content"] = str(result[-1].get("content") or "") + content
-            return
-        copied = dict(source_runs[run_index])
-        copied["content"] = content
-        result.append(copied)
-        result_indices.append(run_index)
-
-    source_index = 0
-    for char in wrapped:
-        if char == "\n":
-            while source_index < len(source_text) and source_text[source_index].isspace():
-                source_index += 1
-            if not result:
-                return []
-            result[-1]["content"] = str(result[-1].get("content") or "") + "\n"
-            continue
-        if char.isspace():
-            whitespace_index = source_index
-            while source_index < len(source_text) and source_text[source_index].isspace():
-                source_index += 1
-            if whitespace_index >= len(run_indices):
-                return []
-            append(run_indices[whitespace_index], " ")
-            continue
-        while source_index < len(source_text) and source_text[source_index].isspace():
-            source_index += 1
-        if source_index >= len(source_text) or source_text[source_index] != char:
-            return []
-        append(run_indices[source_index], char)
-        source_index += 1
-    return result
-
-
-def display_text_contract(node: dict) -> tuple[str, list[dict]]:
-    """Infer explicit design line boundaries from bbox height and styled runs."""
-    source_text = str(node.get("text") or "")
-    source_runs = node.get("textRuns") or []
-    runs = [dict(run) for run in source_runs if isinstance(run, dict)]
-    if "\n" in source_text:
-        return source_text, runs
-    bbox = node.get("bbox") or [0, 0, 0, 0]
-    try:
-        width, height = float(bbox[2]), float(bbox[3])
-        font_size = float(node.get("fontSize") or 0)
-    except (TypeError, ValueError, IndexError):
-        return source_text, runs
-    if width <= 0 or height <= 0 or font_size <= 0:
-        return source_text, runs
-    line_count = max(1, round(height / (font_size * 1.18)))
-    if line_count <= 1:
-        return source_text, runs
-    wrapped = _wrap_plain_text(source_text, line_count, width, font_size)
-    if runs:
-        mapped_runs = _map_wrapped_text_runs(source_text, runs, wrapped)
-        if mapped_runs:
-            runs = mapped_runs
-    return wrapped, runs
-
-
-def run_font_weight(run: dict, node: dict) -> str:
-    font = run.get("font") or {}
-    weight = font.get("fontWeight")
-    if weight is None and font.get("bold") is True:
-        weight = 700
-    return weight_to_flutter(weight if weight is not None else node.get("weight"))
-
-
 def fill_hex(node) -> str | None:
     fills = node.get("fills") or []
     if fills and isinstance(fills[0], str) and fills[0].startswith("#"):
@@ -365,20 +201,6 @@ def effective_radius(node: dict, nodes: dict):
     return rad
 
 
-def unrotated_size_from_aabb(width: float, height: float, rotation: float) -> tuple[float, float] | None:
-    radians = math.radians(rotation)
-    cosine = abs(math.cos(radians))
-    sine = abs(math.sin(radians))
-    determinant = cosine * cosine - sine * sine
-    if abs(determinant) < 1e-6:
-        return None
-    local_width = (width * cosine - height * sine) / determinant
-    local_height = (height * cosine - width * sine) / determinant
-    if local_width <= 0 or local_height <= 0:
-        return None
-    return local_width, local_height
-
-
 def ellipse_holes(node: dict, nodes: dict, ox: float, oy: float):
     holes = []
     for cid in node.get("children") or []:
@@ -395,40 +217,40 @@ ALIGN_MAP = {"center": "TextAlign.center", "right": "TextAlign.right",
              "justified": "TextAlign.justify", "justify": "TextAlign.justify"}
 
 
-def dynamic_slot_expression(nid: str, node: dict, display_text: str) -> str:
-    slot = f"slotText['{nid}']"
-    source = esc(str(node.get("text") or ""))
-    display = esc(display_text)
-    if source != display:
-        return f"({slot} == '{source}' ? '{display}' : ({slot} ?? '{display}'))"
-    return f"({slot} ?? '{display}')"
-
-
 def emit_text(node, x, y, w, h, reg: ColorRegistry, pos, end, nid: str, slot_ids: set) -> str:
-    display_text, display_runs = display_text_contract(node)
-    txt = esc(display_text)
+    txt = esc(str(node.get("text", "")))
     size = node.get("fontSize") or 14
     base_argb = hex_to_argb_int(fill_hex(node) or "#000000")
     wt = weight_to_flutter(node.get("weight"))
+    family = esc(str(node.get("fontFamily") or "SF Pro Text"))
+    style = str(node.get("fontStyle") or "").lower()
+    style_expr = ", fontStyle: FontStyle.italic" if style == "italic" or node.get("italic") else ""
     ls = node.get("letterSpacing") or {}
     ls_val = ls.get("value", 0) if isinstance(ls, dict) else 0
     ls_expr = f", letterSpacing: {m(float(ls_val))}" if ls_val else ""
+    line_height = node.get("lineHeight")
+    line_height_value = line_height.get("value") if isinstance(line_height, dict) else line_height
+    height_ratio = (
+        float(line_height_value) / float(size)
+        if line_height_value not in (None, 0) and float(size) > 0
+        else None
+    )
+    height_expr = f", height: {height_ratio:.2f}" if height_ratio is not None else ""
     align = (node.get("align") or "left").lower()
     valign = (node.get("verticalAlignment") or "top").lower()
     text_align = ALIGN_MAP.get(align, "TextAlign.left")
 
     # 字号同样走关系换算(IMPL-LAYOUT-1);严禁 TextStyle.height(IMPL-LAYOUT-4)。
-    runs = display_runs
+    runs = node.get("textRuns") or []
     distinct = {json.dumps(r.get("color") or (r.get("font") or {}).get("color"), sort_keys=True) for r in runs}
     if len(runs) > 1 and len(distinct) > 1:
         spans = []
         for r in runs:
             rc = rgba_dict_argb(r.get("color") or (r.get("font") or {}).get("color")) or base_argb
             rsize = (r.get("font") or {}).get("size") or size
-            rwt = run_font_weight(r, node)
             spans.append(f"TextSpan(text: '{esc(str(r.get('content', '')))}', style: TextStyle("
-                         f"fontFamily: 'SF Pro Text', fontSize: {m(float(rsize))}, fontWeight: {rwt}, "
-                         f"color: {reg.ref(rc)}))")
+                         f"fontFamily: '{family}', fontSize: {m(float(rsize))}, fontWeight: {wt}{style_expr}, "
+                         f"color: {reg.ref(rc)}{height_expr}))")
         # overflow: visible 与下方纯文本分支保持一致——文本节点被 render_plan bbox 定成固定高度
         # Positioned,多色胶囊/chip 文案(如 "Loan Term:\n91-360 days")按设计两行时下降部会略超框;
         # 缺省 TextOverflow.clip 会把 'days' 的 'y' 尾巴裁成 'davs'(固定高度+裁切,违反 final_reminders)。
@@ -436,10 +258,10 @@ def emit_text(node, x, y, w, h, reg: ColorRegistry, pos, end, nid: str, slot_ids
         inner = f"Text.rich(TextSpan(children: [{', '.join(spans)}]), textAlign: {text_align}, softWrap: true, overflow: TextOverflow.visible)"
     else:
         # 动态文本槽:从注入的 slotText 取值,缺省回退设计展示值(不变量①④⑦);静态文案保持字面量。
-        txt_arg = dynamic_slot_expression(nid, node, display_text) if nid in slot_ids else f"'{txt}'"
+        txt_arg = f"slotText['{nid}'] ?? '{txt}'" if nid in slot_ids else f"'{txt}'"
         inner = (f"Text({txt_arg}, textAlign: {text_align}, softWrap: true, overflow: TextOverflow.visible, "
-                 f"style: TextStyle(fontFamily: 'SF Pro Text', fontSize: {m(float(size))}, "
-                 f"fontWeight: {wt}, color: {reg.ref(base_argb)}{ls_expr}))")
+                 f"style: TextStyle(fontFamily: '{family}', fontSize: {m(float(size))}, "
+                 f"fontWeight: {wt}{style_expr}, color: {reg.ref(base_argb)}{ls_expr}{height_expr}))")
 
     box_align = {"center": "Alignment.topCenter", "right": "Alignment.topRight"}.get(align, "Alignment.topLeft")
     if valign == "center":
@@ -449,9 +271,7 @@ def emit_text(node, x, y, w, h, reg: ColorRegistry, pos, end, nid: str, slot_ids
     return pos + f"Align(alignment: {box_align}, child: SizedBox(width: {m(w)}, child: {inner}))" + end
 
 
-def emit_node(node: dict, asset_prefix: str, nodes: dict, reg: ColorRegistry, artboard_origin,
-              artboard_width: float, design_pixel_scale: float, nid: str, placed: dict,
-              anchors: dict, slot_ids: set) -> str | None:
+def emit_node(node: dict, asset_prefix: str, nodes: dict, reg: ColorRegistry, artboard_origin, nid: str, placed: dict, slot_ids: set) -> str | None:
     impl = node.get("implementation")
     if impl in SKIP_IMPL or is_boolean_operand(node.get("path", "")):
         return None
@@ -482,34 +302,15 @@ def emit_node(node: dict, asset_prefix: str, nodes: dict, reg: ColorRegistry, ar
     # 记录脚本为该节点最终落位的归一化几何(已减画板原点 / 处理翻转),作为
     # check_render_fidelity 的「设计期望」基准——真实渲染 getRect 须与此一致。
     placed[nid] = [round(float(x), 2), round(float(y), 2), round(float(w), 2), round(float(h), 2)]
-    anchor = horizontal_anchor_contract(placed[nid], artboard_width, design_pixel_scale)
-    anchors[nid] = anchor
 
     rot_pre, rot_post = "", ""
     if abs(rot) > 0.5:
-        local_size = unrotated_size_from_aabb(float(w), float(h), float(rot))
-        if local_size:
-            local_width, local_height = local_size
-            rot_pre = (
-                f"Center(child: Transform.rotate(angle: {-math.radians(rot):.5f}, child: "
-                f"SizedBox(width: {m(local_width)}, height: {m(local_height)}, child: "
-            )
-            rot_post = ")))"
-        else:
-            rot_pre = f"Transform.rotate(angle: {-math.radians(rot):.5f}, child: "
-            rot_post = ")"
+        rot_pre = f"Transform.rotate(angle: {-math.radians(rot):.5f}, child: "
+        rot_post = ")"
     # 每个可见节点挂 ValueKey('iff:<节点id>'),让真实渲染可被 layout trace 按节点回溯
     # (IMPL 不变量③:真实组件渲染 bbox/token vs render_plan 逐组件 diff 的前提)。
     key_open = f"KeyedSubtree(key: const ValueKey('iff:{nid}'), child: "
-    if anchor["mode"] == "stretch":
-        horizontal = f"left: {m(x)}, right: {m(artboard_width - x - w)}, "
-    elif anchor["mode"] == "center":
-        horizontal = f"left: (viewportWidth - {m(w)}) / 2 + {m(x + w / 2 - artboard_width / 2)}, width: {m(w)}, "
-    elif anchor["mode"] == "right":
-        horizontal = f"right: {m(artboard_width - x - w)}, width: {m(w)}, "
-    else:
-        horizontal = f"left: {m(x)}, width: {m(w)}, "
-    pos = f"Positioned({horizontal}top: {m(y)}, height: {m(h)}, child: " + key_open + rot_pre
+    pos = f"Positioned(left: {m(x)}, top: {m(y)}, width: {m(w)}, height: {m(h)}, child: " + key_open + rot_pre
     end = rot_post + "))"
 
     if impl == "text":
@@ -519,15 +320,7 @@ def emit_node(node: dict, asset_prefix: str, nodes: dict, reg: ColorRegistry, ar
         asset = node.get("asset")
         if not asset:
             return None
-        asset_path = f"{asset_prefix}{Path(asset).name}"
-        if str(asset).lower().endswith(".svg"):
-            return pos + f"SvgPicture.asset('{asset_path}', fit: BoxFit.fill)" + end
-        return pos + (
-            f"Image.asset('{asset_path}', fit: BoxFit.fill, alignment: Alignment.center, "
-            f"cacheWidth: ({m(w)} * MediaQuery.devicePixelRatioOf(context)).ceil(), "
-            f"cacheHeight: ({m(h)} * MediaQuery.devicePixelRatioOf(context)).ceil(), "
-            "filterQuality: FilterQuality.high)"
-        ) + end
+        return pos + f"Image.asset('{asset_prefix}{Path(asset).name}', fit: BoxFit.fill)" + end
 
     name = node.get("name") or ""
     if name.startswith("Star") and fill_hex(node) == "#000000":
@@ -571,7 +364,9 @@ def emit_node(node: dict, asset_prefix: str, nodes: dict, reg: ColorRegistry, ar
             return pos + f"CustomPaint(painter: _ChevronPainter(color: {chev}, down: false))" + end
         if w >= h * 1.2:  # 矮宽 → 下拉/选择框 'v' chevron
             return pos + f"CustomPaint(painter: _ChevronPainter(color: {chev}, down: true))" + end
-        return pos + "const SizedBox.expand()" + end  # 方形未知小矢量:透明占位(不画错方块)
+        raise SystemExit(
+            f"ERROR: unrenderable vector {nid}: export an asset or provide deterministic path semantics"
+        )
 
     rad = radius_expr(effective_radius(node, nodes))
     if rad:
@@ -750,27 +545,16 @@ def main() -> int:
     ap.add_argument("--artboard-height", type=float, default=5874.0)
     a = ap.parse_args()
 
-    rp = json.loads(Path(a.render_plan).read_text())
-    classification_art = {}
+    # 画板尺寸以设计分类为准(不同设计稿高度不同);只有未提供 classification 时才用默认值,
+    # 避免把某一稿的高度(如旧 5874)写死到所有稿。
     if a.classification and Path(a.classification).is_file():
-        classification_art = json.loads(Path(a.classification).read_text()).get("artboard") or {}
-    design_pixel_scale = float(classification_art.get("scale") or 1.0)
-    if design_pixel_scale <= 0:
-        raise SystemExit("ERROR: design artboard scale must be > 0")
-    root_node = rp.get("rootNode")
-    if root_node:
-        root_bbox = (rp.get("nodes") or {}).get(root_node, {}).get("bbox")
-        if not isinstance(root_bbox, list) or len(root_bbox) != 4 or root_bbox[2] <= 0 or root_bbox[3] <= 0:
-            raise SystemExit(f"ERROR: rooted render plan has invalid root bbox: {root_node}")
-        a.artboard_width = float(root_bbox[2])
-        a.artboard_height = float(root_bbox[3])
-    # 完整画板尺寸以设计分类为准;root-node 计划已经归一化到组件自身坐标系,
-    # 必须使用组件根 bbox,不能再被源画板 classification 覆盖。
-    elif classification_art:
-        if classification_art.get("width"):
-            a.artboard_width = float(classification_art["width"])
-        if classification_art.get("height"):
-            a.artboard_height = float(classification_art["height"])
+        art = json.loads(Path(a.classification).read_text()).get("artboard") or {}
+        if art.get("width"):
+            a.artboard_width = float(art["width"])
+        if art.get("height"):
+            a.artboard_height = float(art["height"])
+
+    rp = json.loads(Path(a.render_plan).read_text())
     nodes = rp["nodes"]
 
     # 动态文本槽节点 id:这些 text 节点的展示值由注入的 slotText 决定(数据驱动),
@@ -796,7 +580,7 @@ def main() -> int:
         (i for i, k in enumerate(order) if nodes[k].get("implementation") == "text"),
         len(order),
     )
-    chrome_ids = set() if root_node else status_bar_node_ids(nodes, a.artboard_width)
+    chrome_ids = status_bar_node_ids(nodes, a.artboard_width)
 
     def is_backdrop(node: dict, idx: int) -> bool:
         # 整宽或越出画板顶部、且排在首个文字之前的画板级铺底形状 -> 沉到底层。
@@ -811,14 +595,12 @@ def main() -> int:
     band_widgets: dict[str, list[str]] = {name: [] for name, *_ in BANDS}
     root_base = []
     placed: dict = {}  # nid -> 脚本落位的归一化几何(expected.json 基准)
-    anchors: dict = {}
     painted = skipped = chrome = 0
     for idx, (nid, node) in enumerate(nodes.items()):
         if nid in chrome_ids:  # IMPL-IMG-3:系统状态栏不绘制
             chrome += 1
             continue
-        widget = emit_node(node, a.asset_prefix, nodes, reg, artboard_origin,
-                           a.artboard_width, design_pixel_scale, nid, placed, anchors, slot_ids)
+        widget = emit_node(node, a.asset_prefix, nodes, reg, artboard_origin, nid, placed, slot_ids)
         if widget is None:
             skipped += 1
             placed.pop(nid, None)
@@ -838,11 +620,10 @@ def main() -> int:
         band_classes.append(f"""
 /// {desc}。
 class _Home{name} extends StatelessWidget {{
-  const _Home{name}({{required this.u, required this.viewportWidth, required this.slotText}});
+  const _Home{name}({{required this.u, required this.slotText}});
 
-  /// u:设计导出像素到 375 逻辑单位的固定换算值。
+  /// u:关系换算响应单位 = 屏宽 / 设计宽度(IMPL-LAYOUT-1)。
   final double u;
-  final double viewportWidth;
 
   /// 动态文本槽取值(节点id -> 展示值);上层用同源 fixture / 真实 DTO 注入,
   /// 缺省回退到设计稿展示值,保证数据未到位时仍逐像素还原(IMPL-DATA / 不变量①⑦)。
@@ -858,14 +639,10 @@ class _Home{name} extends StatelessWidget {{
     );
   }}
 }}""")
-        band_children.append(
-            f"          Positioned.fill(child: _Home{name}(u: u, viewportWidth: viewportWidth, slotText: slotText)),"
-        )
+        band_children.append(f"          Positioned.fill(child: _Home{name}(u: u, slotText: slotText)),")
 
-    if root_node and not placed:
-        raise SystemExit(f"ERROR: rooted component emitted no expected nodes: {root_node}")
     base_body = "\n".join(root_base) or "        // (无根背景)"
-    colors_import = f"import '{a.colors_import}';\n" if reg.colors else ""
+    rel_import = a.colors_import
 
     # 矢量装饰画笔(四角星 / boolean-subtract 挖洞)是 file-private 的,只在本稿真正用到时
     # 才输出——否则多状态特性里没用到它们的画布会触发 unused_element 警告(IMPL-STYLE-5 要求
@@ -879,22 +656,17 @@ class _Home{name} extends StatelessWidget {{
     # dart:math 只被 sparkle star 画笔用到(旋转角已在 Python 侧算成字面量);未用到就不导入,
     # 否则 analyze 报 unused_import。
     math_import = "import 'dart:math' as math;\n" if used_star else ""
-    svg_import = (
-        "import 'package:flutter_svg/flutter_svg.dart';\n"
-        if emitted_uses_svg(root_base, band_widgets) else ""
-    )
 
     dart = f"""// GENERATED by iFF generate_canvas.py — DO NOT EDIT BY HAND.
-// Figma 375 逻辑尺寸:导出像素仅除以导出倍率一次,运行时不按屏幕整体缩放。
-// 375 宽 1:1 还原;其它宽度仅通过 left/right/center/stretch 约束适配。
+// 关系换算响应式还原:每个尺寸/位置都是「设计像素 * u」,u 随屏宽自适应。
+// 渲染在设计宽度时 1:1 还原设计稿(供视觉 QA);在真机按比例缩放。
 // 节点:{painted} 个绘制 / {skipped} 个跳过(覆盖/隐藏/boolean)/ {chrome} 个系统状态栏排除。
 {math_import}import 'package:flutter/material.dart';
-{svg_import}
 
-{colors_import}
+import '{rel_import}';
 
-/// 首页设计稿响应式画布(数据驱动可见层本体,不是静态 golden)。几何/样式由脚本从
-/// render_plan/tokens 喂入,动态文本由 [slotText] 注入；运行时只使用约束而不整体缩放。
+/// 首页设计稿响应式画布(数据驱动可见层本体,不是静态 golden)。整张稿按设计宽度等比
+/// 映射到当前屏宽;几何/样式由脚本从 render_plan/tokens 喂入,动态文本由 [slotText] 注入。
 class {a.class_name} extends StatelessWidget {{
   const {a.class_name}({{super.key, this.slotText = const <String, String>{{}}}});
 
@@ -902,23 +674,21 @@ class {a.class_name} extends StatelessWidget {{
   /// 缺省回退设计稿展示值(不变量①④⑦:可见层数据驱动、切数据即变、fixture 源自设计)。
   final Map<String, String> slotText;
 
-  /// Figma 导出像素只在编译期除以导出倍率；运行时禁止按屏幕宽高整体缩放。
+  /// 设计稿原始宽高(像素)。仅用于推导响应单位 u,是关系换算的唯一基准,
+  /// 不作为任何控件的固定尺寸(IMPL-LAYOUT-2)。
   static const double designWidth = {a.artboard_width};
   static const double designHeight = {a.artboard_height};
-  static const double designPixelScale = {design_pixel_scale};
-  static const double logicalDesignWidth = designWidth / designPixelScale;
 
   @override
   Widget build(BuildContext context) {{
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {{
-        // Figma 375 逻辑单位：750px @2x 只换算一次为 375 logical px。
-        // Android 对应 dp/sp，iOS 对应 pt；不同屏幕只由锚点/约束重排。
-        const double u = 1 / designPixelScale;
-        final double viewportWidth = constraints.maxWidth;
+        // 关系换算基准单位:把设计像素映射到当前可用宽度。375pt 宽时 u=0.5
+        // (即设计像素÷2,IMPL-UNIT-2),更宽屏按比例放大,保证多屏一致。
+        final double u = constraints.maxWidth / designWidth;
         return SingleChildScrollView(
           child: SizedBox(
-            width: viewportWidth,
+            width: constraints.maxWidth,
             height: designHeight * u,
             child: Stack(
               clipBehavior: Clip.hardEdge,
@@ -937,7 +707,7 @@ class {a.class_name} extends StatelessWidget {{
 {painters}{''.join(band_classes)}
 """
     out = Path(a.out)
-    write_output(out, dart)
+    out.write_text(dart)
     colors_out = Path(a.colors_out) if a.colors_out else out.with_name(a.colors_import)
     # 多状态特性会就同一 colors 文件多次调用本脚本;颜色 token 名是确定性的 c<AARRGGBB>,
     # 所以合并 = 按 argb 取并集,绝不互相覆盖(否则 worker 得手动合并多份 app_colors)。
@@ -945,10 +715,7 @@ class {a.class_name} extends StatelessWidget {{
         for m_argb in re.findall(r"Color\(0x([0-9A-Fa-f]{8})\)", colors_out.read_text(encoding="utf-8")):
             argb = int(m_argb, 16)
             reg.colors.setdefault(argb, f"c{argb:08X}")
-    if reg.colors:
-        write_output(colors_out, reg.emit_dart())
-    elif colors_out.exists():
-        colors_out.unlink()
+    colors_out.write_text(reg.emit_dart())
 
     # 设计期望 sidecar:每个落位节点的归一化几何 + 设计样式(颜色/字号/文案/圆角),
     # 全部源自 render_plan(设计真值),供 check_render_fidelity 与真实渲染 trace 逐组件比对。
@@ -956,42 +723,47 @@ class {a.class_name} extends StatelessWidget {{
     for nid in placed:
         node = nodes[nid]
         is_text = node.get("implementation") == "text"
-        display_text, display_runs = display_text_contract(node) if is_text else (None, [])
         expected[nid] = {
             "bbox": placed[nid],
-            "logicalBbox": [round(float(value) / design_pixel_scale, 2) for value in placed[nid]],
-            "horizontalAnchor": anchors[nid],
             "impl": node.get("implementation"),
-            "text": display_text,
-            "sourceText": node.get("text") if is_text else None,
-            "textRuns": display_runs if is_text else [],
+            "text": node.get("text") if is_text else None,
             "fontSize": node.get("fontSize") if is_text else None,
             "weight": node.get("weight") if is_text else None,
+            "fontFamily": node.get("fontFamily") if is_text else None,
+            "fontStyle": node.get("fontStyle") if is_text else None,
+            "letterSpacing": (
+                (node.get("letterSpacing") or {}).get("value")
+                if is_text and isinstance(node.get("letterSpacing"), dict)
+                else node.get("letterSpacing") if is_text else None
+            ),
+            "lineHeight": (
+                round(float((node.get("lineHeight") or {}).get("value")) / float(node.get("fontSize")), 4)
+                if is_text
+                and isinstance(node.get("lineHeight"), dict)
+                and (node.get("lineHeight") or {}).get("value") not in (None, 0)
+                and node.get("fontSize")
+                else round(float(node.get("lineHeight")) / float(node.get("fontSize")), 4)
+                if is_text and isinstance(node.get("lineHeight"), (int, float)) and node.get("fontSize")
+                else None
+            ),
             "colorHex": fill_hex(node),
             "radius": radius_value(effective_radius(node, nodes)),
         }
     expected_out = Path(str(out) + ".expected.json")
-    write_output(expected_out, json.dumps(
-        {"artboardWidth": a.artboard_width, "artboardHeight": a.artboard_height,
-         "designPixelScale": design_pixel_scale,
-         "logicalDesignWidth": a.artboard_width / design_pixel_scale,
-         "nodes": expected},
+    expected_out.write_text(json.dumps(
+        {"artboardWidth": a.artboard_width, "artboardHeight": a.artboard_height, "nodes": expected},
         ensure_ascii=False, indent=2))
 
     # 设计种子 fixture:动态槽节点 id -> 设计稿展示值(不变量⑦)。同源 fixture 的默认内容就是它;
     # 真实 repository/DTO 用真接口字段覆盖这些键(不变量④),覆盖同值时可见层零变化。
-    slot_seed = {
-        nid: display_text_contract(nodes[nid])[0]
-        for nid in placed
-        if nid in slot_ids and nodes[nid].get("implementation") == "text"
-    }
+    slot_seed = {nid: nodes[nid].get("text", "") for nid in placed
+                 if nid in slot_ids and nodes[nid].get("implementation") == "text"}
     slots_out = Path(str(out) + ".slots.json")
-    write_output(slots_out, json.dumps(slot_seed, ensure_ascii=False, indent=2))
+    slots_out.write_text(json.dumps(slot_seed, ensure_ascii=False, indent=2))
 
     print(json.dumps({"out": str(out), "colors": str(colors_out), "expected": str(expected_out),
                       "slots": str(slots_out), "slotCount": len(slot_seed),
-                      "painted": painted, "skipped": skipped, "tokens": len(reg.colors),
-                      "expectedNodeCount": len(placed)}))
+                      "painted": painted, "skipped": skipped, "tokens": len(reg.colors)}))
     return 0
 
 

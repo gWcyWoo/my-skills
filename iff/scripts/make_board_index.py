@@ -31,7 +31,17 @@ def main() -> int:
     for scene_path in sorted(specs.glob("*/*/scene.json")):
         board_dir = scene_path.parent
         scene = load_json(scene_path)
-        texts = sorted({norm(n.get("text")) for n in (scene.get("nodes") or []) if n.get("text")})
+        scene_nodes = scene.get("nodes") or []
+        texts = sorted({norm(n.get("text")) for n in scene_nodes if n.get("text")})
+        nodes = [
+            {
+                "id": str(node.get("id")),
+                "key": f"iff:{node.get('id')}",
+                "text": norm(node.get("text")) or None,
+            }
+            for node in scene_nodes
+            if node.get("id")
+        ]
         groups_doc = {}
         try:
             groups_doc = load_json(board_dir / "groups.json")
@@ -43,6 +53,7 @@ def main() -> int:
             "spec_dir": str(board_dir),
             "artboard": scene.get("artboard"),
             "texts": texts,
+            "nodes": nodes,
             "groupKinds": sorted({g.get("kind") for g in (groups_doc.get("groups") or []) if g.get("kind")}),
         })
     if not boards:

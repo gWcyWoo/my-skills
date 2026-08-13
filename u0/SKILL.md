@@ -72,7 +72,7 @@ After confirmation, ask the user which:
 - **(a) Refine directions and re-explore** - return to Step 2 with new or sharper directions.
 - **(b) Requirement itself needs reshaping** - return to Step 1.
 - **(c) List candidates / trade-offs** based on EXISTING evidence - produce 2 named directions, each with a one-line trade-off. No new exploration. Candidate generation lives only here; do not invoke it spontaneously.
-- **(d) Hand off to `c-0` / `write-tests` / `hld`** - emit the final summary, stop, and let the downstream skill take over.
+- **(d) Hand off to `code` / `write-tests` / `hld`** - emit the final summary, stop, and let the downstream skill take over.
 
 If the user explicitly asks for "files", "scope", or "locations" at any time after Step 2 has produced evidence, emit `<on_demand_output>`.
 
@@ -111,7 +111,7 @@ P0 - User-owned ambiguity goes to `d0`; code-fact ambiguity goes to exploration.
 P0 - NEVER skip the Step 3 STOP-and-confirm.
 P0 - NEVER dump raw exploration results or files in scope by default.
 P0 - Candidate generation lives ONLY in Step 4 branch (c), only when the user asks. Never volunteer candidates mid-flow.
-P1 - Do not write tests or code. Those are downstream (`write-tests` / `c-0`).
+P1 - Do not write tests or code. Those are downstream (`write-tests` / `code`).
 P2 - If the user provides exploration context up front, you may skip to Step 3.
 P2 - Mirror the user's language.
 </final_reminders>

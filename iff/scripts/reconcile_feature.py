@@ -22,7 +22,10 @@ from pathlib import Path
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--lib-root", default="lib")
+    ap.add_argument("--manifest-root", help="project .iff/features directory")
     ap.add_argument("--title", required=True, help="incoming row title, e.g. 首页")
+    ap.add_argument("--route-hint")
+    ap.add_argument("--state-hint")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
 
@@ -35,16 +38,45 @@ def main() -> int:
             cards = [str(f.relative_to(lib_root)) for f in d.rglob("*card*.dart")]
             features.append({"feature": d.name, "pages": pages, "cardFiles": cards})
 
+    manifests: dict[str, dict] = {}
+    if args.manifest_root:
+        manifest_root = Path(args.manifest_root)
+        if manifest_root.is_dir():
+            for path in sorted(manifest_root.glob("*.json")):
+                doc = json.loads(path.read_text(encoding="utf-8"))
+                feature_id = str(doc.get("featureId") or path.stem)
+                manifests[feature_id] = doc
+                if not any(item["feature"] == feature_id for item in features):
+                    features.append({"feature": feature_id, "pages": [], "cardFiles": []})
+
     # heuristic candidate: a feature dir or page whose name relates to the title token.
     token = re.sub(r"[^A-Za-z0-9]", "", args.title).lower()
     candidates = [f["feature"] for f in features
                   if token and token in f["feature"].lower()] or \
                  [f["feature"] for f in features if f["feature"] == "home"] if "首页" in args.title or "home" in args.title.lower() else []
 
+    route_matches = [
+        feature_id
+        for feature_id, manifest in manifests.items()
+        if args.route_hint and manifest.get("route") == args.route_hint
+    ]
+    candidate_feature = route_matches[0] if len(route_matches) == 1 else (candidates[0] if len(candidates) == 1 else None)
+    existing_states = sorted((manifests.get(candidate_feature, {}).get("states") or {}).keys()) if candidate_feature else []
+    recommended = None
+    if candidate_feature and args.state_hint:
+        if args.state_hint in existing_states:
+            recommended = f"revision:{candidate_feature}:{args.state_hint}"
+        else:
+            recommended = f"variant:{candidate_feature}"
+
     decision = {
         "title": args.title,
         "existingFeatures": features,
-        "candidateMatches": candidates,
+        "candidateMatches": sorted(set(route_matches + candidates)),
+        "candidateFeature": candidate_feature,
+        "existingStates": existing_states,
+        "recommendedDecision": recommended,
+        "recommendedStateKey": args.state_hint,
         "decision": None,  # model fills: "new" | "extend:<feature>" | "variant:<feature>"
         "reason": None,    # model fills: same business logic? same screen different state?
         "note": "Deterministic inventory only. The model must decide reuse vs new by reading whether "

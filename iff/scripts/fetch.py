@@ -21,7 +21,7 @@ LLM orchestrators) from accidentally pulling 100s of KB into their context.
 Cookie resolution order:
     1. --cookie <value>
     2. $LANHU_COOKIE
-    3. ~/.agents/mcp/lanhu-mcp/.env  (LANHU_COOKIE="...")
+    3. ~/.codex/mcp/lanhu-mcp/.env  (LANHU_COOKIE="...")
     4. ~/.claude/mcp/lanhu-mcp/.env  (legacy fallback)
 """
 
@@ -56,7 +56,7 @@ def resolve_cookie(cli_cookie):
     if env_v:
         return env_v
     for dotenv in (
-        os.path.expanduser("~/.agents/mcp/lanhu-mcp/.env"),
+        os.path.expanduser("~/.codex/mcp/lanhu-mcp/.env"),
         os.path.expanduser("~/.claude/mcp/lanhu-mcp/.env"),
     ):
         cookie = read_cookie_from_dotenv(dotenv)
@@ -267,7 +267,7 @@ def main():
     if not cookie:
         print(
             "ERROR: cookie not found. Set $LANHU_COOKIE or write LANHU_COOKIE=... "
-            "into ~/.agents/mcp/lanhu-mcp/.env "
+            "into ~/.codex/mcp/lanhu-mcp/.env "
             "(legacy ~/.claude/mcp/lanhu-mcp/.env is also supported)",
             file=sys.stderr,
         )

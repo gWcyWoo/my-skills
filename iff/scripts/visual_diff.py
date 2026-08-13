@@ -9,8 +9,6 @@ from pathlib import Path
 import struct
 import zlib
 
-from dynamic_content_contract import DynamicContentContractError, load_api_dynamic_nodes
-
 from common import dump_json, load_json
 
 
@@ -229,27 +227,17 @@ def region_stats(
     width: int,
     height: int,
     bbox: list[float],
-    *,
-    excluded_bboxes: list[list[float]] | None = None,
-    aa_threshold: float = 0.1,
 ) -> dict[str, float]:
     x, y, w, h = [int(round(v)) for v in bbox]
     x0 = max(0, min(width, x))
     y0 = max(0, min(height, y))
     x1 = max(0, min(width, x + max(0, w)))
     y1 = max(0, min(height, y + max(0, h)))
-    excluded_regions = []
-    for excluded in excluded_bboxes or []:
-        ex, ey, ew, eh = [int(round(v)) for v in excluded]
-        excluded_regions.append((ex, ey, ex + max(0, ew), ey + max(0, eh)))
-    total = mismatch = real_mismatch = aa_excluded = 0
-    aa_max_delta = 35215.0 * aa_threshold * aa_threshold
+    total = mismatch = 0
     max_delta = 0
     sum_delta = 0
     for py in range(y0, y1):
         for px in range(x0, x1):
-            if any(ex0 <= px < ex1 and ey0 <= py < ey1 for ex0, ey0, ex1, ey1 in excluded_regions):
-                continue
             rp = ref[py * width + px]
             ap = act[py * width + px]
             if not (rp[3] or ap[3]):
@@ -260,50 +248,15 @@ def region_stats(
             max_delta = max(max_delta, delta)
             if delta > 3:
                 mismatch += 1
-            if _color_delta_sq(rp, ap) > aa_max_delta:
-                if _antialiased(ref, px, py, width, height, act) or _antialiased(act, px, py, width, height, ref):
-                    aa_excluded += 1
-                else:
-                    real_mismatch += 1
     return {
         "pixelMismatch": mismatch / max(1, total),
-        "pixelMismatchRealDefect": real_mismatch / max(1, total),
-        "aaExcluded": aa_excluded,
         "maxColorDelta": max_delta,
         "avgColorDelta": sum_delta / max(1, total),
-        "area": float(total),
-        "excludedDescendantRegions": len(excluded_regions),
+        "area": float(max(0, x1 - x0) * max(0, y1 - y0)),
     }
 
 
-def contained_descendant_bboxes(widget: dict, widgets: dict) -> list[list[float]]:
-    outer = widget.get("bbox")
-    if not isinstance(outer, list) or len(outer) != 4:
-        return []
-    ox, oy, ow, oh = [float(value) for value in outer]
-    descendants: list[list[float]] = []
-    for other in widgets.values():
-        if other is widget or not isinstance(other, dict):
-            continue
-        inner = other.get("bbox")
-        if not isinstance(inner, list) or len(inner) != 4:
-            continue
-        ix, iy, iw, ih = [float(value) for value in inner]
-        if iw * ih >= ow * oh:
-            continue
-        if ix >= ox and iy >= oy and ix + iw <= ox + ow and iy + ih <= oy + oh:
-            descendants.append(inner)
-    return descendants
-
-
-def component_issues(
-    layout: dict,
-    ref: list,
-    act: list,
-    width: int,
-    height: int,
-    board: str | None = None,
-) -> tuple[list, list, list, list]:
+def component_issues(layout: dict, ref: list, act: list, width: int, height: int) -> tuple[list, list, list, list]:
     bbox_issues = []
     text_issues = []
     asset_issues = []
@@ -314,28 +267,17 @@ def component_issues(
             stats = region_stats(ref, act, width, height, component_bbox)
             if stats["pixelMismatch"] > 0.01:
                 bbox_issues.append({"node": component_name, "issue": "region mismatch", **stats})
-        widgets = component.get("widgets") or {}
-        for role, widget in widgets.items():
+        for role, widget in (component.get("widgets") or {}).items():
             bbox = widget.get("bbox")
             if not bbox:
                 continue
+            stats = region_stats(ref, act, width, height, bbox)
+            item = {"node": widget.get("node"), "role": role, "widget": widget.get("widget"), **stats}
             widget_type = str(widget.get("widget", "")).lower()
-            excluded_bboxes = contained_descendant_bboxes(widget, widgets) if ("image" in widget_type or "svg" in widget_type) else []
-            stats = region_stats(ref, act, width, height, bbox, excluded_bboxes=excluded_bboxes)
-            item = {
-                "node": widget.get("node"),
-                "board": board,
-                "state": component.get("state"),
-                "component": component_name,
-                "bbox": bbox,
-                "role": role,
-                "widget": widget.get("widget"),
-                **stats,
-            }
             if widget_type == "text" and stats["pixelMismatch"] > 0.01:
                 text_issues.append({**item, "issue": "text region mismatch"})
             elif "image" in widget_type or "svg" in widget_type:
-                if stats["pixelMismatchRealDefect"] > 0.01:
+                if stats["pixelMismatch"] > 0.01:
                     asset_issues.append({**item, "issue": "asset region mismatch"})
             elif stats["avgColorDelta"] > 3:
                 shape_issues.append({**item, "issue": "shape color/edge mismatch"})
@@ -348,38 +290,18 @@ def component_issues(
     )
 
 
-def mask_api_dynamic_text(
-    layout: dict,
-    nodes: set[str],
-    ref: list[tuple[int, int, int, int]],
-    act: list[tuple[int, int, int, int]],
-    width: int,
-    height: int,
-) -> tuple[list[tuple[int, int, int, int]], list[str]]:
-    masked = list(act)
-    applied: set[str] = set()
-    components = layout.values() if isinstance(layout, dict) else []
-    for component in components:
-        if not isinstance(component, dict):
-            continue
+def expected_widget_mask(layout: dict, width: int, height: int) -> list[bool]:
+    mask = [False] * (width * height)
+    for component in layout.values() if isinstance(layout, dict) else []:
         for widget in (component.get("widgets") or {}).values():
-            if not isinstance(widget, dict):
-                continue
-            node = str(widget.get("node") or "")
-            if node not in nodes or str(widget.get("widget") or "").lower() != "text":
-                continue
             bbox = widget.get("bbox")
-            if not isinstance(bbox, list) or len(bbox) != 4:
+            if not bbox or len(bbox) != 4:
                 continue
-            x, y, w, h = [int(round(float(value))) for value in bbox]
-            x0, y0 = max(0, x), max(0, y)
-            x1, y1 = min(width, x + max(0, w)), min(height, y + max(0, h))
-            for py in range(y0, y1):
-                start = py * width + x0
-                stop = py * width + x1
-                masked[start:stop] = ref[start:stop]
-            applied.add(node)
-    return masked, sorted(applied)
+            x, y, w, h = [int(round(value)) for value in bbox]
+            for py in range(max(0, y), min(height, y + max(0, h))):
+                for px in range(max(0, x), min(width, x + max(0, w))):
+                    mask[py * width + px] = True
+    return mask
 
 
 def main() -> int:
@@ -387,22 +309,19 @@ def main() -> int:
     parser.add_argument("--reference", required=True)
     parser.add_argument("--actual", required=True)
     parser.add_argument("--layout", required=True)
-    parser.add_argument("--data-slot-bindings", help="validated API content provenance; masks only confirmed API text values")
     parser.add_argument("--out", required=True)
     parser.add_argument("--heatmap", required=True)
     parser.add_argument("--ssim-threshold", type=float, default=0.99)
     parser.add_argument("--pixel-threshold", type=float, default=0.01)
     parser.add_argument("--aa-threshold", type=float, default=0.1,
                         help="pixelmatch YIQ perceptual threshold (0..1); higher = more tolerant")
+    parser.add_argument("--unexpected-pixels", type=int, default=64,
+                        help="hard-fail when this many real-defect pixels lie outside all expected widgets")
     args = parser.parse_args()
 
     rw, rh, ref = read_png_rgba(args.reference)
     aw, ah, act = read_png_rgba(args.actual)
     layout = load_json(args.layout)
-    try:
-        api_dynamic_nodes = load_api_dynamic_nodes(args.data_slot_bindings)
-    except DynamicContentContractError as exc:
-        raise SystemExit(f"ERROR: {exc}") from exc
     viewport_issues = []
     if (rw, rh) != (aw, ah):
         report = {
@@ -414,6 +333,7 @@ def main() -> int:
             "textIssues": [],
             "assetIssues": [],
             "shapeIssues": [],
+            "unexpectedIssues": [],
             "topP0": ["actual size differs from reference"],
             "thresholds": {"ssim": args.ssim_threshold, "pixelMismatch": args.pixel_threshold},
             "pass": False,
@@ -422,9 +342,6 @@ def main() -> int:
         heat = [(255, 0, 0, 180)] * (rw * rh)
         write_png_rgba(args.heatmap, rw, rh, heat)
         raise SystemExit("ERROR: actual size differs from reference; resizing is forbidden")
-    act, dynamic_content_exclusions = mask_api_dynamic_text(
-        layout, api_dynamic_nodes, ref, act, rw, rh
-    )
     # Two measurements:
     #  - strict (legacy): any max-channel delta>3 — counts imperceptible
     #    cross-engine antialiasing; kept for transparency only.
@@ -434,10 +351,12 @@ def main() -> int:
     aa_max_delta = 35215.0 * args.aa_threshold * args.aa_threshold
     strict_mismatches = 0
     real_mismatches = 0
+    unexpected_mismatches = 0
     aa_excluded = 0
     nontransparent = 0
     heat = []
     max_delta = 0
+    expected_mask = expected_widget_mask(layout, rw, rh)
     for i in range(len(ref)):
         rp = ref[i]
         ap = act[i]
@@ -458,6 +377,8 @@ def main() -> int:
                 heat.append((255, 220, 0, 120))  # amber = antialiasing (ignored)
             else:
                 real_mismatches += 1
+                if not expected_mask[i]:
+                    unexpected_mismatches += 1
                 heat.append((255, 0, 0, 200))     # red = real design defect
         else:
             heat.append((0, 0, 0, 0))
@@ -465,11 +386,16 @@ def main() -> int:
     pixel_mismatch_strict = strict_mismatches / max(1, nontransparent)
     ssim = max(0.0, min(1.0, ssim_windowed(ref, act, rw, rh)))
     ssim_global = max(0.0, min(1.0, ssim_simple(ref, act)))
-    board_scope = Path(args.layout).resolve().parent.name
-    bbox_issues, text_issues, asset_issues, shape_issues = component_issues(
-        layout, ref, act, rw, rh, board_scope
+    bbox_issues, text_issues, asset_issues, shape_issues = component_issues(layout, ref, act, rw, rh)
+    unexpected_issues = (
+        [{"issue": "real visual difference outside expected widget coverage",
+          "pixelCount": unexpected_mismatches,
+          "threshold": args.unexpected_pixels}]
+        if unexpected_mismatches >= args.unexpected_pixels
+        else []
     )
     top_p0 = [
+        *("unexpected:outside_expected_widgets" for _ in unexpected_issues),
         *(f"bbox:{i['node']}" for i in bbox_issues[:5]),
         *(f"asset:{i['node']}" for i in asset_issues[:5]),
         *(f"text:{i['node']}" for i in text_issues[:5]),
@@ -487,15 +413,11 @@ def main() -> int:
         "viewportIssues": viewport_issues,
         "bboxIssues": bbox_issues,
         "textIssues": text_issues,
-        "assetIssueScope": {
-            "board": board_scope,
-            "identityFields": ["board", "state", "component", "node", "bbox"],
-        },
         "assetIssues": asset_issues,
         "shapeIssues": shape_issues,
+        "unexpectedIssues": unexpected_issues,
         "topP0": top_p0,
         "layoutComponents": list(layout.keys()) if isinstance(layout, dict) else [],
-        "dynamicContentExclusions": dynamic_content_exclusions,
         "thresholds": {"ssim": args.ssim_threshold, "pixelMismatch": args.pixel_threshold},
         "pass": ssim >= args.ssim_threshold and pixel_mismatch <= args.pixel_threshold and not top_p0,
     }
