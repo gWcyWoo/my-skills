@@ -15,8 +15,8 @@ guessing.
 
 For every state, declare:
 
-- at least one geometry anchor with expected coordinate, actual coordinate, and
-  tolerance;
+- at least one geometry anchor with expected coordinate, actual coordinate,
+  tolerance, absolute measurement report path, and live report SHA-256;
 - at least one named visual region with measured and maximum mismatch ratios;
 - the exact user action or deterministic setup that reaches the state.
 
@@ -32,6 +32,26 @@ Every real final-capture provenance document extends
 The two final runs require distinct capture and reset identifiers. Their image
 bytes may be identical; stable identical pixels are valid after two independent
 capture/reset events.
+
+## Source-bound native measurements
+
+Never accept worker-authored anchor or regional numbers without deterministic
+source reports. For Android, run `platforms/android_trace_measure_v1.py` over the
+UIAutomator hierarchy plus the exact `adb shell wm density` output, and run
+`platforms/android_region_diff_v1.py` over the frozen reference and handler
+capture. For iOS, generate the XCTest with
+`platforms/ios_trace_harness_gen_v1.py`, run it through the iOS trace handler, and
+measure with `platforms/ios_trace_measure_v1.py`. Flutter may bind a passing
+`check_render_fidelity.py` report. Its legacy report is an explicit compatibility
+exception because that gate independently checks every expected trace node but
+does not serialize passing per-metric values; native reports have no exception.
+
+Every anchor carries `measurement_path` and `measurement_sha256`; every region
+carries `diff_report_path` and `diff_report_sha256`. The verifier reopens each
+regular non-symlink file, recomputes its SHA-256 and internal report digest, and
+requires the named source value to equal the declared terminal value. A missing
+node, source file, named measurement, or value match fails; do not estimate or
+copy a design coordinate into the actual field.
 
 ## Measured root-cause loop
 

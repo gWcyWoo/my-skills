@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -147,6 +148,10 @@ def _run(
         "CI": "1",
         "GRADLE_OPTS": "-Dorg.gradle.daemon=false",
     }
+    for variable in ("ANDROID_HOME", "ANDROID_SDK_ROOT", "JAVA_HOME"):
+        value = os.environ.get(variable)
+        if value:
+            environment[variable] = value
     if serial:
         environment["ANDROID_SERIAL"] = serial
     result = subprocess.run(
@@ -214,12 +219,27 @@ def _prepare_device(runtime: dict[str, Any], context: dict[str, Any]) -> tuple[s
     adb = _adb()
     _run([adb, "-s", serial, "install", "-r", str(apk)], cwd=project_root, serial=serial)
     _run(
+        [adb, "-s", serial, "shell", "pm", "clear", runtime["application_id"]],
+        cwd=project_root,
+        serial=serial,
+    )
+    _run(
         [adb, "-s", serial, "shell", "am", "force-stop", runtime["application_id"]],
         cwd=project_root,
         serial=serial,
     )
     _run(
-        [adb, "-s", serial, "shell", "am", "start", "-n", f"{runtime['application_id']}/{runtime['activity']}"],
+        [
+            adb,
+            "-s",
+            serial,
+            "shell",
+            "am",
+            "start",
+            "-W",
+            "-n",
+            f"{runtime['application_id']}/{runtime['activity']}",
+        ],
         cwd=project_root,
         serial=serial,
     )
@@ -260,10 +280,14 @@ def _capture(step: dict[str, Any], context: dict[str, Any]) -> dict[str, str]:
         raise AndroidExecutionHandlerError("Android screenshot is invalid")
     actual = _output(step, "actual")
     actual_digest = _publish(actual, data)
+    capture_id = str(uuid.uuid4())
+    state_reset_id = str(uuid.uuid4())
     provenance = {
         "kind": "icp.runtime-capture-provenance.v1",
         "actual_source": "emulator_screenshot",
         "actual_sha256": actual_digest,
+        "capture_id": capture_id,
+        "state_reset_id": state_reset_id,
         "device_serial_digest": hashlib.sha256(serial.encode()).hexdigest(),
         "application_id_digest": hashlib.sha256(runtime["application_id"].encode()).hexdigest(),
         "apk_sha256": _sha(apk),

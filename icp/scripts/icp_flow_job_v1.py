@@ -909,6 +909,18 @@ def record_contract(job_path: Path, contract_path: Path) -> dict[str, object]:
         )
     except ValueError as exc:
         raise FlowJobError(str(exc)) from exc
+    if job["platform"] in {
+        "android-kotlin",
+        "android-java",
+        "ios-swift",
+        "ios-objc",
+    }:
+        try:
+            implementation_contract_v1.validate_native_measurement_contracts(
+                design_contracts
+            )
+        except ValueError as exc:
+            raise FlowJobError(str(exc)) from exc
     try:
         observable_clauses = implementation_contract_v1.validate_observable_clauses(
             observable_clauses,
@@ -1049,6 +1061,19 @@ def validate_canonical_page_evidence(
         visual_verification_v1.verify_verification(verification)
     except (OSError, ValueError) as exc:
         raise FlowJobError("page visual verification did not pass") from exc
+    for state in verification["states"]:
+        for anchor in state["anchors"]:
+            require_absolute_regular_below(
+                node_root,
+                anchor["measurement_path"],
+                "page anchor measurement report",
+            )
+        for region in state["regions"]:
+            require_absolute_regular_below(
+                node_root,
+                region["diff_report_path"],
+                "page region diff report",
+            )
     manifest_paths: list[Path] = []
     actual_paths: list[Path] = []
     for state in verification["states"]:

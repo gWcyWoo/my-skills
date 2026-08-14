@@ -68,6 +68,132 @@ def _strict_json(path: Path) -> dict[str, Any]:
     return value
 
 
+def _bound_report(
+    path_value: object,
+    sha_value: object,
+    label: str,
+) -> tuple[Path, dict[str, Any]]:
+    path = _regular_absolute(str(path_value), label)
+    if not isinstance(sha_value, str) or sha_value != _sha(path):
+        raise VisualVerificationError(f"{label} digest drift")
+    report = _strict_json(path)
+    kind = report.get("kind")
+    if kind in {
+        "icp.android-anchor-measurements.v1",
+        "icp.ios-anchor-measurements.v1",
+        "icp.android-region-measurements.v1",
+    }:
+        declared = report.get("report_sha256")
+        payload = {key: value for key, value in report.items() if key != "report_sha256"}
+        if not isinstance(declared, str) or declared != hashlib.sha256(
+            json.dumps(
+                payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+        ).hexdigest():
+            raise VisualVerificationError(f"{label} internal digest drift")
+    return path, report
+
+
+def _named_measurement(report: dict[str, Any], name: str, label: str) -> dict[str, Any]:
+    measurements = report.get("measurements")
+    if not isinstance(measurements, list):
+        raise VisualVerificationError(f"{label} measurements are invalid")
+    matches = [
+        item
+        for item in measurements
+        if isinstance(item, dict) and item.get("name") == name
+    ]
+    if len(matches) != 1:
+        raise VisualVerificationError(f"{label} does not contain exactly one {name}")
+    return matches[0]
+
+
+def _legacy_flutter_fidelity_pass(report: dict[str, Any]) -> bool:
+    required = {
+        "ok",
+        "expectedNodes",
+        "checkedNodes",
+        "failureCount",
+        "byCategory",
+        "tolerances",
+        "failures",
+    }
+    expected = report.get("expectedNodes")
+    checked = report.get("checkedNodes")
+    return (
+        required.issubset(report)
+        and report.get("ok") is True
+        and isinstance(expected, int)
+        and not isinstance(expected, bool)
+        and expected > 0
+        and checked == expected
+        and report.get("failureCount") == 0
+        and report.get("failures") == []
+    )
+
+
+def _anchor_source(
+    path_value: object,
+    sha_value: object,
+    name: str,
+    declared: float,
+) -> tuple[str, str, float]:
+    path, report = _bound_report(path_value, sha_value, "visual anchor measurement source")
+    kind = report.get("kind")
+    if kind == "icp.android-anchor-measurements.v1":
+        if report.get("status") != "pass" or report.get("errors") != []:
+            raise VisualVerificationError("visual anchor measurement source did not pass")
+        raw = _named_measurement(report, name, "visual anchor measurement source").get(
+            "actual_dp"
+        )
+    elif kind == "icp.ios-anchor-measurements.v1":
+        if report.get("status") != "pass" or report.get("errors") != []:
+            raise VisualVerificationError("visual anchor measurement source did not pass")
+        raw = _named_measurement(report, name, "visual anchor measurement source").get(
+            "actual_pt"
+        )
+    elif isinstance(report.get("measurements"), list) and report.get("ok") is True:
+        raw = _named_measurement(report, name, "check_render_fidelity source").get(
+            "actual"
+        )
+    elif _legacy_flutter_fidelity_pass(report):
+        raw = declared
+    else:
+        raise VisualVerificationError("visual anchor measurement source kind is invalid")
+    return str(path), str(sha_value), _number(raw, "visual anchor measured value")
+
+
+def _region_source(
+    path_value: object,
+    sha_value: object,
+    name: str,
+    declared: float,
+) -> tuple[str, str, float]:
+    path, report = _bound_report(path_value, sha_value, "visual region diff source")
+    kind = report.get("kind")
+    if kind == "icp.android-region-measurements.v1":
+        if report.get("status") != "pass" or report.get("errors") != []:
+            raise VisualVerificationError("visual region diff source did not pass")
+        raw = _named_measurement(report, name, "visual region diff source").get(
+            "mismatch_ratio"
+        )
+    elif isinstance(report.get("measurements"), list) and report.get("ok") is True:
+        raw = _named_measurement(report, name, "check_render_fidelity source").get(
+            "mismatch_ratio"
+        )
+    elif _legacy_flutter_fidelity_pass(report):
+        raw = declared
+    elif name == "global" and "pixelMismatchRealDefect" in report:
+        raw = report.get("pixelMismatchRealDefect")
+    else:
+        raise VisualVerificationError("visual region diff source kind is invalid")
+    return str(path), str(sha_value), _number(raw, "visual region measured value")
+
+
 def _number(value: object, label: str, *, minimum: float = 0.0) -> float:
     if (
         isinstance(value, bool)
@@ -151,20 +277,28 @@ def _anchor(value: object) -> dict[str, object]:
         "expected",
         "actual",
         "tolerance",
+        "measurement_path",
+        "measurement_sha256",
     ):
-        raise VisualVerificationError("visual anchor input shape is invalid")
+        raise VisualVerificationError("visual anchor measurement source is required")
+    name = _name(value["name"], "visual anchor name")
     expected = _number(value["expected"], "visual anchor expected")
     actual = _number(value["actual"], "visual anchor actual")
     tolerance = _number(value["tolerance"], "visual anchor tolerance")
+    measurement_path, measurement_sha256, measured = _anchor_source(
+        value["measurement_path"], value["measurement_sha256"], name, actual
+    )
+    if actual != measured:
+        raise VisualVerificationError(f"visual anchor {name} source value mismatch")
     delta = abs(actual - expected)
     status = "pass" if delta <= tolerance else "fail"
-    if status != "pass":
-        raise VisualVerificationError(f"visual anchor {value.get('name')} did not pass")
     return {
-        "name": _name(value["name"], "visual anchor name"),
+        "name": name,
         "expected": expected,
         "actual": actual,
         "tolerance": tolerance,
+        "measurement_path": measurement_path,
+        "measurement_sha256": measurement_sha256,
         "delta": delta,
         "status": status,
     }
@@ -175,19 +309,27 @@ def _region(value: object) -> dict[str, object]:
         "name",
         "mismatch_ratio",
         "max_mismatch_ratio",
+        "diff_report_path",
+        "diff_report_sha256",
     ):
-        raise VisualVerificationError("visual region input shape is invalid")
+        raise VisualVerificationError("visual region measurement source is required")
+    name = _name(value["name"], "visual region name")
     mismatch = _number(value["mismatch_ratio"], "visual region mismatch_ratio")
     maximum = _number(value["max_mismatch_ratio"], "visual region max_mismatch_ratio")
+    diff_report_path, diff_report_sha256, measured = _region_source(
+        value["diff_report_path"], value["diff_report_sha256"], name, mismatch
+    )
+    if mismatch != measured:
+        raise VisualVerificationError(f"visual region {name} source value mismatch")
     if mismatch > 1 or maximum > 1:
         raise VisualVerificationError("visual region mismatch ratios must be in [0,1]")
     status = "pass" if mismatch <= maximum else "fail"
-    if status != "pass":
-        raise VisualVerificationError(f"visual region {value.get('name')} did not pass")
     return {
-        "name": _name(value["name"], "visual region name"),
+        "name": name,
         "mismatch_ratio": mismatch,
         "max_mismatch_ratio": maximum,
+        "diff_report_path": diff_report_path,
+        "diff_report_sha256": diff_report_sha256,
         "status": status,
     }
 
@@ -242,6 +384,13 @@ def _state(value: object, calibration: dict[str, object]) -> dict[str, object]:
         raise VisualVerificationError("visual anchor names must be unique per state")
     if len({region["name"] for region in regions}) != len(regions):
         raise VisualVerificationError("visual region names must be unique per state")
+    failed_anchors = [str(anchor["name"]) for anchor in anchors if anchor["status"] != "pass"]
+    failed_regions = [str(region["name"]) for region in regions if region["status"] != "pass"]
+    if failed_anchors or failed_regions:
+        raise VisualVerificationError(
+            f"visual state {name} did not pass: "
+            f"anchors={failed_anchors} regions={failed_regions}"
+        )
     return {
         "name": name,
         "contract": contract,
@@ -420,6 +569,8 @@ def verify_verification(document: dict[str, object]) -> None:
                 "expected",
                 "actual",
                 "tolerance",
+                "measurement_path",
+                "measurement_sha256",
                 "delta",
                 "status",
             ):
@@ -428,8 +579,17 @@ def verify_verification(document: dict[str, object]) -> None:
             expected = _number(anchor["expected"], "visual anchor expected")
             actual = _number(anchor["actual"], "visual anchor actual")
             tolerance = _number(anchor["tolerance"], "visual anchor tolerance")
+            measurement_path, measurement_sha256, measured = _anchor_source(
+                anchor["measurement_path"],
+                anchor["measurement_sha256"],
+                anchor_name,
+                actual,
+            )
             if (
                 anchor_name in anchor_names
+                or anchor["measurement_path"] != measurement_path
+                or anchor["measurement_sha256"] != measurement_sha256
+                or actual != measured
                 or anchor["delta"] != abs(actual - expected)
                 or anchor["status"] != "pass"
                 or abs(actual - expected) > tolerance
@@ -442,6 +602,8 @@ def verify_verification(document: dict[str, object]) -> None:
                 "name",
                 "mismatch_ratio",
                 "max_mismatch_ratio",
+                "diff_report_path",
+                "diff_report_sha256",
                 "status",
             ):
                 raise VisualVerificationError("visual region shape is invalid")
@@ -450,8 +612,17 @@ def verify_verification(document: dict[str, object]) -> None:
             maximum = _number(
                 region["max_mismatch_ratio"], "visual region max_mismatch_ratio"
             )
+            diff_report_path, diff_report_sha256, measured = _region_source(
+                region["diff_report_path"],
+                region["diff_report_sha256"],
+                region_name,
+                mismatch,
+            )
             if (
                 region_name in region_names
+                or region["diff_report_path"] != diff_report_path
+                or region["diff_report_sha256"] != diff_report_sha256
+                or mismatch != measured
                 or mismatch > 1
                 or maximum > 1
                 or region["status"] != "pass"

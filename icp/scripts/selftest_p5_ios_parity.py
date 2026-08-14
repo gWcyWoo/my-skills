@@ -246,14 +246,22 @@ def test_swift_xcode_trace_tests_gates_capture_and_fan_in() -> None:
             ("ios-swift.project_gates.v1", "gates.json", "e"),
         ):
             output_id = "trace" if "trace_harness" in operation_id else "receipt"
+            outputs = {output_id: _artifact("run", output)}
+            if "trace_harness" in operation_id:
+                outputs["harness"] = _artifact(
+                    "project", "AppUITests/ICPVisualTraceTests.swift"
+                )
             request = _request(
                 project,
                 run,
                 f"feature-{nonce}",
                 {"runtime": _artifact("run", "runtime-test.json")},
-                {output_id: _artifact("run", output)},
+                outputs,
             )
             assert _execute("ios-swift", manifest, operation_id, request, nonce)["status"] == "succeeded"
+            if "trace_harness" in operation_id:
+                source = (project / "AppUITests" / "ICPVisualTraceTests.swift").read_text()
+                assert "app.descendants(matching: .any)" in source
 
         runtime_capture = {
             "project": "App.xcodeproj",
@@ -274,7 +282,31 @@ def test_swift_xcode_trace_tests_gates_capture_and_fan_in() -> None:
             },
         )
         assert _execute("ios-swift", manifest, "ios-swift.runtime_capture.v1", capture_request, "f")["status"] == "succeeded"
-        assert json.loads((run / "provenance.json").read_text())["actual_source"] == "simulator_screenshot"
+        first_provenance = json.loads((run / "provenance.json").read_text())
+        assert first_provenance["actual_source"] == "simulator_screenshot"
+        assert first_provenance["capture_id"]
+        assert first_provenance["state_reset_id"]
+
+        second_capture_request = _request(
+            project,
+            run,
+            "feature-capture-second",
+            {"runtime": _artifact("run", "runtime-capture.json")},
+            {
+                "actual": _artifact("run", "actual-second.png"),
+                "provenance": _artifact("run", "provenance-second.json"),
+            },
+        )
+        assert _execute(
+            "ios-swift",
+            manifest,
+            "ios-swift.runtime_capture.v1",
+            second_capture_request,
+            "2",
+        )["status"] == "succeeded"
+        second_provenance = json.loads((run / "provenance-second.json").read_text())
+        assert first_provenance["capture_id"] != second_provenance["capture_id"]
+        assert first_provenance["state_reset_id"] != second_provenance["state_reset_id"]
 
         _write(project / "Sources" / "Routes.swift", "let routes: [String] = []\n")
         expected = hashlib.sha256((project / "Sources" / "Routes.swift").read_bytes()).hexdigest()

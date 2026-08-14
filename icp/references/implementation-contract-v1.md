@@ -149,8 +149,18 @@ author the semantic fields shown as examples from the exact sources and design:
         "system_bars": "included|excluded",
         "animations_disabled": true
       },
-      "anchors": [{"name": "card_top", "expected": 100.0, "tolerance": 1.0}],
-      "regions": [{"name": "card", "max_mismatch_ratio": 0.05}],
+      "anchors": [{
+        "name": "card_top",
+        "node_id": "card",
+        "attribute": "top",
+        "expected": 100.0,
+        "tolerance": 1.0
+      }],
+      "regions": [{
+        "name": "card",
+        "bbox": [16, 577, 358, 220],
+        "max_mismatch_ratio": 0.05
+      }],
       "typography": [{"name": "title", "properties": {"size": 24, "weight": 600}}],
       "colors": [{"name": "surface", "value": "#FFFFFFFF"}],
       "assets": [{

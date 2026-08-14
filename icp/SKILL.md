@@ -61,6 +61,11 @@ after every state passes anchors and regional pixels in two independent
 capture/reset runs sealed by
 `icp.visual-verification.v1`. Behavior tests or one global pixel comparison cannot
 make a page pass. The main agent rejects any contrary result immediately.
+For Android/iOS page nodes, require `icp:<node-id>` markers on every visible
+contract element and source every terminal anchor/region number from the native
+trace and vendored-diff adapters named by the visual contract. Handler-produced
+capture/reset IDs are mandatory; worker-authored provenance or naked metrics are
+invalid.
 
 Shared-component and integration children still edit only their `allowed_paths`
 and run focused tests/self-check. No child reads or writes Sheet/Excel state, lease

@@ -313,9 +313,22 @@ def validate_design_contracts(
                 raise ValueError("implementation contract design state is incomplete")
             anchor_names: set[str] = set()
             for anchor in state["anchors"]:
+                anchor_keys = frozenset(anchor) if isinstance(anchor, dict) else frozenset()
                 if (
                     not isinstance(anchor, dict)
-                    or set(anchor) != {"name", "expected", "tolerance"}
+                    or anchor_keys
+                    not in {
+                        frozenset({"name", "expected", "tolerance"}),
+                        frozenset(
+                            {
+                                "name",
+                                "node_id",
+                                "attribute",
+                                "expected",
+                                "tolerance",
+                            }
+                        ),
+                    }
                     or not isinstance(anchor["name"], str)
                     or not anchor["name"]
                     or anchor["name"] in anchor_names
@@ -326,18 +339,53 @@ def validate_design_contracts(
                     or anchor["tolerance"] < 0
                 ):
                     raise ValueError("implementation contract design state is incomplete")
+                if anchor_keys != frozenset({"name", "expected", "tolerance"}) and (
+                    not isinstance(anchor["node_id"], str)
+                    or not anchor["node_id"]
+                    or anchor["attribute"]
+                    not in {
+                        "left",
+                        "top",
+                        "right",
+                        "bottom",
+                        "center_x",
+                        "center_y",
+                        "width",
+                        "height",
+                    }
+                ):
+                    raise ValueError("implementation contract design state is incomplete")
                 anchor_names.add(anchor["name"])
             region_names: set[str] = set()
             for region in state["regions"]:
+                region_keys = frozenset(region) if isinstance(region, dict) else frozenset()
                 if (
                     not isinstance(region, dict)
-                    or set(region) != {"name", "max_mismatch_ratio"}
+                    or region_keys
+                    not in {
+                        frozenset({"name", "max_mismatch_ratio"}),
+                        frozenset({"name", "bbox", "max_mismatch_ratio"}),
+                    }
                     or not isinstance(region["name"], str)
                     or not region["name"]
                     or region["name"] in region_names
                     or not isinstance(region["max_mismatch_ratio"], (int, float))
                     or isinstance(region["max_mismatch_ratio"], bool)
                     or not 0 <= region["max_mismatch_ratio"] <= 1
+                ):
+                    raise ValueError("implementation contract design state is incomplete")
+                if region_keys != frozenset({"name", "max_mismatch_ratio"}) and (
+                    not isinstance(region["bbox"], list)
+                    or len(region["bbox"]) != 4
+                    or any(
+                        isinstance(value, bool)
+                        or not isinstance(value, (int, float))
+                        for value in region["bbox"]
+                    )
+                    or region["bbox"][0] < 0
+                    or region["bbox"][1] < 0
+                    or region["bbox"][2] <= 0
+                    or region["bbox"][3] <= 0
                 ):
                     raise ValueError("implementation contract design state is incomplete")
                 region_names.add(region["name"])
@@ -378,6 +426,34 @@ def validate_design_contracts(
     if set(page_ids) != implemented_page_ids or len(page_ids) != len(implemented_page_ids):
         raise ValueError("every implemented page requires a design state contract")
     return design_contracts
+
+
+def validate_native_measurement_contracts(
+    design_contracts: list[dict[str, object]],
+) -> None:
+    for design in design_contracts:
+        states = design["states"]
+        assert isinstance(states, list)
+        for state in states:
+            assert isinstance(state, dict)
+            for anchor in state["anchors"]:
+                if not isinstance(anchor, dict) or set(anchor) != {
+                    "name",
+                    "node_id",
+                    "attribute",
+                    "expected",
+                    "tolerance",
+                }:
+                    raise ValueError(
+                        "native design anchor measurement identity is missing"
+                    )
+            for region in state["regions"]:
+                if not isinstance(region, dict) or set(region) != {
+                    "name",
+                    "bbox",
+                    "max_mismatch_ratio",
+                }:
+                    raise ValueError("native design region bbox is missing")
 
 
 def validate_observable_clauses(

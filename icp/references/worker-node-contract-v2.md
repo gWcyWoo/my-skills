@@ -20,6 +20,14 @@ acceptance cases, TDD slice order, design states, and evidence obligations.
    regional thresholds, typography, colors, and assets. Follow
    `visual-verification-contract-v1.md` and seal two independent reset/capture
    runs for every state. Do not select a different reference or loosen a threshold.
+   During Phase C, give every contract-visible element the exact stable marker
+   `icp:<node-id>`. Android exposes it through `resource-id` or `content-desc`;
+   iOS exposes it through `accessibilityIdentifier`. Native anchors declare the
+   same `node_id` plus one explicit coordinate attribute, and native regions
+   declare an image-space `bbox`. Run the platform trace/region measurement
+   scripts and bind their live paths/SHA-256 values into visual verification.
+   Missing markers or measurements fail; never hand-author `actual` or
+   `mismatch_ratio`.
 5. Write real evidence below the node state. Test bindings use a non-empty JUnit
    XML report whose named testcase passed. Visual bindings use the canonical
    `visual-verification.json`. Runtime bindings use

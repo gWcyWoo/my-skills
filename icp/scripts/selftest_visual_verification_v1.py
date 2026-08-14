@@ -68,6 +68,8 @@ def _calibration() -> dict[str, object]:
 
 
 def _state(run_1: Path, run_2: Path) -> dict[str, object]:
+    anchor_report = _measurement_report(run_1.parent / "anchor-measurements.json")
+    region_report = _region_report(run_1.parent / "region-measurements.json")
     return {
         "name": "customer-service-modal",
         "contract": "Opening customer service shows the approved bottom modal.",
@@ -78,6 +80,10 @@ def _state(run_1: Path, run_2: Path) -> dict[str, object]:
                 "expected": 560.0,
                 "actual": 561.0,
                 "tolerance": 2.0,
+                "measurement_path": str(anchor_report),
+                "measurement_sha256": hashlib.sha256(
+                    anchor_report.read_bytes()
+                ).hexdigest(),
             }
         ],
         "regions": [
@@ -85,9 +91,78 @@ def _state(run_1: Path, run_2: Path) -> dict[str, object]:
                 "name": "modal_card",
                 "mismatch_ratio": 0.01,
                 "max_mismatch_ratio": 0.02,
+                "diff_report_path": str(region_report),
+                "diff_report_sha256": hashlib.sha256(
+                    region_report.read_bytes()
+                ).hexdigest(),
             }
         ],
     }
+
+
+def _measurement_report(path: Path, *, actual: float = 561.0) -> Path:
+    report = {
+        "kind": "icp.android-anchor-measurements.v1",
+        "schema_version": 1,
+        "state_id": "state-default",
+        "measurements": [
+            {
+                "name": "modal_top",
+                "actual_dp": actual,
+            }
+        ],
+        "errors": [],
+        "status": "pass",
+    }
+    payload = json.dumps(
+        report, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode()
+    report["report_sha256"] = hashlib.sha256(payload).hexdigest()
+    path.write_text(json.dumps(report), encoding="utf-8")
+    return path.resolve()
+
+
+def _region_report(path: Path, *, mismatch: float = 0.01) -> Path:
+    report = {
+        "kind": "icp.android-region-measurements.v1",
+        "schema_version": 1,
+        "state_id": "state-default",
+        "measurements": [
+            {
+                "name": "modal_card",
+                "mismatch_ratio": mismatch,
+            }
+        ],
+        "errors": [],
+        "status": "pass",
+    }
+    payload = json.dumps(
+        report, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode()
+    report["report_sha256"] = hashlib.sha256(payload).hexdigest()
+    path.write_text(json.dumps(report), encoding="utf-8")
+    return path.resolve()
+
+
+def _flutter_fidelity_report(path: Path) -> Path:
+    path.write_text(
+        json.dumps(
+            {
+                "ok": True,
+                "assetShapeChecked": True,
+                "expectedNodes": 2,
+                "checkedNodes": 2,
+                "assetIssueScope": None,
+                "dynamicContentExclusions": [],
+                "failureCount": 0,
+                "byCategory": {},
+                "tolerances": {"bbox": 2.0, "color": 3.0, "size": 1.0},
+                "failures": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path.resolve()
 
 
 def test_requires_two_distinct_clean_runs_with_anchors_and_regions() -> None:
@@ -132,6 +207,24 @@ def test_accepts_identical_pixels_from_distinct_capture_and_reset_events() -> No
         verification.verify_verification(document)
 
 
+def test_accepts_passing_legacy_flutter_check_render_fidelity_source() -> None:
+    with tempfile.TemporaryDirectory(prefix="icp-visual-flutter-") as directory:
+        root = Path(directory).resolve()
+        state = _state(_run(root, "one", -13), _run(root, "two", -14))
+        report = _flutter_fidelity_report(root / "check-render-fidelity.json")
+        digest = hashlib.sha256(report.read_bytes()).hexdigest()
+        state["anchors"][0]["measurement_path"] = str(report)
+        state["anchors"][0]["measurement_sha256"] = digest
+        state["regions"][0]["diff_report_path"] = str(report)
+        state["regions"][0]["diff_report_sha256"] = digest
+        document = verification.build_verification(
+            calibration=_calibration(),
+            states=[state],
+            repair_history=[],
+        )
+        assert document["status"] == "pass"
+
+
 def test_rejects_reused_runtime_capture_as_second_clean_run() -> None:
     with tempfile.TemporaryDirectory(prefix="icp-visual-repeat-") as directory:
         root = Path(directory).resolve()
@@ -153,6 +246,21 @@ def test_rejects_anchor_failure_even_when_global_pixel_ratio_passes() -> None:
         root = Path(directory).resolve()
         state = _state(_run(root, "one", -13), _run(root, "two", -14))
         state["anchors"][0]["actual"] = 570.0
+        anchor_report = _measurement_report(
+            root / "anchor-failed-measurements.json", actual=570.0
+        )
+        state["anchors"][0]["measurement_path"] = str(anchor_report)
+        state["anchors"][0]["measurement_sha256"] = hashlib.sha256(
+            anchor_report.read_bytes()
+        ).hexdigest()
+        state["regions"][0]["mismatch_ratio"] = 0.5
+        region_report = _region_report(
+            root / "region-failed-measurements.json", mismatch=0.5
+        )
+        state["regions"][0]["diff_report_path"] = str(region_report)
+        state["regions"][0]["diff_report_sha256"] = hashlib.sha256(
+            region_report.read_bytes()
+        ).hexdigest()
         try:
             verification.build_verification(
                 calibration=_calibration(),
@@ -160,7 +268,8 @@ def test_rejects_anchor_failure_even_when_global_pixel_ratio_passes() -> None:
                 repair_history=[],
             )
         except verification.VisualVerificationError as exc:
-            assert "anchor" in str(exc)
+            assert "modal_top" in str(exc)
+            assert "modal_card" in str(exc)
         else:
             raise AssertionError("global pixels must not hide a failed geometry anchor")
 
@@ -222,6 +331,47 @@ def test_rejects_non_normalized_repair_scores() -> None:
             assert "[0,1]" in str(exc)
         else:
             raise AssertionError("repair scores must use one normalized metric")
+
+
+def test_rejects_forged_numbers_without_source_files() -> None:
+    with tempfile.TemporaryDirectory(prefix="icp-visual-unbound-") as directory:
+        root = Path(directory).resolve()
+        state = _state(_run(root, "one", -13), _run(root, "two", -14))
+        state["anchors"][0].pop("measurement_path")
+        state["anchors"][0].pop("measurement_sha256")
+        state["regions"][0].pop("diff_report_path")
+        state["regions"][0].pop("diff_report_sha256")
+        try:
+            verification.build_verification(
+                calibration=_calibration(),
+                states=[state],
+                repair_history=[],
+            )
+        except verification.VisualVerificationError as exc:
+            assert "measurement source" in str(exc)
+        else:
+            raise AssertionError("bare worker-authored visual numbers must be rejected")
+
+
+def test_rejects_declared_anchor_value_that_differs_from_source_report() -> None:
+    with tempfile.TemporaryDirectory(prefix="icp-visual-source-drift-") as directory:
+        root = Path(directory).resolve()
+        state = _state(_run(root, "one", -13), _run(root, "two", -14))
+        source = _measurement_report(root / "anchor-measurements.json", actual=560.0)
+        state["anchors"][0]["measurement_path"] = str(source)
+        state["anchors"][0]["measurement_sha256"] = hashlib.sha256(
+            source.read_bytes()
+        ).hexdigest()
+        try:
+            verification.build_verification(
+                calibration=_calibration(),
+                states=[state],
+                repair_history=[],
+            )
+        except verification.VisualVerificationError as exc:
+            assert "source value mismatch" in str(exc)
+        else:
+            raise AssertionError("declared anchor value drift must be rejected")
 
 
 def main() -> int:

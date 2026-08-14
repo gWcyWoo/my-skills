@@ -317,6 +317,8 @@ def implementation_contract_for(
                         "anchors": [
                             {
                                 "name": "root_top",
+                                "node_id": "root",
+                                "attribute": "top",
                                 "expected": 0.0,
                                 "tolerance": 0.0,
                             }
@@ -324,6 +326,7 @@ def implementation_contract_for(
                         "regions": [
                             {
                                 "name": "full_page",
+                                "bbox": [0.0, 0.0, 1.0, 1.0],
                                 "max_mismatch_ratio": 0.02,
                             }
                         ],
@@ -653,6 +656,77 @@ def run(*arguments: str) -> subprocess.CompletedProcess[str]:
 
 
 class LosslessFlowContractTests(unittest.TestCase):
+    def test_v5_rejects_native_design_contract_without_measurable_node_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            project_root, revision = make_project(root)
+            job_path = root / "v5-job.json"
+            job_path.write_text(
+                json.dumps(contract_compiled_flow_job(project_root, revision)),
+                encoding="utf-8",
+            )
+            self.assertEqual(run("prepare", "--job", str(job_path)).returncode, 0)
+            decision = json.loads(run("next-node", "--job", str(job_path)).stdout)
+            compiler_input_path = Path(decision["compiler_input"])
+            contract = implementation_contract_for(
+                json.loads(compiler_input_path.read_text(encoding="utf-8")),
+                compiler_input_path.parent,
+            )
+            for design in contract["design_contracts"]:
+                for state in design["states"]:
+                    for anchor in state["anchors"]:
+                        anchor.pop("node_id")
+                        anchor.pop("attribute")
+                    for region in state["regions"]:
+                        region.pop("bbox")
+            contract_path = root / "unmeasurable-native-contract.json"
+            contract_path.write_text(json.dumps(contract), encoding="utf-8")
+
+            recorded = run(
+                "record-contract",
+                "--job",
+                str(job_path),
+                "--contract",
+                str(contract_path),
+            )
+
+        self.assertEqual(recorded.returncode, 2)
+        self.assertIn("native design anchor measurement identity is missing", recorded.stdout)
+
+    def test_v5_rejects_native_design_contract_without_region_bbox(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            project_root, revision = make_project(root)
+            job_path = root / "v5-job.json"
+            job_path.write_text(
+                json.dumps(contract_compiled_flow_job(project_root, revision)),
+                encoding="utf-8",
+            )
+            self.assertEqual(run("prepare", "--job", str(job_path)).returncode, 0)
+            decision = json.loads(run("next-node", "--job", str(job_path)).stdout)
+            compiler_input_path = Path(decision["compiler_input"])
+            contract = implementation_contract_for(
+                json.loads(compiler_input_path.read_text(encoding="utf-8")),
+                compiler_input_path.parent,
+            )
+            for design in contract["design_contracts"]:
+                for state in design["states"]:
+                    for region in state["regions"]:
+                        region.pop("bbox")
+            contract_path = root / "native-contract-without-region-bbox.json"
+            contract_path.write_text(json.dumps(contract), encoding="utf-8")
+
+            recorded = run(
+                "record-contract",
+                "--job",
+                str(job_path),
+                "--contract",
+                str(contract_path),
+            )
+
+        self.assertEqual(recorded.returncode, 2)
+        self.assertIn("native design region bbox is missing", recorded.stdout)
+
     def test_v5_record_contract_accepts_the_published_target_path_with_pretty_json(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -2051,6 +2125,42 @@ def write_page_verification(node_root: Path) -> None:
         provenance_name="actual-repeat-provenance.json",
         mutation_index=-14,
     )
+    anchor_report = {
+        "kind": "icp.android-anchor-measurements.v1",
+        "schema_version": 1,
+        "state_id": "state-default",
+        "measurements": [{"name": "root_top", "actual_dp": 0.0}],
+        "errors": [],
+        "status": "pass",
+    }
+    anchor_report["report_sha256"] = hashlib.sha256(
+        json.dumps(
+            anchor_report,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    anchor_report_path = (node_root / "anchor-measurements.json").resolve()
+    anchor_report_path.write_text(json.dumps(anchor_report), encoding="utf-8")
+    region_report = {
+        "kind": "icp.android-region-measurements.v1",
+        "schema_version": 1,
+        "state_id": "state-default",
+        "measurements": [{"name": "full_page", "mismatch_ratio": 0.01}],
+        "errors": [],
+        "status": "pass",
+    }
+    region_report["report_sha256"] = hashlib.sha256(
+        json.dumps(
+            region_report,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    region_report_path = (node_root / "region-measurements.json").resolve()
+    region_report_path.write_text(json.dumps(region_report), encoding="utf-8")
     document = visual_verification.build_verification(
         calibration={
             "reference_width": 1,
@@ -2075,6 +2185,10 @@ def write_page_verification(node_root: Path) -> None:
                         "expected": 0.0,
                         "actual": 0.0,
                         "tolerance": 0.0,
+                        "measurement_path": str(anchor_report_path),
+                        "measurement_sha256": hashlib.sha256(
+                            anchor_report_path.read_bytes()
+                        ).hexdigest(),
                     }
                 ],
                 "regions": [
@@ -2082,6 +2196,10 @@ def write_page_verification(node_root: Path) -> None:
                         "name": "full_page",
                         "mismatch_ratio": 0.01,
                         "max_mismatch_ratio": 0.02,
+                        "diff_report_path": str(region_report_path),
+                        "diff_report_sha256": hashlib.sha256(
+                            region_report_path.read_bytes()
+                        ).hexdigest(),
                     }
                 ],
             }

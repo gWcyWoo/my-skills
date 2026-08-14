@@ -9,8 +9,11 @@ import re
 import shutil
 import subprocess
 import tempfile
+import uuid
 from pathlib import Path
 from typing import Any
+
+from platforms import ios_trace_harness_gen_v1
 
 
 class IOSExecutionHandlerError(RuntimeError):
@@ -116,6 +119,34 @@ def _run(
     return report
 
 
+def _run_optional(argv: list[str], *, cwd: Path) -> tuple[dict[str, Any], bytes]:
+    environment = {
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": os.environ.get("HOME", ""),
+        "CI": "1",
+        "NSUnbufferedIO": "YES",
+    }
+    result = subprocess.run(
+        argv,
+        cwd=cwd,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=600,
+        check=False,
+        env=environment,
+    )
+    return (
+        {
+            "argv": argv,
+            "exit_code": result.returncode,
+            "stdout_sha256": hashlib.sha256(result.stdout).hexdigest(),
+            "stderr_sha256": hashlib.sha256(result.stderr).hexdigest(),
+        },
+        result.stdout,
+    )
+
+
 def _json_input(step: dict[str, Any], artifact_id: str) -> dict[str, Any]:
     value = step["inputs"].get(artifact_id)
     if not value:
@@ -199,6 +230,10 @@ def _gates(step: dict[str, Any], context: dict[str, Any]) -> dict[str, str]:
 
 def _trace(step: dict[str, Any], context: dict[str, Any]) -> dict[str, str]:
     runtime = _runtime(step, capture=False)
+    harness = _output(step, "harness")
+    if harness.suffix != ".swift":
+        raise IOSExecutionHandlerError("iOS trace harness output must be Swift")
+    _publish(harness, ios_trace_harness_gen_v1.SOURCE.encode("utf-8"))
     trace = _output(step, "trace")
     _run(
         _xcode_args(runtime, "test", Path(context["run_root"])),
@@ -207,7 +242,7 @@ def _trace(step: dict[str, Any], context: dict[str, Any]) -> dict[str, str]:
     )
     if trace.is_symlink() or not trace.is_file():
         raise IOSExecutionHandlerError("XCTest did not publish the native trace")
-    return {"trace": _sha(trace)}
+    return {"harness": _sha(harness), "trace": _sha(trace)}
 
 
 def _capture(step: dict[str, Any], context: dict[str, Any]) -> dict[str, str]:
@@ -221,16 +256,38 @@ def _capture(step: dict[str, Any], context: dict[str, Any]) -> dict[str, str]:
     xcrun = _tool("xcrun")
     udid = runtime["simulator_udid"]
     _run([xcrun, "simctl", "bootstatus", udid, "-b"], cwd=project_root)
+    uninstall, _ = _run_optional(
+        [xcrun, "simctl", "uninstall", udid, runtime["bundle_id"]],
+        cwd=project_root,
+    )
+    if uninstall["exit_code"] != 0:
+        container, _ = _run_optional(
+            [
+                xcrun,
+                "simctl",
+                "get_app_container",
+                udid,
+                runtime["bundle_id"],
+                "data",
+            ],
+            cwd=project_root,
+        )
+        if container["exit_code"] == 0:
+            raise IOSExecutionHandlerError("simulator app state reset failed")
     _run([xcrun, "simctl", "install", udid, str(app)], cwd=project_root)
     _run([xcrun, "simctl", "launch", udid, runtime["bundle_id"]], cwd=project_root)
+    state_reset_id = str(uuid.uuid4())
     actual = _output(step, "actual")
     _run([xcrun, "simctl", "io", udid, "screenshot", str(actual)], cwd=project_root)
     if actual.is_symlink() or not actual.is_file() or not actual.read_bytes().startswith(b"\x89PNG\r\n\x1a\n"):
         raise IOSExecutionHandlerError("simulator screenshot is invalid")
+    capture_id = str(uuid.uuid4())
     provenance = {
         "kind": "icp.runtime-capture-provenance.v1",
         "actual_source": "simulator_screenshot",
         "actual_sha256": _sha(actual),
+        "capture_id": capture_id,
+        "state_reset_id": state_reset_id,
         "simulator_udid_digest": hashlib.sha256(udid.encode()).hexdigest(),
         "bundle_id_digest": hashlib.sha256(runtime["bundle_id"].encode()).hexdigest(),
     }

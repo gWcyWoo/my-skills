@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sys
 import tempfile
 import traceback
@@ -124,7 +125,10 @@ def _fake_tools(project: Path, run: Path) -> tuple[Path, Path]:
         project / "gradlew",
         """#!/usr/bin/env python3
 import pathlib
+import os
 import sys
+
+pathlib.Path.cwd().joinpath('android-home.txt').write_text(os.environ.get('ANDROID_HOME', ''))
 
 if any('assembleDebug' in arg for arg in sys.argv):
     path = pathlib.Path.cwd() / 'app' / 'build' / 'outputs' / 'apk' / 'debug' / 'app-debug.apk'
@@ -136,8 +140,11 @@ raise SystemExit(0)
     adb = _write(
         run / "adb",
         """#!/usr/bin/env python3
+import pathlib
 import sys
 
+with pathlib.Path.cwd().joinpath('adb-argv.log').open('a') as stream:
+    stream.write(' '.join(sys.argv[1:]) + '\\n')
 if 'exec-out' in sys.argv and 'screencap' in sys.argv:
     sys.stdout.buffer.write(b'\\x89PNG\\r\\n\\x1a\\n' + b'fake-android-png')
 elif 'exec-out' in sys.argv and 'cat' in sys.argv:
@@ -198,6 +205,8 @@ def test_kotlin_and_java_publish_language_owned_sources() -> None:
 def test_kotlin_gradle_trace_tests_gates_capture_and_fan_in() -> None:
     temporary, project, run, manifest = _fixture()
     original_which = handler.shutil.which
+    original_android_home = os.environ.get("ANDROID_HOME")
+    os.environ["ANDROID_HOME"] = "/fixture/android-sdk"
     _gradlew, adb = _fake_tools(project, run)
     handler.shutil.which = lambda name: str(adb) if name == "adb" else original_which(name)
     try:
@@ -244,7 +253,39 @@ def test_kotlin_gradle_trace_tests_gates_capture_and_fan_in() -> None:
             },
         )
         assert _execute("android-kotlin", manifest, "android-kotlin.runtime_capture.v1", capture_request, "f")["status"] == "succeeded"
-        assert json.loads((run / "provenance.json").read_text())["actual_source"] == "emulator_screenshot"
+        first_provenance = json.loads((run / "provenance.json").read_text())
+        assert first_provenance["actual_source"] == "emulator_screenshot"
+        assert first_provenance["capture_id"]
+        assert first_provenance["state_reset_id"]
+
+        second_capture_request = _request(
+            project,
+            run,
+            "feature-capture-second",
+            {"runtime": _artifact("run", "runtime-device.json")},
+            {
+                "actual": _artifact("run", "actual-second.png"),
+                "provenance": _artifact("run", "provenance-second.json"),
+            },
+        )
+        assert _execute(
+            "android-kotlin",
+            manifest,
+            "android-kotlin.runtime_capture.v1",
+            second_capture_request,
+            "2",
+        )["status"] == "succeeded"
+        second_provenance = json.loads((run / "provenance-second.json").read_text())
+        assert first_provenance["capture_id"] != second_provenance["capture_id"]
+        assert first_provenance["state_reset_id"] != second_provenance["state_reset_id"]
+        assert (project / "android-home.txt").read_text() == "/fixture/android-sdk"
+        start_commands = [
+            line.split()
+            for line in (project / "adb-argv.log").read_text().splitlines()
+            if "am start" in line
+        ]
+        assert start_commands
+        assert all("-W" in command for command in start_commands)
 
         _write(project / "app" / "build.gradle.kts", "plugins {}\n")
         expected = hashlib.sha256((project / "app" / "build.gradle.kts").read_bytes()).hexdigest()
@@ -262,6 +303,10 @@ def test_kotlin_gradle_trace_tests_gates_capture_and_fan_in() -> None:
         assert _execute("android-kotlin", manifest, "android-kotlin.fan_in.v1", fan_in, "1")["status"] == "succeeded"
     finally:
         handler.shutil.which = original_which
+        if original_android_home is None:
+            os.environ.pop("ANDROID_HOME", None)
+        else:
+            os.environ["ANDROID_HOME"] = original_android_home
         temporary.cleanup()
 
 
