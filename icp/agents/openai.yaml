@@ -1,4 +1,4 @@
 interface:
   display_name: "ICP"
-  short_description: "Implement one IOLE client page or multi-page flow"
-  default_prompt: "Use $icp to implement or revise this canonical IOLE client page or flow job."
+  short_description: "Extract design evidence into exact semantic contracts"
+  default_prompt: "Use $icp to extract a design into a source-bound semantic contract."

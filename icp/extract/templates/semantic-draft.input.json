@@ -1,0 +1,25 @@
+{
+  "schema": "icp.extract.semantic-draft.v1",
+  "source_manifest_sha256": "__COPY_FROM_STATE_JSON__",
+  "blocks": [
+    {
+      "block_id": "page",
+      "name": "__SEMANTIC_NAME__",
+      "role": "__SEMANTIC_ROLE__",
+      "role_basis": "interpreted",
+      "role_evidence": [
+        "__EVIDENCE_FROM_RENDERED_REFERENCE__"
+      ],
+      "parent_block_id": null,
+      "child_block_ids": [],
+      "appearance": {
+        "background": "__QUALITATIVE_BACKGROUND__",
+        "border": "__QUALITATIVE_BORDER__",
+        "spacing": "__QUALITATIVE_SPACING__"
+      },
+      "content_summary": "__CONTENT_SUMMARY__",
+      "composition": "__COMPOSITION_AND_CHILD_RELATIONSHIPS__",
+      "relations": []
+    }
+  ]
+}
