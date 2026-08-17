@@ -1326,7 +1326,7 @@ def source_subtree_ids(node_id: str, nodes: dict[str, Any]) -> list[str]:
 
 
 def inferred_geometry_basis(node: dict[str, Any], status: str) -> str:
-    if status == "non_rendering":
+    if status in {"non_rendering", "unresolved"}:
         return "not_applicable"
     payload = node.get("payload")
     if not isinstance(payload, dict):
@@ -1402,11 +1402,11 @@ def expand_bindings(args: argparse.Namespace) -> dict[str, Any]:
             raise ContractError("invalid_binding_plan", f"rule {index} selectors are invalid")
         status = rule["status"]
         block_id = rule["block_id"]
-        if status not in {"mapped", "absorbed", "non_rendering"}:
+        if status not in BINDING_STATUSES:
             raise ContractError("invalid_binding_plan", f"rule {index} status is invalid")
         if status in {"mapped", "absorbed"} and block_id not in block_ids:
             raise ContractError("invalid_binding_plan", f"rule {index} block is unknown")
-        if status == "non_rendering" and block_id is not None:
+        if status in {"non_rendering", "unresolved"} and block_id is not None:
             raise ContractError("invalid_binding_plan", f"rule {index} must use null block_id")
         require_non_empty_string(rule["rationale"], f"rules[{index}].rationale")
         selected = list(node_ids)
@@ -1506,6 +1506,55 @@ def build_binding_evidence(
             for node_id in node_order
             if assignments[node_id].get("status") == "non_rendering"
         ],
+    }
+
+
+def build_reverse_binding_evidence(
+    semantic_draft: dict[str, Any],
+    facts: dict[str, Any],
+    node_order: list[str],
+    assignments: dict[str, dict[str, Any]],
+    bindings_sha256: str,
+) -> dict[str, Any]:
+    """Freeze the JSON-node-first view used to audit semantic completeness.
+
+    Exact coverage answers whether every source node was assigned. This reverse
+    projection additionally gives the reviewer every original node, its source
+    relations, its current assignment, and the complete target Block so a
+    present-but-wrong assignment cannot hide behind 100% node coverage.
+    """
+    nodes = facts["nodes"]
+    blocks = {block["block_id"]: block for block in semantic_draft["blocks"]}
+    evidence_nodes: list[dict[str, Any]] = []
+    for node_id in node_order:
+        node = nodes[node_id]
+        parent_id = node.get("parent_id")
+        assignment = assignments[node_id]
+        block_id = assignment.get("block_id")
+        evidence_nodes.append(
+            {
+                "source_node": copy.deepcopy(node),
+                "parent_source_node": (
+                    copy.deepcopy(nodes[parent_id]) if parent_id is not None else None
+                ),
+                "child_source_nodes": [
+                    copy.deepcopy(nodes[child_id])
+                    for child_id in node.get("child_ids", [])
+                ],
+                "assignment": copy.deepcopy(assignment),
+                "assigned_block": (
+                    copy.deepcopy(blocks[block_id])
+                    if isinstance(block_id, str)
+                    else None
+                ),
+            }
+        )
+    return {
+        "schema": "icp.extract.reverse-binding-evidence.v1",
+        "source_manifest_sha256": semantic_draft["source_manifest_sha256"],
+        "semantic_draft_sha256": sha256_bytes(json_bytes(semantic_draft)),
+        "bindings_sha256": bindings_sha256,
+        "nodes": evidence_nodes,
     }
 
 
@@ -1625,6 +1674,18 @@ def record_bindings(args: argparse.Namespace) -> dict[str, Any]:
     binding_evidence_sha = (
         sha256_bytes(json_bytes(binding_evidence)) if binding_evidence is not None else None
     )
+    reverse_binding_evidence = (
+        build_reverse_binding_evidence(
+            semantic_draft, facts, node_order, assignments, bindings_sha
+        )
+        if complete
+        else None
+    )
+    reverse_binding_evidence_sha = (
+        sha256_bytes(json_bytes(reverse_binding_evidence))
+        if reverse_binding_evidence is not None
+        else None
+    )
     repair_root = stage_dir / "repair-packets" / f"revision-{revision:04d}"
     repair_files: dict[str, str] = {}
     packet_manifest = {
@@ -1656,6 +1717,7 @@ def record_bindings(args: argparse.Namespace) -> dict[str, Any]:
         "synthetic_source_ids": [],
         "repair_packets": repair_files,
         "binding_evidence_sha256": binding_evidence_sha,
+        "reverse_binding_evidence_sha256": reverse_binding_evidence_sha,
         "complete": complete,
     }
     coverage_sha = sha256_bytes(json_bytes(coverage))
@@ -1669,6 +1731,8 @@ def record_bindings(args: argparse.Namespace) -> dict[str, Any]:
     }
     if binding_evidence_sha is not None:
         next_state["binding_evidence_sha256"] = binding_evidence_sha
+    if reverse_binding_evidence_sha is not None:
+        next_state["reverse_binding_evidence_sha256"] = reverse_binding_evidence_sha
     semantic_review_input = None
     if complete:
         semantic_review_input = {
@@ -1677,6 +1741,7 @@ def record_bindings(args: argparse.Namespace) -> dict[str, Any]:
             "semantic_draft_sha256": state["semantic_draft_sha256"],
             "coverage_sha256": coverage_sha,
             "binding_evidence": binding_evidence,
+            "reverse_binding_evidence": reverse_binding_evidence,
             "decision": "revise",
             "block_reviews": [
                 {
@@ -1690,6 +1755,21 @@ def record_bindings(args: argparse.Namespace) -> dict[str, Any]:
                     "issues": ["TODO: review this semantic block."],
                 }
                 for block in semantic_draft["blocks"]
+            ],
+            "source_node_reviews": [
+                {
+                    "source_node_id": item["source_node"]["id"],
+                    "semantic_assignment_correct": False,
+                    "independent_grouping_correct": False,
+                    "parent_child_relation_correct": False,
+                    "evidence": [
+                        "TODO: compare this exact JSON node and its source relations with the assigned semantic Block."
+                    ],
+                    "issues": [
+                        "TODO: decide whether this node is semantically complete and correctly grouped."
+                    ],
+                }
+                for item in reverse_binding_evidence["nodes"]
             ],
             "cross_block_review": {
                 "relations_correct": False,
@@ -1767,6 +1847,25 @@ def verify_exact_coverage(
         or coverage.get("binding_evidence_sha256") != expected_binding_evidence_sha
     ):
         raise ContractError("stage_drift", "binding evidence does not match live bindings")
+    expected_reverse_binding_evidence = build_reverse_binding_evidence(
+        semantic_draft,
+        facts,
+        node_order,
+        indexed,
+        state["bindings_sha256"],
+    )
+    expected_reverse_binding_evidence_sha = sha256_bytes(
+        json_bytes(expected_reverse_binding_evidence)
+    )
+    if (
+        state.get("reverse_binding_evidence_sha256")
+        != expected_reverse_binding_evidence_sha
+        or coverage.get("reverse_binding_evidence_sha256")
+        != expected_reverse_binding_evidence_sha
+    ):
+        raise ContractError(
+            "stage_drift", "reverse binding evidence does not match live JSON bindings"
+        )
     if coverage.get("duplicate_bindings") != [] or coverage.get("synthetic_source_ids") != []:
         raise ContractError("coverage_invalid", "coverage contains duplicate or synthetic ids")
     if coverage.get("complete") is not True:
@@ -1789,6 +1888,14 @@ BLOCK_REVIEW_FIELDS = {
     "appearance_interpretation_correct",
     "content_grouping_correct",
     "source_binding_correct",
+    "evidence",
+    "issues",
+}
+SOURCE_NODE_REVIEW_FIELDS = {
+    "source_node_id",
+    "semantic_assignment_correct",
+    "independent_grouping_correct",
+    "parent_child_relation_correct",
     "evidence",
     "issues",
 }
@@ -1832,8 +1939,10 @@ def validate_semantic_review(
         "semantic_draft_sha256",
         "coverage_sha256",
         "binding_evidence",
+        "reverse_binding_evidence",
         "decision",
         "block_reviews",
+        "source_node_reviews",
         "cross_block_review",
     }
     if not isinstance(review, dict) or set(review) != expected_fields:
@@ -1849,6 +1958,12 @@ def validate_semantic_review(
         "binding_evidence_sha256"
     ):
         raise ContractError("review_input_mismatch", "semantic review binding evidence is stale")
+    if sha256_bytes(json_bytes(review.get("reverse_binding_evidence"))) != state.get(
+        "reverse_binding_evidence_sha256"
+    ):
+        raise ContractError(
+            "review_input_mismatch", "semantic review reverse binding evidence is stale"
+        )
     if review.get("decision") not in {"pass", "revise"}:
         raise ContractError("invalid_semantic_review", "decision must be pass or revise")
     draft_block_ids = [block["block_id"] for block in semantic_draft["blocks"]]
@@ -1885,6 +2000,84 @@ def validate_semantic_review(
         issues.extend(block_issues)
     if set(reviewed_ids) != set(draft_block_ids) or len(reviewed_ids) != len(draft_block_ids):
         raise ContractError("invalid_semantic_review", "every semantic block must be reviewed exactly once")
+
+    reverse_evidence = review.get("reverse_binding_evidence")
+    if not isinstance(reverse_evidence, dict):
+        raise ContractError(
+            "invalid_semantic_review", "reverse_binding_evidence must be an object"
+        )
+    evidence_nodes = reverse_evidence.get("nodes")
+    if not isinstance(evidence_nodes, list):
+        raise ContractError(
+            "invalid_semantic_review", "reverse binding evidence nodes must be an array"
+        )
+    expected_source_node_ids = []
+    for index, evidence_node in enumerate(evidence_nodes):
+        if not isinstance(evidence_node, dict):
+            raise ContractError(
+                "invalid_semantic_review",
+                f"reverse binding evidence nodes[{index}] must be an object",
+            )
+        source_node = evidence_node.get("source_node")
+        if not isinstance(source_node, dict):
+            raise ContractError(
+                "invalid_semantic_review",
+                f"reverse binding evidence nodes[{index}].source_node must be an object",
+            )
+        expected_source_node_ids.append(
+            require_non_empty_string(
+                source_node.get("id"),
+                f"reverse binding evidence nodes[{index}].source_node.id",
+            )
+        )
+    source_node_reviews = review.get("source_node_reviews")
+    if not isinstance(source_node_reviews, list):
+        raise ContractError(
+            "invalid_semantic_review", "source_node_reviews must be an array"
+        )
+    reviewed_source_node_ids: list[str] = []
+    for index, node_review in enumerate(source_node_reviews):
+        location = f"source_node_reviews[{index}]"
+        if (
+            not isinstance(node_review, dict)
+            or set(node_review) != SOURCE_NODE_REVIEW_FIELDS
+        ):
+            raise ContractError(
+                "invalid_semantic_review",
+                f"{location} must contain exactly {sorted(SOURCE_NODE_REVIEW_FIELDS)}",
+            )
+        source_node_id = require_non_empty_string(
+            node_review["source_node_id"], f"{location}.source_node_id"
+        )
+        if source_node_id in reviewed_source_node_ids:
+            raise ContractError(
+                "invalid_semantic_review", f"source node reviewed twice: {source_node_id}"
+            )
+        reviewed_source_node_ids.append(source_node_id)
+        for field in (
+            "semantic_assignment_correct",
+            "independent_grouping_correct",
+            "parent_child_relation_correct",
+        ):
+            if not isinstance(node_review[field], bool):
+                raise ContractError(
+                    "invalid_semantic_review", f"{location}.{field} must be boolean"
+                )
+            flags.append(node_review[field])
+        evidence = validate_string_array(
+            node_review["evidence"], f"{location}.evidence", True
+        )
+        node_issues = validate_string_array(
+            node_review["issues"], f"{location}.issues", False
+        )
+        reject_review_placeholders(evidence, f"{location}.evidence")
+        reject_review_placeholders(node_issues, f"{location}.issues")
+        issues.extend(node_issues)
+    if reviewed_source_node_ids != expected_source_node_ids:
+        raise ContractError(
+            "invalid_semantic_review",
+            "every JSON source node must be reverse-reviewed exactly once in source order",
+        )
 
     cross = review.get("cross_block_review")
     if not isinstance(cross, dict) or set(cross) != CROSS_REVIEW_FIELDS:
@@ -1947,6 +2140,7 @@ def build_stage_result(
             "exact_coverage": True,
             "no_duplicate_bindings": True,
             "no_synthetic_source_ids": True,
+            "reverse_json_semantic_audit": True,
             "semantic_review_passed": True,
         },
         "artifacts": {
@@ -2001,6 +2195,23 @@ def record_review(args: argparse.Namespace) -> dict[str, Any]:
     atomic_write_json(stage_dir / "semantic-review.json", review)
 
     if not evidence_passes:
+        reverse_evidence_by_id = {
+            item["source_node"]["id"]: item
+            for item in review["reverse_binding_evidence"]["nodes"]
+        }
+        failed_source_node_reviews = {
+            item["source_node_id"]: item
+            for item in review["source_node_reviews"]
+            if item["issues"]
+            or not all(
+                item[field]
+                for field in (
+                    "semantic_assignment_correct",
+                    "independent_grouping_correct",
+                    "parent_child_relation_correct",
+                )
+            )
+        }
         repair = {
             "schema": "icp.extract.semantic-repair.v1",
             "semantic_review_sha256": review_sha,
@@ -2019,8 +2230,29 @@ def record_review(args: argparse.Namespace) -> dict[str, Any]:
                     )
                 )
             },
+            "source_node_issues": {
+                source_node_id: item["issues"]
+                for source_node_id, item in failed_source_node_reviews.items()
+            },
+            "reverse_repair_packets": {
+                source_node_id: {
+                    "review": copy.deepcopy(item),
+                    "source_and_current_block": copy.deepcopy(
+                        reverse_evidence_by_id[source_node_id]
+                    ),
+                    "allowed_repairs": [
+                        "bind_to_existing_block",
+                        "split_semantic_block",
+                        "merge_semantic_blocks",
+                        "create_semantic_block",
+                        "fix_parent_child_relation",
+                        "classify_non_rendering",
+                    ],
+                }
+                for source_node_id, item in failed_source_node_reviews.items()
+            },
             "cross_block_issues": review["cross_block_review"]["issues"],
-            "next_action": "revise semantic-draft.json, then record the complete bindings again",
+            "next_action": "give every reverse repair packet to the semantic model, revise semantic-draft.json, then record the complete bindings again",
         }
         atomic_write_json(stage_dir / "semantic-repair.json", repair)
         atomic_write_json(stage_dir / "state.json", next_state)

@@ -90,6 +90,7 @@
     "membership": "modify-only",
     "connector_operations": [
       "inspect_ready_flow_root",
+      "inspect_title_catalog",
       "inspect_flow_rows",
       "claim_flow_rows",
       "release_flow_claim",

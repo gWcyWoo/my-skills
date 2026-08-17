@@ -12,6 +12,9 @@ unresolved = ∅
 duplicate_bindings = ∅
 synthetic_source_ids = ∅
 every semantic leaf is source-reachable
+every JSON source node is reverse-reviewed against its exact assigned Block
+every independent source subtree remains an independent semantic group when required
+source parent-child relations agree with the semantic hierarchy
 every exported source field resolves to one hashed local asset
 reference pixels = logical artboard × one exact uniform scale
 every expected design is complete
@@ -167,7 +170,12 @@ When state becomes `repair_required`, read `coverage.json` and only its referenc
 
 ## 5. Perform the binary semantic review
 
-Reopen the rendered reference and edit `semantic-review.input.json`. The script supplies every block's exact mapped/absorbed source IDs plus every non-rendering node and rationale. Review role, hierarchy, appearance, grouping, source binding, relations, reading order, omissions, and non-rendering classifications. Replace every `TODO`; placeholders cannot pass.
+Reopen the rendered reference and edit `semantic-review.input.json`. The script supplies two mandatory views of the same frozen result:
+
+1. Block-first evidence: every Block's exact mapped/absorbed source IDs plus every non-rendering node and rationale.
+2. JSON-first reverse evidence: every complete source node payload, its complete parent and children, its current assignment, and the complete assigned Block.
+
+Review every Block and then traverse every JSON node in exact source order. For each source node, independently decide whether its assigned Block is semantically correct, whether the node or subtree needs its own semantic group, and whether the source parent-child relation is preserved by the Block hierarchy. This is not a node-count check: a node that exists but is swallowed by the wrong Block must fail. Review role, hierarchy, appearance, grouping, source binding, relations, reading order, omissions, and non-rendering classifications. Replace every `TODO`; placeholders cannot pass.
 
 `decision: pass` is valid only when every boolean is true and every issue array is empty.
 
@@ -178,7 +186,11 @@ python3 <icp-skill>/extract/scripts/extract.py record-review \
   --review "<design-dir>/semantic-review.input.json"
 ```
 
-A `revise` decision returns to `repair_required` with `semantic-repair.json`. Revise the draft, regenerate complete bindings, and review again.
+A `revise` decision returns to `repair_required` with `semantic-repair.json`. Every failed source node is returned as a reverse repair packet containing the original JSON node, parent and children, current binding, complete assigned Block, and allowed repair classes. Give those exact packets back to the semantic model, revise the draft, and regenerate the complete bindings.
+
+Then discard the previous review result and regenerate a fresh reverse projection. Restart the review from the first JSON node and review the complete ordered inventory, including nodes that passed in the preceding revision. Repeat `draft -> bindings -> full reverse review -> repair` until one fresh review has every Block boolean, every source-node boolean, and every cross-Block boolean true with every issue array empty. Exact node-count coverage, partial re-review, or a prior revision's pass cannot terminate this loop.
+
+One reverse-review round is an exhaustive read-only scan. Freeze its semantic draft and bindings, inspect every source node before applying any repair, and report every problem found in the same review. Never stop at the first issue or modify bindings while the scan is still in progress. Apply the complete repair batch only after the last node, then start a new full round against the newly frozen artifacts.
 
 ## 6. Verify every design and the batch
 
@@ -209,5 +221,6 @@ Only exit code zero from `verify-run` makes a multi-design extract deliverable. 
 - `asset_relation_missing` or `invalid_asset_relation`: at least one source export and local asset cannot be joined exactly.
 - `reference_size_mismatch` or `invalid_reference`: source coordinates and the full reference image do not share one valid exact scale.
 - `unbound_semantic_leaf`: the semantic structure contains a block with no source reachability.
+- `false_semantic_pass`: a pass decision contradicts at least one failed JSON-node or Block review.
 - `repair_required`: continue the bounded repair loop; it is not completion.
 - `batch_incomplete`: at least one frozen URL lacks a verified complete design.

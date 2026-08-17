@@ -54,6 +54,13 @@ class FlowSheetStore(Protocol):
         row_ids: list[str],
     ) -> dict[str, int]: ...
 
+    def list_row_ids(
+        self,
+        spreadsheet_id: str,
+        sheet_name: str,
+        column: str,
+    ) -> list[str]: ...
+
     def read_rows(
         self,
         spreadsheet_id: str,
@@ -344,6 +351,44 @@ class AtomicSheetFlowQueue:
                 "status": "ready-root",
                 "row_number": row.row_number,
                 "row": row.values,
+            }
+
+    def inspect_title_catalog(
+        self,
+        spreadsheet_id: str,
+        sheet_name: str,
+        mapping: FlowQueueMapping,
+    ) -> dict[str, object]:
+        with self._locked(spreadsheet_id, sheet_name):
+            titles = self.store.list_row_ids(
+                spreadsheet_id, sheet_name, mapping.row_id
+            )
+            if not titles:
+                raise ValueError("flow title catalog is empty")
+            canonical_titles = [canonical_row_id(title) for title in titles]
+            if any(not title for title in canonical_titles):
+                raise ValueError("flow title catalog contains an empty identity")
+            if len(canonical_titles) != len(set(canonical_titles)):
+                raise ValueError("flow title catalog contains duplicate identities")
+            payload = {
+                "spreadsheet_id": spreadsheet_id,
+                "sheet_name": sheet_name,
+                "row_id_column": mapping.row_id,
+                "titles": canonical_titles,
+            }
+            return {
+                "kind": "icps.flow-title-catalog.v1",
+                "schema_version": 1,
+                **payload,
+                "catalog_digest": hashlib.sha256(
+                    json.dumps(
+                        payload,
+                        ensure_ascii=False,
+                        allow_nan=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                ).hexdigest(),
             }
 
     def inspect_flow_rows(

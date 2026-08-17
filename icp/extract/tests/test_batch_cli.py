@@ -183,6 +183,14 @@ class BatchCliTest(unittest.TestCase):
             item["source_binding_correct"] = True
             item["evidence"] = ["Rendered reference and the bound artboard agree."]
             item["issues"] = []
+        for item in review["source_node_reviews"]:
+            item["semantic_assignment_correct"] = True
+            item["independent_grouping_correct"] = True
+            item["parent_child_relation_correct"] = True
+            item["evidence"] = [
+                "The exact JSON artboard node and its assigned page Block agree."
+            ]
+            item["issues"] = []
         cross = review["cross_block_review"]
         cross["relations_correct"] = True
         cross["reading_order_correct"] = True

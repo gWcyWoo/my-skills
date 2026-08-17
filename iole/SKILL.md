@@ -1,6 +1,6 @@
 ---
 name: iole
-description: IOLE = Implement Oklik Loop Engineering. Schedule a role-aware engineering loop from one shared Google Sheets or Microsoft Excel URL, plan one client flow from unique page-title references, atomically claim every changed page, dispatch canonical worker jobs, manage Git and one shared PR, and write role-specific review state back. Use for single-page or multi-page client work and for independent client/backend status, PR, review, lease, and error columns.
+description: IOLE = Implement Oklik Loop Engineering. Analyze one ready task into a lossless graph of related Sheet rows, pass that source bundle to ICP, and orchestrate role-aware claim, Git, PR, and review writeback. Use for single-page or multi-page client work and independent client/backend queue columns.
 ---
 
 # IOLE — Implement Oklik Loop Engineering
@@ -57,7 +57,7 @@ Use [role-mapping-v2.json](references/role-mapping-v2.json) and read
 client tick. Resume an existing v1 claim with the legacy v1 path below; never
 convert or take over its locator.
 
-For Google Sheets, require `inspect_ready_flow_root`, `inspect_flow_rows`,
+For Google Sheets, require `inspect_ready_flow_root`, `inspect_title_catalog`, `inspect_flow_rows`,
 `claim_flow_rows`, `release_flow_claim`, `expand_flow_claim`, `complete_flow_rows`, and
 `record_flow_error`. Microsoft Excel flow work is
 `blocked/flow-connector-unavailable` until its adapter exposes equivalent
@@ -66,44 +66,67 @@ operations; never downgrade a multi-page flow to independent single-row claims.
 Run one new client flow in this order:
 
 1. Call `inspect_ready_flow_root` without mutation. Return `no-work` when absent.
-2. Normalize the root outside the repository. Understand its natural-language
-   actions before deterministic parsing: infer semantically clear page, modal, and
-   navigation targets, then rewrite only the normalized copy with exact candidate
-   titles in `→「唯一页面标题」` form and run
-   `iole_flow_contract_v2.py extract-refs`. Quotation style and punctuation in the
-   Sheet are not an author-facing contract. For example, normalize both
+2. Call `inspect_title_catalog` once and preserve its digest-bound complete title
+   catalog. Derive the ordered ICP source-column set from the selected role mapping
+   and analyze every declared business column of the root outside the repository,
+   not only `交互描述`. Do not add undeclared Sheet columns merely because they are
+   present. Infer semantically clear page, modal, component, data, and reference
+   targets from the declared UI, interaction, API, UT, IT, E2E, and design fields.
+   Bind every relation to its exact source column, byte
+   span, quote, unique target title, and relation kind. Quotation style and
+   punctuation in the Sheet are not an author-facing contract. For example, map both
    `按“客服弹窗”实现` and `跳转到反馈页面，按“反馈”实现` into the candidate references
-   `→「客服弹窗」` and `→「反馈」`. Do not treat labels, messages, protocols, or
-   other quoted UI text as page references unless the action semantics identify a
-   page/modal/navigation target. Never ask the author to change punctuation, supply
-   a page ID, or expose an internal parser format.
+   to their exact catalog targets. Do not treat labels, messages, protocols, or
+   other quoted UI text as a relation unless its semantics identify a dependency.
+   When an exact catalog title occurs but is not a dependency, record an exact-span
+   dismissal with a concrete rationale; never silently ignore it. Never ask the
+   author to change punctuation, supply a page ID, or expose an internal parser format.
 3. Recursively call `inspect_flow_rows` for only the inferred exact candidate
    titles. Continue when every candidate resolves to exactly one normalized Sheet
    title; pass those exact returned titles into subsequent deterministic inputs.
    Stop before claim only when a target is semantically ambiguous, missing, or
    duplicated, and state that evidence rather than requesting special punctuation.
-   Repeat semantic normalization and extraction until the reachable interaction
-   graph closes. Do not validate unrelated row contents.
-4. Inspect the current project read-only. Record searched component paths and a
-   summary, then decide `reuse`, `extend`, `create-shared`, or `create-local` for
-   each component demand. Give every real edit one non-overlapping project-relative
-   owner path. Classify reachable pages as `modify` or `navigate-only`.
-5. Persist the exact raw inspected member rows without normalization. Create a
-   separate `iole.flow-analysis-input.v1` containing only exact member titles,
-   normalized interaction references for graph discovery, change scope, owned
-   paths, and component analysis/decisions. Run `build-input --raw-rows ...
-   --analysis ... --mapping ...`; never hand-write or summarize `requirement`,
-   interaction copy, design fields, or UT/IT/E2E. Require
-   `iole.flow-plan-input.v3`, then run `build-plan --input ... --raw-rows ...
-   --mapping ...` so the plan gate rechecks every source contract against the same
-   raw rows. The exact raw-rows envelope, analysis JSON shape, `source-id` command,
-   component-decision fields, and runnable commands are published under
-   **Lossless input envelopes** in the required flow contract; use that public
-   shape without probing validator errors or reading implementation/tests. Treat
-   `needs-reopen` as a user-owned state change: a
-   `review`/`done` page that must change has to be explicitly returned to `ready`.
-   Stop on active leases, page graph errors, path ownership conflicts, or different
-   non-empty member PRs.
+   Repeat all-column analysis until the reachable dependency graph closes. Do not
+   validate unrelated row contents, but do not omit a related component or context
+   row merely because the reference appears outside `交互描述`.
+4. Classify every reachable row as `modify`, `context`, or `navigate-only`.
+   `modify` means this run changes its implementation and therefore requires the
+   selected role status to be `ready`. `context` and `navigate-only` are read-only
+   source members: preserve their mapped business cells even when their role status
+   is empty, and never claim or write them. Do not inspect the project, choose
+   components, or invent ownership paths during source analysis.
+5. Persist the exact raw inspected rows without normalization. Create
+   `iole.source-analysis-input.v2` with one hash-bound field record for every
+   mapping-declared ICP business column of every member, including exact relation
+   evidence and explicit title dismissals. Unowned connector columns remain only
+   in the raw inspection evidence and do not enter analysis or handoff. Create
+   `iole.source-closure-review.v1` only after a complete field-by-field and
+   cross-row pass confirms no missing/ambiguous target.
+   Run `build-source-bundle --raw-rows ... --title-catalog ... --analysis ...
+   --closure-review ... --mapping ...` and require `iole.flow-source-bundle.v2`.
+   Legacy v1 source analysis is invalid for this handoff. The bundle declares one
+   ordered `row_data_columns` set derived from the selected mapping and every
+   reachable member carries exactly those columns in `row_data`, plus the mapped
+   source contract, exact design-cell text, derived ordered design URLs, and the
+   closed title relation graph. For every declared column, a non-empty connector
+   value is copied byte-for-byte and an exactly empty value is JSON `null`; never
+   omit a declared empty column or keep it as `""`. A Sheet column not declared by
+   the mapping is not an ICP input and must not block, alter, or be hashed into the
+   handoff.
+   It also embeds the hash-bound source closure; a missing, stale, false-pass, or
+   incomplete closure is invalid. Queue, PR, review, lease, error, and other-role
+   columns remain IOLE orchestration evidence and are not duplicated into ICP
+   `row_data`. Pass this bundle unchanged to
+   ICP. ICP owns design semantics, component boundaries, reuse decisions, props,
+   slots, states, events, and the component lock. Only after ICP returns that
+   verified lock may execution planning derive component decisions, ownership
+   paths, and `claim_page_titles`; IOLE may validate and orchestrate those outputs
+   but must not author them. Until ICP's implementation-stage adapter exists, stop
+   the new source-bundle path after the component lock instead of falling back to
+   IOLE-authored component planning.
+   Steps 6–11 below are retained only for persisted execution flows that already
+   have their legacy plan/job artifacts. A new source-bundle flow stops at the
+   verified component lock for the current ICP milestone.
 6. Pass one raw guard snapshot for every `claim_page_titles` member to
    `claim_flow_rows`. Require one shared lease and one all-or-none batch. Persist
    the raw rows, plan, claim result, and terminal intent outside the repository.
@@ -355,9 +378,8 @@ python3 ~/.agents/skills/iole/scripts/selftest_iole_flow_contract_v2.py
 PYTHONDONTWRITEBYTECODE=1 \
 python3 ~/.agents/skills/icps/scripts/selftest_icps_atomic_sheets_v2.py
 PYTHONDONTWRITEBYTECODE=1 \
-python3 ~/.agents/skills/icp/scripts/selftest_flow_job_v1.py
-PYTHONDONTWRITEBYTECODE=1 \
-python3 ~/.agents/skills/icp/scripts/selftest_page_job_v1.py
+python3 -m unittest \
+  icp.component-design.tests.test_component_design_cli
 python3 ~/.codex/skills/.system/skill-creator/scripts/quick_validate.py \
   ~/.agents/skills/iole
 python3 ~/.codex/skills/.system/skill-creator/scripts/quick_validate.py \

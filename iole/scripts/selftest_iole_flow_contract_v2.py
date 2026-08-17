@@ -11,8 +11,118 @@ from pathlib import Path
 
 
 SCRIPT = Path(__file__).with_name("iole_flow_contract_v2.py")
-ICP_FLOW_SCRIPT = Path(__file__).parents[2] / "icp" / "scripts" / "icp_flow_job_v1.py"
 MAPPING = Path(__file__).parents[1] / "references" / "role-mapping-v2.json"
+
+OPERATIONAL_COLUMNS = {
+    "标题",
+    "PRN ID",
+    "frontend status",
+    "frontend pr",
+    "frontend reviews",
+    "frontend lease_token",
+    "frontend lease_until",
+    "frontend last_error",
+    "backend status",
+    "backend pr",
+    "backend reviews",
+    "backend lease_token",
+    "backend lease_until",
+    "backend last_error",
+}
+
+
+def canonical_digest(value: object) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def title_catalog(*titles: str) -> dict[str, object]:
+    payload = {
+        "spreadsheet_id": "book",
+        "sheet_name": "Sheet1",
+        "row_id_column": "标题",
+        "titles": list(titles),
+    }
+    return {
+        "kind": "icps.flow-title-catalog.v1",
+        "schema_version": 1,
+        **payload,
+        "catalog_digest": canonical_digest(payload),
+    }
+
+
+def source_analysis_v2(
+    raw_rows: dict[str, dict[str, str]],
+    *,
+    root_title: str,
+    scopes: dict[str, str],
+    references: dict[tuple[str, str], list[dict[str, object]]] | None = None,
+) -> dict[str, object]:
+    references = references or {}
+    return {
+        "kind": "iole.source-analysis-input.v2",
+        "schema_version": 2,
+        "source_id": "google-sheets:"
+        + canonical_digest({"sheet_name": "Sheet1", "spreadsheet_id": "book"}),
+        "role": "client",
+        "root_title": root_title,
+        "rows": [
+            {
+                "title": title,
+                "change_scope": scopes[title],
+                "fields": [
+                    {
+                        "column": column,
+                        "source_sha256": hashlib.sha256(value.encode("utf-8")).hexdigest(),
+                        "references": references.get((title, column), []),
+                        "dismissals": [],
+                    }
+                    for column, value in row.items()
+                    if column not in OPERATIONAL_COLUMNS
+                ],
+            }
+            for title, row in raw_rows.items()
+        ],
+    }
+
+
+def passing_closure_review(analysis: dict[str, object], catalog: dict[str, object]) -> dict[str, object]:
+    field_reviews = [
+        {
+            "title": row["title"],
+            "column": field["column"],
+            "source_sha256": field["source_sha256"],
+            "all_dependencies_identified": True,
+            "reference_targets_correct": True,
+            "dismissals_correct": True,
+            "evidence": ["Compared the complete source field with the title catalog."],
+            "issues": [],
+        }
+        for row in analysis["rows"]
+        for field in row["fields"]
+    ]
+    return {
+        "kind": "iole.source-closure-review.v1",
+        "schema_version": 1,
+        "analysis_sha256": canonical_digest(analysis),
+        "title_catalog_digest": catalog["catalog_digest"],
+        "decision": "pass",
+        "field_reviews": field_reviews,
+        "cross_review": {
+            "every_business_field_reviewed": True,
+            "no_unresolved_reference": True,
+            "no_ambiguous_target": True,
+            "evidence": ["Every relation and dismissal was checked against exact source spans."],
+            "issues": [],
+        },
+    }
 
 
 def run_plan(document: dict[str, object]) -> subprocess.CompletedProcess[str]:
@@ -97,6 +207,679 @@ def page_node(title: str) -> str:
 
 
 class FlowPlanContractTests(unittest.TestCase):
+    def test_source_bundle_rejects_legacy_analysis_without_closure_evidence(self) -> None:
+        raw_rows = {
+            "登录": {
+                "标题": "登录",
+                "Route": "signin",
+                "设计稿地址": "无",
+                "UI补充描述": "",
+                "交互描述": "",
+                "接口描述": "",
+                "UT": "",
+                "IT": "",
+                "E2E": "",
+                "frontend status": "ready",
+                "frontend pr": "",
+                "frontend reviews": "",
+            }
+        }
+        analysis = {
+            "kind": "iole.source-analysis-input.v1",
+            "schema_version": 1,
+            "source_id": "google-sheets:" + "0" * 64,
+            "role": "client",
+            "root_title": "登录",
+            "rows": [
+                {
+                    "title": "登录",
+                    "normalized_interaction": "",
+                    "change_scope": "modify",
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            raw_path = root / "raw.json"
+            analysis_path = root / "analysis.json"
+            raw_path.write_text(json.dumps(raw_rows, ensure_ascii=False), encoding="utf-8")
+            analysis_path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "build-source-bundle",
+                    "--raw-rows",
+                    str(raw_path),
+                    "--analysis",
+                    str(analysis_path),
+                    "--mapping",
+                    str(MAPPING),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertIn("source closure", completed.stdout)
+
+    def test_source_bundle_rejects_an_unresolved_ui_component_row_reference(self) -> None:
+        def row(title: str, ui: str, interaction: str, status: str) -> dict[str, str]:
+            return {
+                "标题": title,
+                "Route": "",
+                "设计稿地址": "无",
+                "UI补充描述": ui,
+                "交互描述": interaction,
+                "接口描述": "",
+                "UT": "",
+                "IT": "",
+                "E2E": "",
+                "frontend status": status,
+                "frontend pr": "",
+                "frontend reviews": "",
+                "frontend lease_token": "",
+                "frontend lease_until": "",
+                "frontend last_error": "",
+            }
+
+        raw_rows = {
+            "如何支付-visa": row(
+                "如何支付-visa",
+                "1.复用”公共组件--Bottom Drawer“组件",
+                "",
+                "ready",
+            ),
+            "公共组件--Bottom Drawer": row(
+                "公共组件--Bottom Drawer",
+                "padding: 16pt, radius: 24pt, background-color:#FFFFFF",
+                "触发后，从底部向上弹起",
+                "",
+            ),
+        }
+        catalog = title_catalog(*raw_rows)
+        analysis = source_analysis_v2(
+            raw_rows,
+            root_title="如何支付-visa",
+            scopes={
+                "如何支付-visa": "modify",
+                "公共组件--Bottom Drawer": "context",
+            },
+        )
+        review = passing_closure_review(analysis, catalog)
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            raw_path = root / "raw-rows.json"
+            catalog_path = root / "title-catalog.json"
+            analysis_path = root / "analysis.json"
+            review_path = root / "closure-review.json"
+            raw_path.write_text(json.dumps(raw_rows, ensure_ascii=False), encoding="utf-8")
+            catalog_path.write_text(json.dumps(catalog, ensure_ascii=False), encoding="utf-8")
+            analysis_path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            review_path.write_text(json.dumps(review, ensure_ascii=False), encoding="utf-8")
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "build-source-bundle",
+                    "--raw-rows",
+                    str(raw_path),
+                    "--title-catalog",
+                    str(catalog_path),
+                    "--analysis",
+                    str(analysis_path),
+                    "--closure-review",
+                    str(review_path),
+                    "--mapping",
+                    str(MAPPING),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertIn("unresolved title mention", completed.stdout)
+
+    def test_source_bundle_includes_a_component_row_referenced_from_ui(self) -> None:
+        def row(title: str, ui: str, interaction: str, status: str) -> dict[str, str]:
+            return {
+                "标题": title,
+                "Route": "",
+                "设计稿地址": "无",
+                "UI补充描述": ui,
+                "交互描述": interaction,
+                "接口描述": "",
+                "UT": "",
+                "IT": "",
+                "E2E": "",
+                "frontend status": status,
+                "frontend pr": "",
+                "frontend reviews": "",
+                "frontend lease_token": "",
+                "frontend lease_until": "",
+                "frontend last_error": "",
+            }
+
+        component_title = "公共组件--Bottom Drawer"
+        ui = f"1.复用”{component_title}“组件"
+        raw_rows = {
+            "如何支付-visa": row("如何支付-visa", ui, "", "ready"),
+            component_title: row(
+                component_title,
+                "padding: 16pt, radius: 24pt, background-color:#FFFFFF",
+                "触发后，从底部向上弹起",
+                "",
+            ),
+        }
+        catalog = title_catalog(*raw_rows)
+        start = ui.index(component_title)
+        analysis = source_analysis_v2(
+            raw_rows,
+            root_title="如何支付-visa",
+            scopes={"如何支付-visa": "modify", component_title: "context"},
+            references={
+                ("如何支付-visa", "UI补充描述"): [
+                    {
+                        "reference_id": "visa-ui-bottom-drawer",
+                        "start": start,
+                        "end": start + len(component_title),
+                        "quote": component_title,
+                        "target_title": component_title,
+                        "relation_kind": "component",
+                    }
+                ]
+            },
+        )
+        review = passing_closure_review(analysis, catalog)
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            raw_path = root / "raw-rows.json"
+            catalog_path = root / "title-catalog.json"
+            analysis_path = root / "analysis.json"
+            review_path = root / "closure-review.json"
+            raw_path.write_text(json.dumps(raw_rows, ensure_ascii=False), encoding="utf-8")
+            catalog_path.write_text(json.dumps(catalog, ensure_ascii=False), encoding="utf-8")
+            analysis_path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            review_path.write_text(json.dumps(review, ensure_ascii=False), encoding="utf-8")
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "build-source-bundle",
+                    "--raw-rows",
+                    str(raw_path),
+                    "--title-catalog",
+                    str(catalog_path),
+                    "--analysis",
+                    str(analysis_path),
+                    "--closure-review",
+                    str(review_path),
+                    "--mapping",
+                    str(MAPPING),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        bundle = json.loads(completed.stdout)
+        self.assertEqual(
+            [(member["title"], member["change_scope"]) for member in bundle["members"]],
+            [("如何支付-visa", "modify"), (component_title, "context")],
+        )
+        self.assertEqual(
+            bundle["relations"],
+            [{"from_title": "如何支付-visa", "to_title": component_title}],
+        )
+        self.assertEqual(bundle["members"][1]["design_refs"], [])
+        self.assertIn("source_closure", bundle)
+
+    def test_source_bundle_declares_owned_columns_and_ignores_extra_sheet_columns(self) -> None:
+        raw_rows = {
+            "登录": {
+                "标题": "登录",
+                "Route": "/login",
+                "设计稿地址": "https://design.example/login",
+                "UI补充描述": "显示手机号输入框",
+                "交互描述": "",
+                "接口描述": "",
+                "UT": "只能输入数字",
+                "IT": "",
+                "E2E": "",
+                "frontend status": "ready",
+                "frontend pr": "",
+                "frontend reviews": "",
+                "frontend lease_token": "",
+                "frontend lease_until": "",
+                "frontend last_error": "",
+            }
+        }
+        catalog = title_catalog("登录")
+        analysis = source_analysis_v2(
+            raw_rows,
+            root_title="登录",
+            scopes={"登录": "modify"},
+        )
+        review = passing_closure_review(analysis, catalog)
+        raw_rows["登录"]["编号"] = "1001"
+        raw_rows["登录"]["未声明备注"] = "must not enter ICP"
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            raw_path = root / "raw-rows.json"
+            catalog_path = root / "title-catalog.json"
+            analysis_path = root / "analysis.json"
+            review_path = root / "closure-review.json"
+            raw_path.write_text(json.dumps(raw_rows, ensure_ascii=False), encoding="utf-8")
+            catalog_path.write_text(json.dumps(catalog, ensure_ascii=False), encoding="utf-8")
+            analysis_path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            review_path.write_text(json.dumps(review, ensure_ascii=False), encoding="utf-8")
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "build-source-bundle",
+                    "--raw-rows",
+                    str(raw_path),
+                    "--title-catalog",
+                    str(catalog_path),
+                    "--analysis",
+                    str(analysis_path),
+                    "--closure-review",
+                    str(review_path),
+                    "--mapping",
+                    str(MAPPING),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        bundle = json.loads(completed.stdout)
+        expected_columns = [
+            "标题",
+            "Route",
+            "设计稿地址",
+            "UI补充描述",
+            "交互描述",
+            "接口描述",
+            "UT",
+            "IT",
+            "E2E",
+        ]
+        self.assertEqual(bundle["row_data_columns"], expected_columns)
+        row_data = bundle["members"][0]["row_data"]
+        self.assertEqual(list(row_data), expected_columns)
+        self.assertEqual(row_data["UT"], "只能输入数字")
+        self.assertIsNone(row_data["IT"])
+        self.assertNotIn("编号", row_data)
+        self.assertNotIn("未声明备注", row_data)
+
+    def test_source_bundle_rejects_a_stale_business_field_hash(self) -> None:
+        raw_rows = {
+            "登录": {
+                "标题": "登录",
+                "Route": "signin",
+                "设计稿地址": "无",
+                "UI补充描述": "显示登录表单",
+                "交互描述": "",
+                "接口描述": "",
+                "UT": "",
+                "IT": "",
+                "E2E": "",
+                "frontend status": "ready",
+                "frontend pr": "",
+                "frontend reviews": "",
+                "frontend lease_token": "",
+                "frontend lease_until": "",
+                "frontend last_error": "",
+            }
+        }
+        catalog = title_catalog("登录")
+        analysis = source_analysis_v2(
+            raw_rows,
+            root_title="登录",
+            scopes={"登录": "modify"},
+        )
+        analysis["rows"][0]["fields"][0]["source_sha256"] = "0" * 64
+        review = passing_closure_review(analysis, catalog)
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            paths = {
+                "raw": root / "raw.json",
+                "catalog": root / "catalog.json",
+                "analysis": root / "analysis.json",
+                "review": root / "review.json",
+            }
+            paths["raw"].write_text(json.dumps(raw_rows, ensure_ascii=False), encoding="utf-8")
+            paths["catalog"].write_text(json.dumps(catalog, ensure_ascii=False), encoding="utf-8")
+            paths["analysis"].write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            paths["review"].write_text(json.dumps(review, ensure_ascii=False), encoding="utf-8")
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "build-source-bundle",
+                    "--raw-rows",
+                    str(paths["raw"]),
+                    "--title-catalog",
+                    str(paths["catalog"]),
+                    "--analysis",
+                    str(paths["analysis"]),
+                    "--closure-review",
+                    str(paths["review"]),
+                    "--mapping",
+                    str(MAPPING),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertIn("field hash mismatch", completed.stdout)
+
+    def test_builds_source_bundle_with_empty_non_modify_queue_status(self) -> None:
+        root_interaction = "点击支付说明 →「如何支付-visa」"
+        raw_rows = {
+            "登录相关": {
+                "标题": "登录相关",
+                "Route": "signin",
+                "设计稿地址": (
+                    "初始状态：https://design.example/signin-initial\n"
+                    "手机号状态：https://design.example/signin-phone"
+                ),
+                "UI补充描述": "",
+                "交互描述": root_interaction,
+                "接口描述": "",
+                "UT": "",
+                "IT": "",
+                "E2E": "",
+                "frontend status": "ready",
+                "frontend pr": "",
+                "frontend reviews": "",
+            },
+            "如何支付-visa": {
+                "标题": "如何支付-visa",
+                "Route": "",
+                "设计稿地址": "https://design.example/pay-visa",
+                "UI补充描述": "",
+                "交互描述": "",
+                "接口描述": "",
+                "UT": "",
+                "IT": "",
+                "E2E": "",
+                "frontend status": "",
+                "frontend pr": "",
+                "frontend reviews": "",
+            },
+        }
+        target = "如何支付-visa"
+        start = root_interaction.index(target)
+        catalog = title_catalog(*raw_rows)
+        analysis = source_analysis_v2(
+            raw_rows,
+            root_title="登录相关",
+            scopes={"登录相关": "modify", target: "navigate-only"},
+            references={
+                ("登录相关", "交互描述"): [
+                    {
+                        "reference_id": "login-payment-visa",
+                        "start": start,
+                        "end": start + len(target),
+                        "quote": target,
+                        "target_title": target,
+                        "relation_kind": "navigation",
+                    }
+                ]
+            },
+        )
+        review = passing_closure_review(analysis, catalog)
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            raw_path = root / "raw-rows.json"
+            catalog_path = root / "catalog.json"
+            analysis_path = root / "analysis.json"
+            review_path = root / "review.json"
+            raw_path.write_text(
+                json.dumps(raw_rows, ensure_ascii=False), encoding="utf-8"
+            )
+            analysis_path.write_text(
+                json.dumps(analysis, ensure_ascii=False), encoding="utf-8"
+            )
+            catalog_path.write_text(json.dumps(catalog, ensure_ascii=False), encoding="utf-8")
+            review_path.write_text(json.dumps(review, ensure_ascii=False), encoding="utf-8")
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "build-source-bundle",
+                    "--raw-rows",
+                    str(raw_path),
+                    "--title-catalog",
+                    str(catalog_path),
+                    "--analysis",
+                    str(analysis_path),
+                    "--closure-review",
+                    str(review_path),
+                    "--mapping",
+                    str(MAPPING),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        bundle = json.loads(completed.stdout)
+        self.assertEqual(bundle["kind"], "iole.flow-source-bundle.v2")
+        self.assertEqual(bundle["root_title"], "登录相关")
+        self.assertEqual(
+            [(member["title"], member["change_scope"]) for member in bundle["members"]],
+            [("登录相关", "modify"), ("如何支付-visa", "navigate-only")],
+        )
+        self.assertEqual(
+            bundle["relations"],
+            [{"from_title": "登录相关", "to_title": "如何支付-visa"}],
+        )
+        self.assertEqual(
+            bundle["members"][0]["design_refs"],
+            [
+                {
+                    "ordinal": 1,
+                    "label": "初始状态",
+                    "url": "https://design.example/signin-initial",
+                },
+                {
+                    "ordinal": 2,
+                    "label": "手机号状态",
+                    "url": "https://design.example/signin-phone",
+                },
+            ],
+        )
+        self.assertIsNone(bundle["members"][1]["queue_status"])
+        self.assertEqual(
+            bundle["members"][1]["source_contract"]["design_ref"],
+            raw_rows["如何支付-visa"]["设计稿地址"],
+        )
+        self.assertNotIn("allowed_paths", completed.stdout)
+        self.assertNotIn("component_plan", completed.stdout)
+
+    def test_source_bundle_allows_a_closed_cycle_through_read_only_context(self) -> None:
+        def raw_row(title: str, interaction: str, status: str) -> dict[str, str]:
+            return {
+                "标题": title,
+                "Route": "",
+                "设计稿地址": f"https://design.example/{title}",
+                "UI补充描述": "",
+                "交互描述": interaction,
+                "接口描述": "",
+                "UT": "",
+                "IT": "",
+                "E2E": "",
+                "frontend status": status,
+                "frontend pr": "",
+                "frontend reviews": "",
+            }
+
+        raw_rows = {
+            "登录相关": raw_row("登录相关", "打开 Visa 说明", "ready"),
+            "如何支付-visa": raw_row("如何支付-visa", "切换 Mastercard", ""),
+            "如何支付-mastercard": raw_row(
+                "如何支付-mastercard", "切换 Visa", ""
+            ),
+        }
+        catalog = title_catalog(*raw_rows)
+        references: dict[tuple[str, str], list[dict[str, object]]] = {}
+        edges = [
+            ("登录相关", "如何支付-visa"),
+            ("如何支付-visa", "如何支付-mastercard"),
+            ("如何支付-mastercard", "如何支付-visa"),
+        ]
+        for source, target in edges:
+            source_text = raw_rows[source]["交互描述"]
+            references[(source, "交互描述")] = [
+                {
+                    "reference_id": f"{source}-{target}",
+                    "start": 0,
+                    "end": len(source_text),
+                    "quote": source_text,
+                    "target_title": target,
+                    "relation_kind": "navigation",
+                }
+            ]
+        analysis = source_analysis_v2(
+            raw_rows,
+            root_title="登录相关",
+            scopes={
+                "登录相关": "modify",
+                "如何支付-visa": "context",
+                "如何支付-mastercard": "navigate-only",
+            },
+            references=references,
+        )
+        review = passing_closure_review(analysis, catalog)
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            raw_path = root / "raw-rows.json"
+            catalog_path = root / "catalog.json"
+            analysis_path = root / "analysis.json"
+            review_path = root / "review.json"
+            raw_path.write_text(
+                json.dumps(raw_rows, ensure_ascii=False), encoding="utf-8"
+            )
+            analysis_path.write_text(
+                json.dumps(analysis, ensure_ascii=False), encoding="utf-8"
+            )
+            catalog_path.write_text(json.dumps(catalog, ensure_ascii=False), encoding="utf-8")
+            review_path.write_text(json.dumps(review, ensure_ascii=False), encoding="utf-8")
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "build-source-bundle",
+                    "--raw-rows",
+                    str(raw_path),
+                    "--title-catalog",
+                    str(catalog_path),
+                    "--analysis",
+                    str(analysis_path),
+                    "--closure-review",
+                    str(review_path),
+                    "--mapping",
+                    str(MAPPING),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        bundle = json.loads(completed.stdout)
+        self.assertEqual(
+            bundle["relations"],
+            [
+                {"from_title": "登录相关", "to_title": "如何支付-visa"},
+                {
+                    "from_title": "如何支付-visa",
+                    "to_title": "如何支付-mastercard",
+                },
+                {
+                    "from_title": "如何支付-mastercard",
+                    "to_title": "如何支付-visa",
+                },
+            ],
+        )
+
+    def test_source_bundle_rejects_a_non_ready_modify_member(self) -> None:
+        raw_row = {
+            "标题": "登录相关",
+            "Route": "signin",
+            "设计稿地址": "https://design.example/signin",
+            "UI补充描述": "",
+            "交互描述": "",
+            "接口描述": "",
+            "UT": "",
+            "IT": "",
+            "E2E": "",
+            "frontend status": "",
+            "frontend pr": "",
+            "frontend reviews": "",
+        }
+        raw_rows = {"登录相关": raw_row}
+        catalog = title_catalog("登录相关")
+        analysis = source_analysis_v2(
+            raw_rows,
+            root_title="登录相关",
+            scopes={"登录相关": "modify"},
+        )
+        review = passing_closure_review(analysis, catalog)
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            raw_path = root / "raw-rows.json"
+            catalog_path = root / "catalog.json"
+            analysis_path = root / "analysis.json"
+            review_path = root / "review.json"
+            raw_path.write_text(
+                json.dumps(raw_rows, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            analysis_path.write_text(
+                json.dumps(analysis, ensure_ascii=False), encoding="utf-8"
+            )
+            catalog_path.write_text(json.dumps(catalog, ensure_ascii=False), encoding="utf-8")
+            review_path.write_text(json.dumps(review, ensure_ascii=False), encoding="utf-8")
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "build-source-bundle",
+                    "--raw-rows",
+                    str(raw_path),
+                    "--title-catalog",
+                    str(catalog_path),
+                    "--analysis",
+                    str(analysis_path),
+                    "--closure-review",
+                    str(review_path),
+                    "--mapping",
+                    str(MAPPING),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(
+            json.loads(completed.stdout)["reason"],
+            "modify page is not ready: 登录相关",
+        )
+
     def test_lossless_review_writeback_accepts_a_complete_icp_v2_result(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -558,32 +1341,6 @@ class FlowPlanContractTests(unittest.TestCase):
             self.assertIn(ui_notes, member["requirement"])
             self.assertNotIn("must-not-reach-icp", built.stdout)
 
-            prepared = subprocess.run(
-                [sys.executable, str(ICP_FLOW_SCRIPT), "prepare", "--job", str(job_path)],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-            self.assertEqual(prepared.returncode, 0, prepared.stdout + prepared.stderr)
-            next_node = subprocess.run(
-                [sys.executable, str(ICP_FLOW_SCRIPT), "next-node", "--job", str(job_path)],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-            self.assertEqual(next_node.returncode, 0, next_node.stdout + next_node.stderr)
-            node_decision = json.loads(next_node.stdout)
-            self.assertEqual(node_decision["status"], "contract-compilation-required")
-            self.assertNotIn("worker_prompt", node_decision)
-            compiler_input = json.loads(
-                Path(node_decision["compiler_input"]).read_text(encoding="utf-8")
-            )
-            self.assertEqual(compiler_input["kind"], "icp.contract-compiler-input.v1")
-            self.assertEqual(
-                compiler_input["members"][0]["source_contract"], source_contract
-            )
-            self.assertFalse(Path(node_decision["implementation_contract"]).exists())
-
     def test_extracts_title_only_references_without_document_page_ids(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             row_path = Path(temporary_directory) / "root-row.json"
@@ -722,6 +1479,7 @@ class FlowPlanContractTests(unittest.TestCase):
             result["required_connector_operations"],
             [
                 "inspect_ready_flow_root",
+                "inspect_title_catalog",
                 "inspect_flow_rows",
                 "claim_flow_rows",
                 "release_flow_claim",
@@ -1086,76 +1844,6 @@ class FlowPlanContractTests(unittest.TestCase):
             ["app/src/main/ResultScreen.kt"],
         )
         self.assertEqual(job["execution_order"][-1], page_node("申请首页"))
-
-    def test_built_job_is_accepted_by_the_real_icp_flow_entrypoint(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            worktree = root / "worktree"
-            worktree.mkdir()
-            (worktree / "README.md").write_text("fixture\n", encoding="utf-8")
-            subprocess.run(["git", "init", "-q"], cwd=worktree, check=True)
-            subprocess.run(["git", "add", "README.md"], cwd=worktree, check=True)
-            subprocess.run(
-                [
-                    "git",
-                    "-c",
-                    "user.name=IOLE Flow Selftest",
-                    "-c",
-                    "user.email=iole-flow@example.invalid",
-                    "commit",
-                    "-qm",
-                    "fixture",
-                ],
-                cwd=worktree,
-                check=True,
-            )
-            revision = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
-                cwd=worktree,
-                check=True,
-                capture_output=True,
-                text=True,
-            ).stdout.strip()
-            worktree = worktree.resolve()
-            input_path = root / "flow-input.json"
-            input_path.write_text(json.dumps(base_input()), encoding="utf-8")
-            planned = subprocess.run(
-                [sys.executable, str(SCRIPT), "build-plan", "--input", str(input_path)],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            plan_path = root / "flow-plan.json"
-            plan_path.write_text(planned.stdout, encoding="utf-8")
-            built = subprocess.run(
-                [
-                    sys.executable,
-                    str(SCRIPT),
-                    "build-job",
-                    "--plan",
-                    str(plan_path),
-                    "--worktree",
-                    str(worktree),
-                    "--base-revision",
-                    revision,
-                    "--platform",
-                    "android-kotlin",
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            job_path = root / "job.json"
-            job_path.write_text(built.stdout, encoding="utf-8")
-            prepared = subprocess.run(
-                [sys.executable, str(ICP_FLOW_SCRIPT), "prepare", "--job", str(job_path)],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-
-        self.assertEqual(prepared.returncode, 0, prepared.stdout + prepared.stderr)
-        self.assertEqual(json.loads(prepared.stdout)["status"], "ready")
 
     def test_derives_one_stable_branch_for_every_member_and_review_round(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

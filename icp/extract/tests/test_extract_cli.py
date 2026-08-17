@@ -145,6 +145,97 @@ class ExtractCliTest(unittest.TestCase):
             *args,
         )
 
+    def prepare_single_block_reverse_review(self) -> dict:
+        self.assertEqual(self.prepare_workspace().returncode, 0)
+        state = read_json(self.extract_dir / "state.json")
+        draft = {
+            "schema": "icp.extract.semantic-draft.v1",
+            "source_manifest_sha256": state["source_manifest_sha256"],
+            "blocks": [
+                {
+                    "block_id": "page",
+                    "name": "Checkout page",
+                    "role": "loan_checkout",
+                    "role_basis": "interpreted",
+                    "role_evidence": ["The current draft treats the source as one checkout task."],
+                    "parent_block_id": None,
+                    "child_block_ids": [],
+                    "appearance": {
+                        "background": "Light page with one offer surface.",
+                        "border": "The source contains a rounded offer boundary.",
+                        "spacing": "The content follows a vertical task flow.",
+                    },
+                    "content_summary": "Heading, offer, and action.",
+                    "composition": "The current draft collapses every source node into one page Block.",
+                    "relations": [],
+                }
+            ],
+        }
+        draft_path = self.root / "reverse-audit-draft.json"
+        write_json(draft_path, draft)
+        drafted = self.run_stage_cli("record-draft", "--draft", str(draft_path))
+        self.assertEqual(drafted.returncode, 0, drafted.stdout + drafted.stderr)
+        state = read_json(self.extract_dir / "state.json")
+        assignments = []
+        for node_id, basis in (
+            ("root:1", "frame"),
+            ("text:1", "frame"),
+            ("group:1", "frame"),
+            ("button:1", "real_frame"),
+        ):
+            assignments.append(
+                {
+                    "source_node_id": node_id,
+                    "status": "mapped" if node_id == "root:1" else "absorbed",
+                    "block_id": "page",
+                    "geometry_basis": basis,
+                    "rationale": "The current draft assigns this exact node to the page Block.",
+                }
+            )
+        bindings = {
+            "schema": "icp.extract.bindings.v1",
+            "source_manifest_sha256": state["source_manifest_sha256"],
+            "semantic_draft_sha256": state["semantic_draft_sha256"],
+            "assignments": assignments,
+        }
+        bindings_path = self.root / "reverse-audit-bindings.json"
+        write_json(bindings_path, bindings)
+        bound = self.run_stage_cli(
+            "record-bindings", "--bindings", str(bindings_path)
+        )
+        self.assertEqual(bound.returncode, 0, bound.stdout + bound.stderr)
+        return read_json(self.extract_dir / "semantic-review.input.json")
+
+    def fill_passing_semantic_review(self, review: dict) -> None:
+        review["decision"] = "pass"
+        for item in review["block_reviews"]:
+            item["role_correct"] = True
+            item["hierarchy_correct"] = True
+            item["appearance_interpretation_correct"] = True
+            item["content_grouping_correct"] = True
+            item["source_binding_correct"] = True
+            item["evidence"] = [
+                "The rendered reference and current Block boundary were compared directly."
+            ]
+            item["issues"] = []
+        for item in review["source_node_reviews"]:
+            item["semantic_assignment_correct"] = True
+            item["independent_grouping_correct"] = True
+            item["parent_child_relation_correct"] = True
+            item["evidence"] = [
+                "The exact JSON node, current Block, parent source node, and child source nodes were checked together."
+            ]
+            item["issues"] = []
+        cross = review["cross_block_review"]
+        cross["relations_correct"] = True
+        cross["reading_order_correct"] = True
+        cross["no_semantic_omissions"] = True
+        cross["non_rendering_classifications_correct"] = True
+        cross["evidence"] = [
+            "The complete source-node order and Block graph were checked for omissions."
+        ]
+        cross["issues"] = []
+
     def test_prepare_creates_lossless_extract_workspace_and_fails_on_drift(self) -> None:
         result = self.prepare_workspace()
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -549,6 +640,120 @@ class ExtractCliTest(unittest.TestCase):
         self.assertEqual(overlap.returncode, 2)
         self.assertIn("binding_plan_overlap", overlap.stderr)
 
+    def test_expand_bindings_routes_explicit_unresolved_subtree_to_repair(self) -> None:
+        self.assertEqual(self.prepare_workspace().returncode, 0)
+        state = read_json(self.extract_dir / "state.json")
+        draft = {
+            "schema": "icp.extract.semantic-draft.v1",
+            "source_manifest_sha256": state["source_manifest_sha256"],
+            "blocks": [
+                {
+                    "block_id": "page",
+                    "name": "Page",
+                    "role": "page",
+                    "role_basis": "entailed",
+                    "role_evidence": ["The artboard is the page."],
+                    "parent_block_id": None,
+                    "child_block_ids": ["offer"],
+                    "appearance": {
+                        "background": "Light surface.",
+                        "border": "No outer border.",
+                        "spacing": "Vertical flow.",
+                    },
+                    "content_summary": "Page content.",
+                    "composition": "Page contains one offer.",
+                    "relations": [],
+                },
+                {
+                    "block_id": "offer",
+                    "name": "Offer",
+                    "role": "offer",
+                    "role_basis": "interpreted",
+                    "role_evidence": ["The group contains the offer action."],
+                    "parent_block_id": "page",
+                    "child_block_ids": [],
+                    "appearance": {
+                        "background": "Card surface.",
+                        "border": "Card boundary.",
+                        "spacing": "Grouped content.",
+                    },
+                    "content_summary": "Offer content.",
+                    "composition": "One grouped offer.",
+                    "relations": [],
+                },
+            ],
+        }
+        draft_path = self.root / "unresolved-plan-draft.json"
+        write_json(draft_path, draft)
+        recorded = self.run_stage_cli("record-draft", "--draft", str(draft_path))
+        self.assertEqual(recorded.returncode, 0, recorded.stderr)
+        state = read_json(self.extract_dir / "state.json")
+        rationale = "The cropped reference does not show this source subtree."
+        plan = {
+            "schema": "icp.extract.binding-plan.v1",
+            "source_manifest_sha256": state["source_manifest_sha256"],
+            "semantic_draft_sha256": state["semantic_draft_sha256"],
+            "rules": [
+                {
+                    "source_node_ids": ["root:1", "text:1"],
+                    "source_subtree_roots": [],
+                    "status": "absorbed",
+                    "block_id": "page",
+                    "rationale": "These nodes form the visible page context.",
+                },
+                {
+                    "source_node_ids": ["group:1"],
+                    "source_subtree_roots": [],
+                    "status": "mapped",
+                    "block_id": "offer",
+                    "rationale": "The visible group forms the offer.",
+                },
+                {
+                    "source_node_ids": [],
+                    "source_subtree_roots": ["button:1"],
+                    "status": "unresolved",
+                    "block_id": None,
+                    "rationale": rationale,
+                },
+            ],
+        }
+        plan_path = self.root / "unresolved-binding-plan.json"
+        write_json(plan_path, plan)
+
+        expanded = self.run_stage_cli("expand-bindings", "--plan", str(plan_path))
+        self.assertEqual(expanded.returncode, 0, expanded.stderr)
+        bindings = read_json(self.extract_dir / "bindings.input.json")
+        unresolved = bindings["assignments"][-1]
+        self.assertEqual(
+            unresolved,
+            {
+                "source_node_id": "button:1",
+                "status": "unresolved",
+                "block_id": None,
+                "geometry_basis": "not_applicable",
+                "rationale": rationale,
+            },
+        )
+
+        recorded_bindings = self.run_stage_cli(
+            "record-bindings",
+            "--bindings",
+            str(self.extract_dir / "bindings.input.json"),
+        )
+        self.assertEqual(recorded_bindings.returncode, 0, recorded_bindings.stderr)
+        coverage = read_json(self.extract_dir / "coverage.json")
+        self.assertFalse(coverage["complete"])
+        self.assertEqual(coverage["partitions"]["unresolved"], ["button:1"])
+        self.assertEqual(list(coverage["repair_packets"]), ["button:1"])
+        packet = read_json(self.extract_dir / coverage["repair_packets"]["button:1"])
+        self.assertEqual(packet["reason"], rationale)
+        self.assertEqual(packet["source_node"]["id"], "button:1")
+        self.assertEqual(packet["current_binding"], unresolved)
+        self.assertEqual(
+            read_json(self.extract_dir / "state.json")["state"], "repair_required"
+        )
+        self.assertFalse((self.extract_dir / "semantic-review.input.json").exists())
+
     def test_bindings_generate_repair_packets_then_reach_exact_coverage(self) -> None:
         self.assertEqual(self.prepare_workspace().returncode, 0)
         extract_dir = self.extract_dir
@@ -740,6 +945,23 @@ class ExtractCliTest(unittest.TestCase):
             ],
         )
         self.assertEqual(review_template["binding_evidence"]["non_rendering"], [])
+        reverse_evidence = review_template["reverse_binding_evidence"]
+        self.assertEqual(
+            [item["source_node"]["id"] for item in reverse_evidence["nodes"]],
+            ["root:1", "text:1", "group:1", "button:1"],
+        )
+        self.assertEqual(
+            [item["source_node_id"] for item in review_template["source_node_reviews"]],
+            ["root:1", "text:1", "group:1", "button:1"],
+        )
+        offer_node = next(
+            item
+            for item in reverse_evidence["nodes"]
+            if item["source_node"]["id"] == "group:1"
+        )
+        self.assertEqual(offer_node["assignment"]["block_id"], "offer")
+        self.assertEqual(offer_node["assigned_block"]["block_id"], "offer")
+        self.assertEqual(offer_node["parent_source_node"]["id"], "root:1")
         self.assertTrue(
             all("source_binding_correct" in item for item in review_template["block_reviews"])
         )
@@ -875,6 +1097,156 @@ class ExtractCliTest(unittest.TestCase):
         self.assertEqual(rejected.returncode, 2)
         self.assertIn("invalid_geometry_basis", rejected.stderr)
 
+    def test_reverse_json_audit_rejects_a_present_node_bound_to_the_wrong_block(self) -> None:
+        review = self.prepare_single_block_reverse_review()
+        self.fill_passing_semantic_review(review)
+        target = next(
+            item
+            for item in review["source_node_reviews"]
+            if item["source_node_id"] == "group:1"
+        )
+        target["semantic_assignment_correct"] = False
+        target["issues"] = [
+            "The Offer card JSON group is present but incorrectly absorbed into the page instead of owning an offer Block."
+        ]
+        review_path = self.root / "wrong-block-review.json"
+        write_json(review_path, review)
+
+        false_pass = self.run_stage_cli(
+            "record-review", "--review", str(review_path)
+        )
+
+        self.assertNotEqual(false_pass.returncode, 0)
+        self.assertIn("false_semantic_pass", false_pass.stderr)
+        review["decision"] = "revise"
+        write_json(review_path, review)
+        revised = self.run_stage_cli(
+            "record-review", "--review", str(review_path)
+        )
+        self.assertEqual(revised.returncode, 0, revised.stdout + revised.stderr)
+        self.assertEqual(read_json(self.extract_dir / "state.json")["state"], "repair_required")
+        repair = read_json(self.extract_dir / "semantic-repair.json")
+        packet = repair["reverse_repair_packets"]["group:1"]
+        self.assertEqual(
+            packet["source_and_current_block"]["source_node"]["payload"]["name"],
+            "Offer card",
+        )
+        self.assertEqual(
+            packet["source_and_current_block"]["assigned_block"]["block_id"],
+            "page",
+        )
+
+    def test_reverse_json_audit_returns_an_independent_subtree_swallowed_by_parent(self) -> None:
+        review = self.prepare_single_block_reverse_review()
+        self.fill_passing_semantic_review(review)
+        target = next(
+            item
+            for item in review["source_node_reviews"]
+            if item["source_node_id"] == "group:1"
+        )
+        target["independent_grouping_correct"] = False
+        target["issues"] = [
+            "The rounded Offer card subtree is an independent visual-semantic group but the draft has no corresponding child Block."
+        ]
+        review["decision"] = "revise"
+        review_path = self.root / "swallowed-subtree-review.json"
+        write_json(review_path, review)
+
+        revised = self.run_stage_cli(
+            "record-review", "--review", str(review_path)
+        )
+
+        self.assertEqual(revised.returncode, 0, revised.stdout + revised.stderr)
+        repair = read_json(self.extract_dir / "semantic-repair.json")
+        packet = repair["reverse_repair_packets"]["group:1"]
+        self.assertEqual(
+            [item["id"] for item in packet["source_and_current_block"]["child_source_nodes"]],
+            ["button:1"],
+        )
+        self.assertIn("create_semantic_block", packet["allowed_repairs"])
+
+    def test_reverse_json_audit_returns_a_wrong_source_parent_child_relation(self) -> None:
+        review = self.prepare_single_block_reverse_review()
+        self.fill_passing_semantic_review(review)
+        target = next(
+            item
+            for item in review["source_node_reviews"]
+            if item["source_node_id"] == "button:1"
+        )
+        target["parent_child_relation_correct"] = False
+        target["issues"] = [
+            "The Apply node belongs under the Offer card source parent, but the semantic draft erased that containment relation."
+        ]
+        review["decision"] = "revise"
+        review_path = self.root / "wrong-parent-review.json"
+        write_json(review_path, review)
+
+        revised = self.run_stage_cli(
+            "record-review", "--review", str(review_path)
+        )
+
+        self.assertEqual(revised.returncode, 0, revised.stdout + revised.stderr)
+        packet = read_json(self.extract_dir / "semantic-repair.json")[
+            "reverse_repair_packets"
+        ]["button:1"]
+        self.assertEqual(
+            packet["source_and_current_block"]["parent_source_node"]["id"],
+            "group:1",
+        )
+        self.assertIn("fix_parent_child_relation", packet["allowed_repairs"])
+
+    def test_reverse_json_audit_requires_every_source_node_in_exact_order(self) -> None:
+        review = self.prepare_single_block_reverse_review()
+        self.fill_passing_semantic_review(review)
+        review["source_node_reviews"] = review["source_node_reviews"][:-1]
+        review_path = self.root / "missing-node-review.json"
+        write_json(review_path, review)
+
+        rejected = self.run_stage_cli(
+            "record-review", "--review", str(review_path)
+        )
+
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("every JSON source node", rejected.stderr)
+
+    def test_reverse_json_audit_collects_all_node_failures_before_repair(self) -> None:
+        review = self.prepare_single_block_reverse_review()
+        self.fill_passing_semantic_review(review)
+        group = next(
+            item
+            for item in review["source_node_reviews"]
+            if item["source_node_id"] == "group:1"
+        )
+        group["semantic_assignment_correct"] = False
+        group["issues"] = [
+            "The Offer card needs its own semantic Block instead of the page assignment."
+        ]
+        button = next(
+            item
+            for item in review["source_node_reviews"]
+            if item["source_node_id"] == "button:1"
+        )
+        button["parent_child_relation_correct"] = False
+        button["issues"] = [
+            "The Apply action must remain semantically contained by the Offer card."
+        ]
+        review["decision"] = "revise"
+        review_path = self.root / "complete-round-review.json"
+        write_json(review_path, review)
+
+        revised = self.run_stage_cli(
+            "record-review", "--review", str(review_path)
+        )
+
+        self.assertEqual(revised.returncode, 0, revised.stdout + revised.stderr)
+        repair = read_json(self.extract_dir / "semantic-repair.json")
+        self.assertEqual(
+            set(repair["reverse_repair_packets"]), {"group:1", "button:1"}
+        )
+        self.assertEqual(
+            set(repair["source_node_issues"]), {"group:1", "button:1"}
+        )
+
     def test_semantic_review_is_the_final_binary_gate_and_detects_source_drift(self) -> None:
         self.assertEqual(self.prepare_workspace().returncode, 0)
         extract_dir = self.extract_dir
@@ -964,6 +1336,14 @@ class ExtractCliTest(unittest.TestCase):
             item["content_grouping_correct"] = True
             item["source_binding_correct"] = True
             item["issues"] = []
+        for item in review["source_node_reviews"]:
+            item["semantic_assignment_correct"] = True
+            item["independent_grouping_correct"] = True
+            item["parent_child_relation_correct"] = True
+            item["evidence"] = [
+                "The exact JSON source node, assigned Block, and source parent-child relation agree."
+            ]
+            item["issues"] = []
         cross = review["cross_block_review"]
         cross["relations_correct"] = True
         cross["reading_order_correct"] = True
@@ -1024,6 +1404,7 @@ class ExtractCliTest(unittest.TestCase):
                 "exact_coverage": True,
                 "no_duplicate_bindings": True,
                 "no_synthetic_source_ids": True,
+                "reverse_json_semantic_audit": True,
                 "semantic_review_passed": True,
             },
         )

@@ -116,6 +116,8 @@ When IOLE invokes this Skill as its storage adapter, read
 single-row tools:
 
 - `inspect_ready_flow_root`: find and read one ready root without mutation.
+- `inspect_title_catalog`: read the complete normalized title column and return a
+  digest-bound catalog without reading unrelated row contents.
 - `inspect_flow_rows`: scan only the title column, then read exact declared rows;
   reject missing or duplicate titles.
 - `claim_flow_rows`: set every declared member to `doing` with one shared lease in

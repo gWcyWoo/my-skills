@@ -30,15 +30,77 @@ document author never supplies or sees them as a required input.
 Classify each reachable page before claim:
 
 - `modify`: code or design work is required; include it in the flow.
+- `context`: its exact mapped business/design data is required to understand the
+  flow, but this run does not change or claim the row.
 - `navigate-only`: navigation targets an already-satisfied page; exclude it from
   claim, status changes, worker nodes, and terminal writeback.
+
+Only `modify` rows must have the selected role status `ready`. Preserve an empty or
+otherwise non-applicable selected-role status on `context` and `navigate-only`
+rows; queue state is not business evidence and must not block read-only context.
 
 If a `review` or `done` page must change, return `needs-reopen` and require a user
 to set it to `ready`. Never reopen it silently. If any member is already `doing`,
 block without mutation. Non-empty member PRs must be empty or all identical;
 different PRs are `blocked/pr-conflict`.
 
-## Lossless input envelopes
+## ICP source bundle
+
+Persist the exact connector rows as the raw-rows object described below. Create a
+separate analysis document with no project, component, path, queue, requirement,
+or acceptance decisions:
+
+First call `inspect_title_catalog`. The analysis envelope is
+`iole.source-analysis-input.v2`: for every included row it lists every
+mapping-declared ICP business column in original order with the SHA-256 of the exact cell
+string, exact-span `references`, exact-span `dismissals`, and `change_scope`.
+References use unique IDs and one closed kind from
+`navigation|modal|component|data|reference`. The accompanying
+`iole.source-closure-review.v1` binds the analysis hash and title-catalog digest,
+reviews every field, and passes the cross-row closure gate. An exact catalog-title
+occurrence without a covering reference or dismissal is invalid. Semantic
+references that do not quote a title still require an exact evidence span and a
+unique catalog target. Legacy source-analysis v1 is not accepted.
+
+Run:
+
+```sh
+python3 ~/.agents/skills/iole/scripts/iole_flow_contract_v2.py \
+  build-source-bundle --raw-rows /absolute/raw-rows.json \
+  --title-catalog /absolute/title-catalog.json \
+  --analysis /absolute/source-analysis.json \
+  --closure-review /absolute/source-closure-review.json \
+  --mapping /absolute/role-mapping-v2.json > /absolute/source-bundle.json
+```
+
+Require `iole.flow-source-bundle.v2`. The complete inspected row remains in the
+raw input evidence. The bundle declares one ordered `row_data_columns` set derived
+from the selected mapping's ICP source fields; every member carries exactly that
+set in `row_data`, one deterministic `iole.sheet-member-contract.v2` projection,
+and the hash-bound `source_closure` used to prove membership completeness. For
+every declared column, copy a non-empty string exactly and represent an exactly
+empty value as JSON `null`. Missing declared columns and `""` placeholders are
+invalid. Connector columns not declared as ICP inputs remain outside the handoff,
+its digest, and its semantic reverse audit. Queue/PR/lease/error columns remain
+IOLE orchestration evidence only. `design_refs` is an ordered,
+deterministic projection of every URL in the exact design cell; the original cell
+remains authoritative in `source_contract.design_ref`. `relations` contains the
+closed directed title graph derived from the normalized interaction copies. Cycles
+are valid source relationships. The bundle contains no component decisions,
+project inventory, ownership paths, claim guards, leases, PRs, or error cells.
+
+Pass the bundle unchanged to ICP. IOLE must not infer visual Blocks, components,
+props, slots, variants, states, or events. Empty mapped business cells are valid:
+ICP may infer visible semantics from verified designs or omit unsupported behavior,
+but neither stage may invent an API or invisible interaction.
+
+## Legacy execution input envelopes
+
+The following `flow-analysis-input.v1`/`flow-plan-input.v3` envelope remains only
+for existing execution/recovery paths. A new ICP component-design handoff uses the
+source bundle above. Component decisions and ownership paths for a future new
+execution path must come from ICP's verified component/implementation contracts,
+not from IOLE source analysis.
 
 `build-input` has two separate JSON inputs. Do not wrap the raw rows in a
 `kind`/`rows` document. The raw-rows file is a JSON object whose keys are the
@@ -68,9 +130,12 @@ the complete, unchanged row objects returned for those titles:
 ```
 
 The field names above come from the selected `iole.role-mapping.v2`; a different
-mapping means using that mapping's exact field names. Preserve additional
-connector-returned columns too. Every mapped value must remain a JSON string,
-including empty cells. For an aliased source such as `页面路由`/`Route`, include
+mapping means using that mapping's exact field names. The raw inspection file still
+preserves every connector-returned column and value. `build-source-bundle` filters
+that evidence to the mapping-declared `row_data_columns`, then changes only exact
+`""` to JSON `null`. Additional unowned columns do not enter ICP or block closure.
+For an aliased source such as
+`页面路由`/`Route`, include
 exactly the one alias that existed in the inspected row. The top-level key must
 equal the row's mapped title after Unicode NFC and surrounding-whitespace
 normalization; never repair the row by changing either value.

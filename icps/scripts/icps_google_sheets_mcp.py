@@ -121,6 +121,29 @@ class GoogleSheetStore:
             matches[cell_value] = row_number
         return matches
 
+    def list_row_ids(
+        self,
+        spreadsheet_id: str,
+        sheet_name: str,
+        column: str,
+    ) -> list[str]:
+        headers = self._headers(spreadsheet_id, sheet_name)
+        try:
+            column_number = headers.index(column) + 1
+        except ValueError as exc:
+            raise ValueError(f"missing sheet columns: {column}") from exc
+        column_name = column_letter(column_number)
+        values = self._values(
+            spreadsheet_id,
+            f"{quote_sheet_name(sheet_name)}!{column_name}2:{column_name}",
+        )
+        titles: list[str] = []
+        for source_values in values:
+            value = "" if not source_values else str(source_values[0]).strip()
+            if value:
+                titles.append(value)
+        return titles
+
     def read_row(
         self,
         spreadsheet_id: str,
@@ -472,6 +495,39 @@ def inspect_ready_flow_root(
         done_value,
     )
     return build_flow_queue().inspect_ready_root(spreadsheet_id, sheet_name, mapping)
+
+
+@mcp.tool()
+def inspect_title_catalog(
+    spreadsheet_id: str,
+    sheet_name: str,
+    row_id_column: str,
+    status_column: str,
+    lease_token_column: str,
+    lease_until_column: str,
+    pr_url_column: str,
+    last_error_column: str,
+    ready_value: str = "ready",
+    doing_value: str = "doing",
+    review_value: str = "review",
+    done_value: str = "done",
+) -> dict[str, object]:
+    """Read the complete normalized title column without reading unrelated rows."""
+    mapping = flow_mapping_from_arguments(
+        row_id_column,
+        status_column,
+        lease_token_column,
+        lease_until_column,
+        pr_url_column,
+        last_error_column,
+        ready_value,
+        doing_value,
+        review_value,
+        done_value,
+    )
+    return build_flow_queue().inspect_title_catalog(
+        spreadsheet_id, sheet_name, mapping
+    )
 
 
 @mcp.tool()

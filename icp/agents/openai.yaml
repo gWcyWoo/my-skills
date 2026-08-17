@@ -1,4 +1,4 @@
 interface:
   display_name: "ICP"
-  short_description: "Extract design evidence into exact semantic contracts"
-  default_prompt: "Use $icp to extract a design into a source-bound semantic contract."
+  short_description: "Extract designs and lock component semantics"
+  default_prompt: "Use $icp to extract verified design evidence, seal page-local component facts, and lock an evidence-bound group component system without implementing components."

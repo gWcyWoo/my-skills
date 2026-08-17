@@ -50,6 +50,18 @@ class MemoryFlowSheetStore:
             if row.values.get(column) in requested
         }
 
+    def list_row_ids(
+        self,
+        spreadsheet_id: str,
+        sheet_name: str,
+        column: str,
+    ) -> list[str]:
+        return [
+            str(row.values.get(column)).strip()
+            for row in self.rows
+            if str(row.values.get(column, "")).strip()
+        ]
+
     def read_rows(
         self,
         spreadsheet_id: str,
@@ -672,6 +684,34 @@ class AtomicSheetFlowQueueTests(unittest.TestCase):
         self.assertEqual(result["row_number"], 2)
         self.assertEqual(store.batch_updates, [])
         self.assertEqual(store.rows[0].values["frontend status"], "ready")
+
+    def test_inspects_the_complete_title_catalog_without_reading_row_contents(self) -> None:
+        title_mapping = FlowQueueMapping(
+            row_id="标题",
+            status="frontend status",
+            lease_token="frontend lease_token",
+            lease_until="frontend lease_until",
+            pr_url="frontend pr",
+            last_error="frontend last_error",
+            ready="ready",
+            doing="doing",
+            review="review",
+            done="done",
+        )
+        store = MemoryFlowSheetStore(ready_rows())
+        with tempfile.TemporaryDirectory() as lock_directory:
+            queue = AtomicSheetFlowQueue(store=store, lock_root=Path(lock_directory))
+            result = queue.inspect_title_catalog("book", "Tasks", title_mapping)
+
+        self.assertEqual(result["kind"], "icps.flow-title-catalog.v1")
+        self.assertEqual(result["spreadsheet_id"], "book")
+        self.assertEqual(result["sheet_name"], "Tasks")
+        self.assertEqual(result["row_id_column"], "标题")
+        self.assertEqual(
+            result["titles"], ["申请首页", "职业信息页", "申请结果页"]
+        )
+        self.assertEqual(len(result["catalog_digest"]), 64)
+        self.assertEqual(store.batch_updates, [])
 
     def test_inspects_only_declared_child_identities_without_claiming_them(self) -> None:
         rows = ready_rows()

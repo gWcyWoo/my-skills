@@ -15,6 +15,7 @@ DEFAULT_MAPPING = Path(__file__).parents[1] / "references" / "role-mapping-v2.js
 ICP_SKILL_PATH = "~/.agents/skills/icp/SKILL.md"
 FLOW_CONNECTOR_OPERATIONS = [
     "inspect_ready_flow_root",
+    "inspect_title_catalog",
     "inspect_flow_rows",
     "claim_flow_rows",
     "release_flow_claim",
@@ -37,6 +38,7 @@ PLATFORM_PROFILES = {
     "vue": "vue-vite",
 }
 TITLE_REFERENCE = re.compile(r"→[ \t]*「(?P<title>[^」\r\n]+)」")
+DESIGN_URL = re.compile(r"https?://[^\s<>\"']+")
 REVIEW_LINE = re.compile(r"^\s*(?P<number>[1-9][0-9]*)\.\s*(?P<text>\S(?:.*\S)?)\s*$")
 SHA256_HEX = re.compile(r"[0-9a-f]{64}")
 
@@ -189,6 +191,62 @@ def exact_cell(row: dict[str, object], source: str, label: str) -> str:
     return value
 
 
+def nullable_cell(row: dict[str, object], source: str, label: str) -> str | None:
+    value = exact_cell(row, source, label)
+    return None if value == "" else value
+
+
+def declared_source_columns(mapping: dict[str, object]) -> set[str]:
+    common = mapping["common"]
+    job = mapping["job"]
+    assert isinstance(common, dict) and isinstance(job, dict)
+    page = job["page"]
+    assert isinstance(page, dict)
+    columns: set[str] = {str(common["row_id"]), str(job["design_ref"])}
+
+    def add_source(source: object) -> None:
+        if isinstance(source, str):
+            columns.add(source)
+            return
+        if isinstance(source, list):
+            columns.update(str(alias) for alias in source)
+
+    add_source(page["route"])
+    add_source(page["interaction"])
+    for section_name in ("requirement_sections", "acceptance_sections"):
+        sections = job[section_name]
+        assert isinstance(sections, list)
+        for section in sections:
+            assert isinstance(section, dict)
+            add_source(section["source"])
+    return columns
+
+
+def handoff_columns_for_raw_row(
+    raw_row: dict[str, object], mapping: dict[str, object]
+) -> list[str]:
+    declared = declared_source_columns(mapping)
+    return [column for column in raw_row if column in declared]
+
+
+def complete_nullable_row(
+    raw_row: dict[str, object], columns: list[str]
+) -> dict[str, str | None]:
+    if not columns:
+        raise ValueError("declared handoff columns are required")
+    normalized: dict[str, str | None] = {}
+    for column in columns:
+        if not isinstance(column, str) or not column:
+            raise ValueError("raw Sheet column name is invalid")
+        if column not in raw_row:
+            raise ValueError(f"declared handoff column is missing: {column}")
+        value = raw_row[column]
+        if not isinstance(value, str):
+            raise ValueError(f"raw Sheet field must be a string: {column}")
+        normalized[column] = None if value == "" else value
+    return normalized
+
+
 def resolve_exact_source(row: dict[str, object], source: object, label: str) -> str:
     if isinstance(source, str):
         return exact_cell(row, source, label)
@@ -216,6 +274,23 @@ def exact_sections(
         if not isinstance(source, str) or not isinstance(label, str):
             raise ValueError("mapping section fields are invalid")
         result.append({label_key: label, "value": exact_cell(row, source, label)})
+    return result
+
+
+def nullable_sections(
+    row: dict[str, object], sections: object, label_key: str
+) -> list[dict[str, object]]:
+    if not isinstance(sections, list):
+        raise ValueError("mapping sections are invalid")
+    result: list[dict[str, object]] = []
+    for section in sections:
+        if not isinstance(section, dict):
+            raise ValueError("mapping section is invalid")
+        source = section.get("source")
+        label = section.get(label_key)
+        if not isinstance(source, str) or not isinstance(label, str):
+            raise ValueError("mapping section fields are invalid")
+        result.append({label_key: label, "value": nullable_cell(row, source, label)})
     return result
 
 
@@ -317,6 +392,594 @@ def source_contract_from_raw(
     }
     contract["contract_digest"] = source_contract_digest(contract)
     return validate_source_contract(contract)
+
+
+def validate_nullable_source_contract(contract: object) -> dict[str, object]:
+    expected_keys = {
+        "acceptance_sections",
+        "contract_digest",
+        "design_ref",
+        "interaction",
+        "kind",
+        "requirement_sections",
+        "route",
+        "schema_version",
+        "title",
+    }
+    if not isinstance(contract, dict) or set(contract) != expected_keys:
+        raise ValueError("nullable Sheet source contract is invalid")
+    if (
+        contract["kind"] != "iole.sheet-member-contract.v2"
+        or contract["schema_version"] != 2
+    ):
+        raise ValueError("nullable Sheet source contract version is invalid")
+    if not isinstance(contract["title"], str) or not contract["title"]:
+        raise ValueError("nullable Sheet source contract title is invalid")
+    for field in ("route", "design_ref", "interaction"):
+        if contract[field] is not None and (
+            not isinstance(contract[field], str) or contract[field] == ""
+        ):
+            raise ValueError(f"nullable Sheet source contract {field} is invalid")
+    for field, label_key in (
+        ("requirement_sections", "label"),
+        ("acceptance_sections", "prefix"),
+    ):
+        sections = contract[field]
+        if not isinstance(sections, list) or any(
+            not isinstance(section, dict)
+            or set(section) != {label_key, "value"}
+            or not isinstance(section[label_key], str)
+            or not section[label_key]
+            or (
+                section["value"] is not None
+                and (
+                    not isinstance(section["value"], str)
+                    or section["value"] == ""
+                )
+            )
+            for section in sections
+        ):
+            raise ValueError(f"nullable Sheet source contract {field} is invalid")
+    digest = contract["contract_digest"]
+    if (
+        not isinstance(digest, str)
+        or SHA256_HEX.fullmatch(digest) is None
+        or digest != source_contract_digest(contract)
+    ):
+        raise ValueError("nullable Sheet source contract digest mismatch")
+    return contract
+
+
+def nullable_source_contract_from_raw(
+    raw_row: dict[str, object], job_mapping: dict[str, object]
+) -> dict[str, object]:
+    page_mapping = job_mapping["page"]
+    assert isinstance(page_mapping, dict)
+    route_source = page_mapping["route"]
+    exact_route = resolve_exact_source(raw_row, route_source, "route")
+    contract: dict[str, object] = {
+        "kind": "iole.sheet-member-contract.v2",
+        "schema_version": 2,
+        "title": resolve_exact_source(raw_row, page_mapping["title"], "title"),
+        "route": None if exact_route == "" else exact_route,
+        "design_ref": nullable_cell(
+            raw_row, str(job_mapping["design_ref"]), "design_ref"
+        ),
+        "interaction": nullable_cell(
+            raw_row, str(page_mapping["interaction"]), "interaction"
+        ),
+        "requirement_sections": nullable_sections(
+            raw_row, job_mapping["requirement_sections"], "label"
+        ),
+        "acceptance_sections": nullable_sections(
+            raw_row, job_mapping["acceptance_sections"], "prefix"
+        ),
+    }
+    contract["contract_digest"] = source_contract_digest(contract)
+    return validate_nullable_source_contract(contract)
+
+
+def extract_design_refs(value: str) -> list[dict[str, object]]:
+    references: list[dict[str, object]] = []
+    for match in DESIGN_URL.finditer(value):
+        line_start = value.rfind("\n", 0, match.start()) + 1
+        label = value[line_start : match.start()].strip().rstrip("：:-— ")
+        url = match.group(0).rstrip("，,。；;）)")
+        references.append(
+            {
+                "ordinal": len(references) + 1,
+                "label": label,
+                "url": url,
+            }
+        )
+    return references
+
+
+def validate_title_catalog(
+    value: object,
+    *,
+    source_id: str,
+    row_id_column: str,
+) -> dict[str, object]:
+    if not isinstance(value, dict) or set(value) != {
+        "catalog_digest",
+        "kind",
+        "row_id_column",
+        "schema_version",
+        "sheet_name",
+        "spreadsheet_id",
+        "titles",
+    }:
+        raise ValueError("flow title catalog is invalid")
+    if (
+        value.get("kind") != "icps.flow-title-catalog.v1"
+        or value.get("schema_version") != 1
+        or value.get("row_id_column") != row_id_column
+    ):
+        raise ValueError("flow title catalog version or row identity is invalid")
+    spreadsheet_id = value.get("spreadsheet_id")
+    sheet_name = value.get("sheet_name")
+    titles = value.get("titles")
+    if (
+        not isinstance(spreadsheet_id, str)
+        or not spreadsheet_id
+        or not isinstance(sheet_name, str)
+        or not sheet_name
+        or not isinstance(titles, list)
+        or not titles
+    ):
+        raise ValueError("flow title catalog identity is invalid")
+    normalized_titles = [normalize_title(title) for title in titles]
+    if normalized_titles != titles or len(titles) != len(set(titles)):
+        raise ValueError("flow title catalog contains duplicate or non-canonical titles")
+    payload = {
+        "spreadsheet_id": spreadsheet_id,
+        "sheet_name": sheet_name,
+        "row_id_column": row_id_column,
+        "titles": titles,
+    }
+    if value.get("catalog_digest") != hashlib.sha256(canonical_bytes(payload)).hexdigest():
+        raise ValueError("flow title catalog digest mismatch")
+    expected_source_id = "google-sheets:" + hashlib.sha256(
+        canonical_bytes({"sheet_name": sheet_name, "spreadsheet_id": spreadsheet_id})
+    ).hexdigest()
+    if source_id != expected_source_id:
+        raise ValueError("flow title catalog and source identity disagree")
+    return value
+
+
+def validate_source_closure(
+    *,
+    raw_rows: dict[str, object],
+    analysis: dict[str, object],
+    catalog_value: object,
+    review_value: object,
+    mapping: dict[str, object],
+) -> tuple[list[dict[str, object]], dict[str, object]]:
+    if set(analysis) != {
+        "kind",
+        "root_title",
+        "role",
+        "rows",
+        "schema_version",
+        "source_id",
+    }:
+        raise ValueError("source analysis v2 fields are invalid")
+    source_id = analysis.get("source_id")
+    if not isinstance(source_id, str) or SOURCE_ID.fullmatch(source_id) is None:
+        raise ValueError("flow source identity is invalid")
+    common = mapping["common"]
+    assert isinstance(common, dict)
+    row_id_column = str(common["row_id"])
+    catalog = validate_title_catalog(
+        catalog_value, source_id=source_id, row_id_column=row_id_column
+    )
+    catalog_titles = catalog["titles"]
+    assert isinstance(catalog_titles, list)
+    analysis_rows = analysis.get("rows")
+    if not isinstance(analysis_rows, list) or not analysis_rows:
+        raise ValueError("source analysis rows are required")
+    declared_columns = declared_source_columns(mapping)
+    common_rows: list[dict[str, object]] = []
+    field_projection: list[dict[str, str]] = []
+    reference_ids: set[str] = set()
+
+    for row_value in analysis_rows:
+        if not isinstance(row_value, dict) or set(row_value) != {
+            "change_scope",
+            "fields",
+            "title",
+        }:
+            raise ValueError("source analysis v2 row is invalid")
+        title = normalize_title(row_value["title"])
+        raw_row = raw_rows.get(title)
+        if not isinstance(raw_row, dict):
+            raise ValueError(f"raw Sheet row is missing: {title}")
+        fields = row_value.get("fields")
+        if not isinstance(fields, list):
+            raise ValueError(f"source analysis fields are invalid: {title}")
+        expected_columns = [
+            column
+            for column in raw_row
+            if column in declared_columns and column != row_id_column
+        ]
+        actual_columns = [
+            field.get("column") if isinstance(field, dict) else None for field in fields
+        ]
+        if actual_columns != expected_columns:
+            raise ValueError(f"source analysis does not cover every business column: {title}")
+        normalized_markers: list[str] = []
+        for field in fields:
+            assert isinstance(field, dict)
+            if set(field) != {
+                "column",
+                "dismissals",
+                "references",
+                "source_sha256",
+            }:
+                raise ValueError("source analysis field is invalid")
+            column = field["column"]
+            assert isinstance(column, str)
+            source_text = raw_row.get(column)
+            if not isinstance(source_text, str):
+                raise ValueError(f"raw Sheet field must be a string: {column}")
+            source_sha = hashlib.sha256(source_text.encode("utf-8")).hexdigest()
+            if field.get("source_sha256") != source_sha:
+                raise ValueError(f"source analysis field hash mismatch: {title}/{column}")
+            references = field.get("references")
+            dismissals = field.get("dismissals")
+            if not isinstance(references, list) or not isinstance(dismissals, list):
+                raise ValueError("source references and dismissals must be arrays")
+            normalized_references: list[dict[str, object]] = []
+            normalized_dismissals: list[dict[str, object]] = []
+            for reference in references:
+                if not isinstance(reference, dict) or set(reference) != {
+                    "end",
+                    "quote",
+                    "reference_id",
+                    "relation_kind",
+                    "start",
+                    "target_title",
+                }:
+                    raise ValueError("source relation evidence is invalid")
+                reference_id = reference["reference_id"]
+                start = reference["start"]
+                end = reference["end"]
+                quote = reference["quote"]
+                target_title = normalize_title(reference["target_title"])
+                if (
+                    not isinstance(reference_id, str)
+                    or not reference_id
+                    or reference_id in reference_ids
+                    or type(start) is not int
+                    or type(end) is not int
+                    or start < 0
+                    or end <= start
+                    or end > len(source_text)
+                    or not isinstance(quote, str)
+                    or source_text[start:end] != quote
+                    or target_title not in catalog_titles
+                    or reference.get("relation_kind")
+                    not in {"navigation", "modal", "component", "data", "reference"}
+                ):
+                    raise ValueError("source relation evidence is invalid")
+                reference_ids.add(reference_id)
+                normalized_references.append(reference)
+                normalized_markers.append(f"→「{target_title}」")
+            for dismissal in dismissals:
+                if not isinstance(dismissal, dict) or set(dismissal) != {
+                    "candidate_title",
+                    "end",
+                    "quote",
+                    "rationale",
+                    "start",
+                }:
+                    raise ValueError("source title dismissal is invalid")
+                start = dismissal["start"]
+                end = dismissal["end"]
+                quote = dismissal["quote"]
+                candidate_title = normalize_title(dismissal["candidate_title"])
+                rationale = dismissal["rationale"]
+                if (
+                    type(start) is not int
+                    or type(end) is not int
+                    or start < 0
+                    or end <= start
+                    or end > len(source_text)
+                    or not isinstance(quote, str)
+                    or source_text[start:end] != quote
+                    or candidate_title not in catalog_titles
+                    or not isinstance(rationale, str)
+                    or not rationale.strip()
+                ):
+                    raise ValueError("source title dismissal is invalid")
+                normalized_dismissals.append(dismissal)
+            for candidate_title in catalog_titles:
+                if candidate_title == title:
+                    continue
+                occurrence = source_text.find(candidate_title)
+                while occurrence >= 0:
+                    occurrence_end = occurrence + len(candidate_title)
+                    resolved = any(
+                        ref["target_title"] == candidate_title
+                        and ref["start"] <= occurrence
+                        and ref["end"] >= occurrence_end
+                        for ref in normalized_references
+                    ) or any(
+                        dismissal["candidate_title"] == candidate_title
+                        and dismissal["start"] <= occurrence
+                        and dismissal["end"] >= occurrence_end
+                        for dismissal in normalized_dismissals
+                    )
+                    if not resolved:
+                        raise ValueError(
+                            f"unresolved title mention: {title}/{column}/{candidate_title}"
+                        )
+                    occurrence = source_text.find(candidate_title, occurrence + 1)
+            field_projection.append(
+                {"title": title, "column": column, "source_sha256": source_sha}
+            )
+        common_rows.append(
+            {
+                "title": title,
+                "change_scope": row_value["change_scope"],
+                "normalized_interaction": " ".join(normalized_markers),
+            }
+        )
+
+    if not isinstance(review_value, dict) or set(review_value) != {
+        "analysis_sha256",
+        "cross_review",
+        "decision",
+        "field_reviews",
+        "kind",
+        "schema_version",
+        "title_catalog_digest",
+    }:
+        raise ValueError("source closure review is invalid")
+    analysis_sha = hashlib.sha256(canonical_bytes(analysis)).hexdigest()
+    if (
+        review_value.get("kind") != "iole.source-closure-review.v1"
+        or review_value.get("schema_version") != 1
+        or review_value.get("analysis_sha256") != analysis_sha
+        or review_value.get("title_catalog_digest") != catalog.get("catalog_digest")
+        or review_value.get("decision") != "pass"
+    ):
+        raise ValueError("source closure review is stale or did not pass")
+    field_reviews = review_value.get("field_reviews")
+    if not isinstance(field_reviews, list) or len(field_reviews) != len(field_projection):
+        raise ValueError("source closure review does not cover every business field")
+    for expected, actual in zip(field_projection, field_reviews, strict=True):
+        if not isinstance(actual, dict) or set(actual) != {
+            "all_dependencies_identified",
+            "column",
+            "dismissals_correct",
+            "evidence",
+            "issues",
+            "reference_targets_correct",
+            "source_sha256",
+            "title",
+        }:
+            raise ValueError("source closure field review is invalid")
+        if any(actual.get(key) != value for key, value in expected.items()):
+            raise ValueError("source closure field review targets another field")
+        evidence = actual.get("evidence")
+        if (
+            actual.get("all_dependencies_identified") is not True
+            or actual.get("reference_targets_correct") is not True
+            or actual.get("dismissals_correct") is not True
+            or not isinstance(evidence, list)
+            or not evidence
+            or any(not isinstance(item, str) or not item.strip() for item in evidence)
+            or actual.get("issues") != []
+        ):
+            raise ValueError("source closure field review did not pass")
+    cross = review_value.get("cross_review")
+    if not isinstance(cross, dict) or set(cross) != {
+        "every_business_field_reviewed",
+        "evidence",
+        "issues",
+        "no_ambiguous_target",
+        "no_unresolved_reference",
+    }:
+        raise ValueError("source closure cross review is invalid")
+    cross_evidence = cross.get("evidence")
+    if (
+        cross.get("every_business_field_reviewed") is not True
+        or cross.get("no_unresolved_reference") is not True
+        or cross.get("no_ambiguous_target") is not True
+        or not isinstance(cross_evidence, list)
+        or not cross_evidence
+        or any(not isinstance(item, str) or not item.strip() for item in cross_evidence)
+        or cross.get("issues") != []
+    ):
+        raise ValueError("source closure cross review did not pass")
+    closure = {
+        "title_catalog": catalog,
+        "analysis": analysis,
+        "review": review_value,
+        "analysis_sha256": analysis_sha,
+        "review_sha256": hashlib.sha256(canonical_bytes(review_value)).hexdigest(),
+    }
+    closure["closure_digest"] = hashlib.sha256(canonical_bytes(closure)).hexdigest()
+    return common_rows, closure
+
+
+def source_bundle_digest(bundle: dict[str, object]) -> str:
+    payload = {key: value for key, value in bundle.items() if key != "bundle_digest"}
+    return hashlib.sha256(canonical_bytes(payload)).hexdigest()
+
+
+def build_source_bundle(
+    raw_rows_path: Path,
+    analysis_path: Path,
+    mapping_path: Path,
+    title_catalog_path: Path | None = None,
+    closure_review_path: Path | None = None,
+) -> dict[str, object]:
+    raw_rows = load_input_document(raw_rows_path, "raw Sheet rows")
+    analysis = load_input_document(analysis_path, "source analysis")
+    mapping = load_mapping_v2(mapping_path)
+    analysis_version = (analysis.get("kind"), analysis.get("schema_version"))
+    source_closure: dict[str, object] | None = None
+    if analysis_version == ("iole.source-analysis-input.v2", 2):
+        if title_catalog_path is None or closure_review_path is None:
+            raise ValueError("source analysis v2 requires title catalog and closure review")
+        title_catalog_value = load_input_document(
+            title_catalog_path, "flow title catalog"
+        )
+        closure_review_value = load_input_document(
+            closure_review_path, "source closure review"
+        )
+        analysis_rows, source_closure = validate_source_closure(
+            raw_rows=raw_rows,
+            analysis=analysis,
+            catalog_value=title_catalog_value,
+            review_value=closure_review_value,
+            mapping=mapping,
+        )
+    else:
+        raise ValueError("source closure requires iole.source-analysis-input.v2")
+    source_id = analysis.get("source_id")
+    if not isinstance(source_id, str) or SOURCE_ID.fullmatch(source_id) is None:
+        raise ValueError("flow source identity is invalid")
+    if analysis.get("role") != "client":
+        raise ValueError("source analysis role must be client")
+    roles = mapping["roles"]
+    job_mapping = mapping["job"]
+    assert isinstance(roles, dict) and isinstance(job_mapping, dict)
+    client = roles["client"]
+    assert isinstance(client, dict)
+    queue = client["queue"]
+    page_mapping = job_mapping["page"]
+    assert isinstance(queue, dict) and isinstance(page_mapping, dict)
+    ready_status = queue["status_values"]["ready"]
+
+    indexed_raw_rows: dict[str, dict[str, object]] = {}
+    for external_title, raw_row in raw_rows.items():
+        if not isinstance(external_title, str) or not isinstance(raw_row, dict):
+            raise ValueError("raw Sheet rows are invalid")
+        exact_title = resolve_exact_source(raw_row, page_mapping["title"], "title")
+        title = normalize_title(exact_title)
+        if normalize_title(external_title) != title or title in indexed_raw_rows:
+            raise ValueError("raw Sheet row identity is invalid")
+        indexed_raw_rows[title] = raw_row
+
+    first_raw_row = next(iter(indexed_raw_rows.values()), None)
+    if first_raw_row is None:
+        raise ValueError("raw Sheet rows are required")
+    row_data_columns = handoff_columns_for_raw_row(first_raw_row, mapping)
+    for title, raw_row in indexed_raw_rows.items():
+        if handoff_columns_for_raw_row(raw_row, mapping) != row_data_columns:
+            raise ValueError(f"declared handoff columns differ between rows: {title}")
+
+    members: list[dict[str, object]] = []
+    member_titles: set[str] = set()
+    normalized_by_title: dict[str, str] = {}
+    for row_value in analysis_rows:
+        if not isinstance(row_value, dict) or set(row_value) != {
+            "change_scope",
+            "normalized_interaction",
+            "title",
+        }:
+            raise ValueError("source analysis row is invalid")
+        title = normalize_title(row_value["title"])
+        if title in member_titles:
+            raise ValueError(f"duplicate page title: {title}")
+        member_titles.add(title)
+        raw_row = indexed_raw_rows.get(title)
+        if raw_row is None:
+            raise ValueError(f"raw Sheet row is missing: {title}")
+        change_scope = row_value["change_scope"]
+        if change_scope not in {"modify", "context", "navigate-only"}:
+            raise ValueError("page change scope is invalid")
+        normalized_interaction = row_value["normalized_interaction"]
+        if not isinstance(normalized_interaction, str):
+            raise ValueError("normalized interaction must be a string")
+        normalized_by_title[title] = normalized_interaction
+
+        row_data = complete_nullable_row(raw_row, row_data_columns)
+        source_contract = nullable_source_contract_from_raw(raw_row, job_mapping)
+        raw_queue_status = exact_cell(raw_row, str(queue["status"]), "status")
+        queue_status = None if raw_queue_status == "" else raw_queue_status
+        mode: str | None = None
+        latest_review: dict[str, object] | None = None
+        if change_scope == "modify":
+            if queue_status != ready_status:
+                raise ValueError(f"modify page is not ready: {title}")
+            pr_url = exact_cell(raw_row, str(queue["pr_url"]), "pr_url").strip()
+            reviews = exact_cell(raw_row, str(queue["reviews"]), "reviews")
+            latest_review = parse_latest_review(reviews)
+            if bool(pr_url) != (latest_review is not None):
+                raise ValueError(
+                    "review and PR URL must either both exist or both be empty"
+                )
+            if pr_url:
+                parsed_pr = urlparse(pr_url)
+                if parsed_pr.scheme not in {"http", "https"} or not parsed_pr.hostname:
+                    raise ValueError(f"page PR URL is invalid: {title}")
+            mode = "revise" if latest_review is not None else "implement"
+
+        members.append(
+            {
+                "title": title,
+                "change_scope": change_scope,
+                "normalized_interaction": normalized_interaction,
+                "queue_status": queue_status,
+                "mode": mode,
+                "review": latest_review,
+                "design_refs": extract_design_refs(source_contract["design_ref"] or ""),
+                "row_data": row_data,
+                "source_contract": source_contract,
+            }
+        )
+
+    if set(indexed_raw_rows) != member_titles:
+        raise ValueError("raw Sheet rows and source analysis rows do not match")
+    root_title = normalize_title(analysis.get("root_title"))
+    if root_title not in member_titles:
+        raise ValueError("root page is missing")
+
+    relations: list[dict[str, str]] = []
+    children: dict[str, list[str]] = {title: [] for title in member_titles}
+    for title, normalized_interaction in normalized_by_title.items():
+        for reference in parse_references(normalized_interaction):
+            target_title = reference["title"]
+            if target_title not in member_titles:
+                raise ValueError(f"referenced page is missing: {target_title}")
+            relation = {"from_title": title, "to_title": target_title}
+            if relation not in relations:
+                relations.append(relation)
+                children[title].append(target_title)
+
+    reachable: set[str] = set()
+    pending = [root_title]
+    while pending:
+        title = pending.pop()
+        if title in reachable:
+            continue
+        reachable.add(title)
+        pending.extend(children[title])
+    if reachable != member_titles:
+        raise ValueError(
+            f"source analysis contains unrelated rows: {sorted(member_titles - reachable)}"
+        )
+
+    bundle: dict[str, object] = {
+        "kind": "iole.flow-source-bundle.v2",
+        "schema_version": 2,
+        "source_id": source_id,
+        "role": "client",
+        "root_title": root_title,
+        "row_data_columns": row_data_columns,
+        "members": members,
+        "relations": relations,
+        "mapping_digest": hashlib.sha256(mapping_path.read_bytes()).hexdigest(),
+    }
+    if source_closure is not None:
+        bundle["source_closure"] = source_closure
+    bundle["bundle_digest"] = source_bundle_digest(bundle)
+    return bundle
 
 
 def verify_flow_input_against_raw(
@@ -1433,6 +2096,12 @@ def main(argv: list[str] | None = None) -> int:
     input_parser.add_argument("--raw-rows", required=True, type=Path)
     input_parser.add_argument("--analysis", required=True, type=Path)
     input_parser.add_argument("--mapping", type=Path, default=DEFAULT_MAPPING)
+    source_bundle_parser = subparsers.add_parser("build-source-bundle")
+    source_bundle_parser.add_argument("--raw-rows", required=True, type=Path)
+    source_bundle_parser.add_argument("--title-catalog", type=Path)
+    source_bundle_parser.add_argument("--analysis", required=True, type=Path)
+    source_bundle_parser.add_argument("--closure-review", type=Path)
+    source_bundle_parser.add_argument("--mapping", type=Path, default=DEFAULT_MAPPING)
     plan_parser = subparsers.add_parser("build-plan")
     plan_parser.add_argument("--input", required=True, type=Path)
     plan_parser.add_argument("--raw-rows", type=Path)
@@ -1477,6 +2146,14 @@ def main(argv: list[str] | None = None) -> int:
                 arguments.raw_rows,
                 arguments.analysis,
                 arguments.mapping,
+            )
+        elif arguments.command == "build-source-bundle":
+            result = build_source_bundle(
+                arguments.raw_rows,
+                arguments.analysis,
+                arguments.mapping,
+                arguments.title_catalog,
+                arguments.closure_review,
             )
         elif arguments.command == "extract-refs":
             result = extract_references(arguments.row)
