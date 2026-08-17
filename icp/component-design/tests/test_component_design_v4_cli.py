@@ -1328,6 +1328,13 @@ class ComponentDesignV4CliTest(unittest.TestCase):
                 for instance in lock["component_instances"]
             )
         )
+        block_bindings = read_json(
+            self.stage_dir / "block-component-bindings.json"
+        )
+        self.assertNotIn(
+            "Designless Context",
+            {item["member_title"] for item in block_bindings["bindings"]},
+        )
         self.assertNotIn(
             "Designless Context",
             [member["title"] for member in lock["context_members"]],
@@ -3765,7 +3772,7 @@ class ComponentDesignV4CliTest(unittest.TestCase):
         payload = json.loads(verified.stdout)
         self.assertEqual(payload["state"], "locked")
         lock = read_json(self.stage_dir / "component-lock.json")
-        self.assertEqual(lock["schema"], "icp.component-design.lock.v5")
+        self.assertEqual(lock["schema"], "icp.component-design.lock.v6")
         self.assertEqual(lock["stage_boundary"], "component-semantics-only")
         self.assertNotIn("business_rules", lock)
         self.assertNotIn("implementation", lock)
@@ -3797,10 +3804,94 @@ class ComponentDesignV4CliTest(unittest.TestCase):
             )
         )
         stage_result = read_json(self.stage_dir / "stage-result.json")
+        self.assertEqual(
+            stage_result["schema"], "icp.component-design.stage-result.v6"
+        )
         self.assertEqual(stage_result["status"], "complete")
+        self.assertEqual(
+            stage_result["artifacts"]["block_component_bindings"],
+            {
+                "path": "block-component-bindings.json",
+                "sha256": hashlib.sha256(
+                    (self.stage_dir / "block-component-bindings.json").read_bytes()
+                ).hexdigest(),
+            },
+        )
         repeated = self.verify()
         self.assertEqual(repeated.returncode, 0, repeated.stdout + repeated.stderr)
         self.assertTrue(json.loads(repeated.stdout)["resumed"])
+
+    def test_verify_binds_every_extract_block_to_its_final_component(self) -> None:
+        self.seal_all_pages()
+        recorded = self.record_abstraction(self.valid_abstraction_plan())
+        self.assertEqual(recorded.returncode, 0, recorded.stdout + recorded.stderr)
+
+        verified = self.verify()
+
+        self.assertEqual(verified.returncode, 0, verified.stdout + verified.stderr)
+        binding_path = self.stage_dir / "block-component-bindings.json"
+        self.assertTrue(binding_path.is_file())
+        bindings = read_json(binding_path)
+        catalog = read_json(self.stage_dir / "source-catalog.json")
+        lock = read_json(self.stage_dir / "component-lock.json")
+        expected_blocks = {
+            (design["design_name"], block["block_id"]): block
+            for design in catalog["designs"]
+            for block in design["blocks"]
+        }
+        actual_blocks = {
+            (item["design_name"], item["block"]["block_id"]): item["block"]
+            for item in bindings["bindings"]
+        }
+        self.assertEqual(actual_blocks, expected_blocks)
+        self.assertEqual(len(bindings["bindings"]), len(expected_blocks))
+        self.assertEqual(bindings["binding_count"], len(expected_blocks))
+        self.assertEqual(bindings["source_catalog_sha256"], lock["source_hashes"]["source_catalog_sha256"])
+        self.assertEqual(
+            lock["block_component_bindings"],
+            {
+                "path": "block-component-bindings.json",
+                "sha256": hashlib.sha256(binding_path.read_bytes()).hexdigest(),
+                "design_count": len(catalog["designs"]),
+                "binding_count": len(expected_blocks),
+            },
+        )
+        final_components = {
+            definition["component_id"] for definition in lock["component_definitions"]
+        }
+        for item in bindings["bindings"]:
+            self.assertIn(item["component_id"], final_components)
+            self.assertTrue(item["design_instance_id"])
+            self.assertTrue(item["semantic_component_instance_id"])
+            self.assertTrue(item["candidate_id"])
+        shared_shell_bindings = [
+            item
+            for item in bindings["bindings"]
+            if item["component_id"] == "shared-page-shell"
+        ]
+        self.assertEqual(len(shared_shell_bindings), 2)
+        self.assertEqual(
+            {item["design_name"] for item in shared_shell_bindings},
+            {"Design A", "Design B"},
+        )
+        self.assertEqual(
+            len({item["design_instance_id"] for item in shared_shell_bindings}), 2
+        )
+
+    def test_locked_block_component_bindings_cannot_be_changed(self) -> None:
+        self.seal_all_pages()
+        recorded = self.record_abstraction(self.valid_abstraction_plan())
+        self.assertEqual(recorded.returncode, 0, recorded.stdout + recorded.stderr)
+        self.assertEqual(self.verify().returncode, 0)
+        binding_path = self.stage_dir / "block-component-bindings.json"
+        bindings = read_json(binding_path)
+        bindings["bindings"][0]["component_id"] = "different-component"
+        write_json(binding_path, bindings)
+
+        repeated = self.verify()
+
+        self.assertNotEqual(repeated.returncode, 0)
+        self.assertIn("component_design_locked", repeated.stderr)
 
     def test_exact_business_source_may_legitimately_contain_todo_text(self) -> None:
         self.bundle_path = self.build_source_bundle(source_contains_todo=True)

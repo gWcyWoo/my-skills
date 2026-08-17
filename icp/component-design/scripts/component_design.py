@@ -26,6 +26,7 @@ MOBILE_COMPONENT_PATTERNS_PATH = (
     / "mobile-component-patterns.md"
 )
 MOBILE_COMPONENT_PATTERNS_STAGE_NAME = "mobile-component-patterns.md"
+BLOCK_COMPONENT_BINDINGS_STAGE_NAME = "block-component-bindings.json"
 COMPONENT_ID_RE = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
 SOURCE_AUTHORITY = {
     "business_source": "description_document",
@@ -1471,6 +1472,7 @@ def validate_project_catalog(value: object, project_root: Path) -> dict[str, Any
             if verified_lock.get("schema") not in {
                 "icp.component-design.lock.v4",
                 "icp.component-design.lock.v5",
+                "icp.component-design.lock.v6",
             }:
                 raise ContractError(
                     "historical_component_evidence",
@@ -3990,15 +3992,183 @@ def load_hashed_artifact(
     return require_dict(read_json(path), filename)
 
 
-def build_v5_lock(
+def build_block_component_bindings(
+    source_catalog: dict[str, Any],
+    page_compositions: list[dict[str, Any]],
+    component_definitions: list[dict[str, Any]],
+    component_instances: list[dict[str, Any]],
+    source_catalog_sha256: str,
+) -> dict[str, Any]:
+    """Join every verified extract Block to its final component ownership."""
+
+    component_ids = {
+        require_string(item.get("component_id"), "component definition ID")
+        for value in component_definitions
+        for item in [require_dict(value, "component definition")]
+    }
+    semantic_instance_by_candidate: dict[str, dict[str, Any]] = {}
+    for value in component_instances:
+        instance = require_dict(value, "component instance")
+        component_id = require_string(instance.get("component_id"), "component instance component ID")
+        if component_id not in component_ids:
+            raise ContractError(
+                "block_component_binding_coverage",
+                f"component instance references missing definition {component_id}",
+            )
+        for candidate_id in require_string_list(
+            instance.get("candidate_ids"), "component instance candidate IDs"
+        ):
+            if candidate_id in semantic_instance_by_candidate:
+                raise ContractError(
+                    "block_component_binding_coverage",
+                    f"candidate {candidate_id} has more than one semantic component instance",
+                )
+            semantic_instance_by_candidate[candidate_id] = instance
+
+    composition_by_design: dict[str, dict[str, Any]] = {}
+    owner_by_block: dict[tuple[str, str], dict[str, Any]] = {}
+    for value in page_compositions:
+        composition = require_dict(value, "final page composition")
+        design_name = require_string(composition.get("design_name"), "composition design name")
+        if design_name in composition_by_design:
+            raise ContractError(
+                "block_component_binding_coverage",
+                f"design {design_name} has more than one final composition",
+            )
+        composition_by_design[design_name] = composition
+        page_key = require_string(composition.get("page_key"), "composition page key")
+        member_title = require_string(
+            composition.get("member_title"), "composition member title"
+        )
+        for instance_value in require_list(
+            composition.get("instances"), "final composition instances"
+        ):
+            design_instance = require_dict(instance_value, "final composition instance")
+            candidate_id = require_string(
+                design_instance.get("candidate_id"), "composition candidate ID"
+            )
+            component_id = require_string(
+                design_instance.get("component_id"), "composition component ID"
+            )
+            semantic_instance = semantic_instance_by_candidate.get(candidate_id)
+            if semantic_instance is None:
+                raise ContractError(
+                    "block_component_binding_coverage",
+                    f"candidate {candidate_id} lacks a semantic component instance",
+                )
+            if (
+                semantic_instance.get("component_id") != component_id
+                or semantic_instance.get("page_key") != page_key
+                or semantic_instance.get("member_title") != member_title
+            ):
+                raise ContractError(
+                    "block_component_binding_coverage",
+                    f"candidate {candidate_id} disagrees with its final composition",
+                )
+            for block_id in require_string_list(
+                design_instance.get("source_block_ids"), "composition source Block IDs"
+            ):
+                key = (design_name, block_id)
+                if key in owner_by_block:
+                    raise ContractError(
+                        "block_component_binding_coverage",
+                        f"Block {design_name}/{block_id} has more than one component owner",
+                    )
+                owner_by_block[key] = {
+                    "page_key": page_key,
+                    "member_title": member_title,
+                    "design_instance_id": require_string(
+                        design_instance.get("instance_id"), "design instance ID"
+                    ),
+                    "semantic_component_instance_id": require_string(
+                        semantic_instance.get("instance_id"),
+                        "semantic component instance ID",
+                    ),
+                    "component_id": component_id,
+                    "candidate_id": candidate_id,
+                    "parent_design_instance_id": copy.deepcopy(
+                        design_instance.get("parent_instance_id")
+                    ),
+                    "slot": require_string(design_instance.get("slot"), "composition slot"),
+                }
+
+    bindings: list[dict[str, Any]] = []
+    expected_block_keys: set[tuple[str, str]] = set()
+    catalog_design_names: list[str] = []
+    for design_value in require_list(source_catalog.get("designs"), "source catalog designs"):
+        design = require_dict(design_value, "source catalog design")
+        design_name = require_string(design.get("design_name"), "source catalog design name")
+        catalog_design_names.append(design_name)
+        composition = composition_by_design.get(design_name)
+        if composition is None:
+            raise ContractError(
+                "block_component_binding_coverage",
+                f"verified design {design_name} has no final component composition",
+            )
+        root_block_id = require_string(design.get("root_block_id"), "source catalog root Block ID")
+        for block_value in require_list(design.get("blocks"), f"{design_name} Blocks"):
+            block = require_dict(block_value, f"{design_name} Block")
+            block_id = require_string(block.get("block_id"), f"{design_name} Block ID")
+            key = (design_name, block_id)
+            if key in expected_block_keys:
+                raise ContractError(
+                    "block_component_binding_coverage",
+                    f"verified Block appears twice: {design_name}/{block_id}",
+                )
+            expected_block_keys.add(key)
+            owner = owner_by_block.get(key)
+            if owner is None:
+                raise ContractError(
+                    "block_component_binding_coverage",
+                    f"verified Block has no final component owner: {design_name}/{block_id}",
+                )
+            if (
+                block_id == root_block_id
+                and owner["design_instance_id"] != composition.get("root_instance_id")
+            ):
+                raise ContractError(
+                    "block_component_binding_coverage",
+                    f"root Block {design_name}/{block_id} is not owned by the root component instance",
+                )
+            bindings.append(
+                {
+                    "design_name": design_name,
+                    "block": copy.deepcopy(block),
+                    **copy.deepcopy(owner),
+                }
+            )
+
+    if set(owner_by_block) != expected_block_keys:
+        extras = sorted(set(owner_by_block) - expected_block_keys)
+        raise ContractError(
+            "block_component_binding_coverage",
+            f"component composition references unknown verified Blocks: {extras}",
+        )
+    if set(composition_by_design) != set(catalog_design_names):
+        extras = sorted(set(composition_by_design) - set(catalog_design_names))
+        raise ContractError(
+            "block_component_binding_coverage",
+            f"component compositions reference unknown verified designs: {extras}",
+        )
+    return {
+        "schema": "icp.component-design.block-component-bindings.v1",
+        "source_catalog_sha256": source_catalog_sha256,
+        "design_count": len(catalog_design_names),
+        "binding_count": len(bindings),
+        "bindings": bindings,
+    }
+
+
+def build_v6_lock(
     stage_dir: Path,
     state: dict[str, Any],
+    source_catalog: dict[str, Any],
     business_context: dict[str, Any],
     registry: dict[str, Any],
     system: dict[str, Any],
     event_log: dict[str, Any],
     replacement_map: dict[str, Any],
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], dict[str, Any]]:
     replacements = {
         item["candidate_id"]: item
         for item in require_list(replacement_map.get("replacements"), "replacements")
@@ -4093,8 +4263,16 @@ def build_v5_lock(
         component_instances,
         page_compositions,
     )
-    return {
-        "schema": "icp.component-design.lock.v5",
+    block_component_bindings = build_block_component_bindings(
+        source_catalog,
+        page_compositions,
+        system["component_definitions"],
+        component_instances,
+        state["source_catalog_sha256"],
+    )
+    block_component_bindings_sha = sha256_bytes(json_bytes(block_component_bindings))
+    lock = {
+        "schema": "icp.component-design.lock.v6",
         "stage_boundary": "component-semantics-only",
         "source_authority": copy.deepcopy(SOURCE_AUTHORITY),
         "source_hashes": {
@@ -4130,6 +4308,12 @@ def build_v5_lock(
         "component_instances": component_instances,
         "decisions": copy.deepcopy(system["decisions"]),
         "page_compositions": page_compositions,
+        "block_component_bindings": {
+            "path": BLOCK_COMPONENT_BINDINGS_STAGE_NAME,
+            "sha256": block_component_bindings_sha,
+            "design_count": block_component_bindings["design_count"],
+            "binding_count": block_component_bindings["binding_count"],
+        },
         "replacement_map": copy.deepcopy(replacement_map),
         "cache_view": {
             "source": "component-cache-events.json",
@@ -4138,9 +4322,10 @@ def build_v5_lock(
             "component_entries": component_entries,
         },
     }
+    return lock, block_component_bindings
 
 
-def verify_v5(args: argparse.Namespace) -> dict[str, Any]:
+def verify_v6(args: argparse.Namespace) -> dict[str, Any]:
     project_root = Path(args.project_root).resolve()
     stage_dir, state = load_state(project_root)
     verify_live_mobile_component_pattern_context(stage_dir, state)
@@ -4210,19 +4395,31 @@ def verify_v5(args: argparse.Namespace) -> dict[str, Any]:
         raise ContractError(
             "cache_fold_mismatch", "cache log and replacement projection disagree"
         )
-    lock = build_v5_lock(
+    lock, block_component_bindings = build_v6_lock(
         stage_dir,
         state,
+        catalog,
         business_context,
         registry,
         system,
         event_log,
         replacement_map,
     )
+    bindings_path = stage_dir / BLOCK_COMPONENT_BINDINGS_STAGE_NAME
+    bindings_sha = sha256_bytes(json_bytes(block_component_bindings))
     lock_path = stage_dir / "component-lock.json"
     result_path = stage_dir / "stage-result.json"
     resumed = state.get("state") == "locked"
     if resumed:
+        if (
+            not bindings_path.is_file()
+            or read_json(bindings_path) != block_component_bindings
+            or sha256_bytes(bindings_path.read_bytes())
+            != state.get("block_component_bindings_sha256")
+        ):
+            raise ContractError(
+                "component_design_locked", "Block-to-component bindings changed"
+            )
         if not lock_path.is_file() or read_json(lock_path) != lock:
             raise ContractError("component_design_locked", "component lock changed")
         if not result_path.is_file() or sha256_bytes(
@@ -4230,16 +4427,18 @@ def verify_v5(args: argparse.Namespace) -> dict[str, Any]:
         ) != state.get("stage_result_sha256"):
             raise ContractError("component_design_locked", "stage result changed")
     else:
+        atomic_write_json(bindings_path, block_component_bindings)
         atomic_write_json(lock_path, lock)
         lock_sha = sha256_bytes(lock_path.read_bytes())
         stage_result = {
-            "schema": "icp.component-design.stage-result.v5",
+            "schema": "icp.component-design.stage-result.v6",
             "stage": "component-design",
             "status": "complete",
             "stage_boundary": "component-semantics-only",
             "component_count": len(lock["component_definitions"]),
             "instance_count": len(lock["component_instances"]),
             "page_count": len(lock["pages"]),
+            "block_binding_count": block_component_bindings["binding_count"],
             "component_lock_sha256": lock_sha,
             "artifacts": {
                 "component_lock": {
@@ -4254,10 +4453,15 @@ def verify_v5(args: argparse.Namespace) -> dict[str, Any]:
                     "path": "replacement-map.json",
                     "sha256": state["replacement_map_sha256"],
                 },
+                "block_component_bindings": {
+                    "path": BLOCK_COMPONENT_BINDINGS_STAGE_NAME,
+                    "sha256": bindings_sha,
+                },
             },
         }
         atomic_write_json(result_path, stage_result)
         state["state"] = "locked"
+        state["block_component_bindings_sha256"] = bindings_sha
         state["component_lock_sha256"] = lock_sha
         state["stage_result_sha256"] = sha256_bytes(result_path.read_bytes())
         atomic_write_json(stage_dir / "state.json", state)
@@ -4268,6 +4472,8 @@ def verify_v5(args: argparse.Namespace) -> dict[str, Any]:
         "resumed": resumed,
         "component_count": len(lock["component_definitions"]),
         "instance_count": len(lock["component_instances"]),
+        "block_binding_count": block_component_bindings["binding_count"],
+        "block_component_bindings": str(bindings_path),
         "component_lock": str(lock_path),
         "stage_result": str(result_path),
     }
@@ -4340,7 +4546,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_LOCK_TIMEOUT_SECONDS,
         help="bounded wait for the stage write lock (default: 30)",
     )
-    verify_parser.set_defaults(handler=verify_v5)
+    verify_parser.set_defaults(handler=verify_v6)
     return parser
 
 

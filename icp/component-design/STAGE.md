@@ -16,6 +16,8 @@ There is no score or tolerance. Completion requires every exact gate:
 ```text
 every verified design = exactly one IOLE page member and ordered design state
 every semantic Block = exactly one page-local candidate and composition instance
+every semantic Block = one explicit final Block-to-component binding with complete extract evidence
+every final component = one or more Block-backed instances or one declared source-only instance
 every non-empty source clause = an exact contiguous source partition
 every non-whitespace source clause = at least one exact semantic fact segment
 every normative source segment = one or more source-bound semantic facts
@@ -139,7 +141,8 @@ Optionally accept one read-only project component catalog:
 
 The provenance path must be project-relative, exist, and match its declared SHA-256.
 Use `verified-component-lock` only when that file is an
-`icp.component-design.lock.v4` or `icp.component-design.lock.v5` containing the
+`icp.component-design.lock.v4`, `icp.component-design.lock.v5`, or
+`icp.component-design.lock.v6` containing the
 exact declared semantic definition.
 Use `code-derived` for model analysis of existing implementation. A code-derived
 entry cannot be `reuse-existing`; it may only support `adapt-existing`, which must
@@ -171,6 +174,7 @@ create a new complete semantic definition with a new ID.
 ├── component-system.json
 ├── component-cache-events.json
 ├── replacement-map.json
+├── block-component-bindings.json
 ├── component-lock.json
 ├── stage-result.json
 └── state.json
@@ -525,7 +529,7 @@ python3 <icp-skill>/component-design/scripts/component_design.py verify \
 the abstraction contract, cache fold, replacement projection, and structural
 completion gates. It never treats words such as `TODO` or angle-bracketed text in
 the exact business source as a model placeholder. Success writes
-`icp.component-design.lock.v5` with:
+`icp.component-design.lock.v6` with:
 
 - one `inference_context` reference and hash for the advisory mobile morphology
   snapshot; its full Markdown remains in the stage and is not duplicated into
@@ -537,6 +541,10 @@ the exact business source as a model placeholder. Success writes
 - final component definitions and page instances;
 - abstraction decisions;
 - final per-design composition trees with candidate-to-component replacement;
+- one hash-bound `block-component-bindings.json` projection that embeds every
+  verified extract Block with its complete source nodes/assets and binds it to the
+  owning design instance, page candidate, semantic component instance, final
+  component, parent design instance, and slot;
 - description-empty designless members preserved as exact source context;
 - source-only designless members locked as independent business-semantic pages;
 - append-only cache projection and all frozen hashes.
@@ -554,6 +562,14 @@ Every non-root final composition instance must use a slot declared by its final
 parent component definition. The root alone uses the reserved `root` slot. A slot
 with `cardinality: one` accepts at most one child per parent instance; `many`
 accepts multiple children. Every container instance exercises at least one slot.
+
+The Block binding projection is the completion boundary between component design
+and implementation. One component instance may own several Blocks, and several
+independent Block groups may bind the same shared component definition, but every
+verified `(design_name, block_id)` appears exactly once. Do not edit extract
+Blocks. The projection overlays final component ownership on their complete frozen
+evidence so stage 3 never has to reconstruct visual grouping or guess exact design
+data. Source-only semantic instances have no fabricated Block binding.
 
 Stage 3 may implement this lock but may not rename, split, merge, add, or remove
 component boundaries without reopening component design.
@@ -575,6 +591,9 @@ component boundaries without reopening component design.
 - `semantic_block_coverage`, `semantic_hierarchy_mismatch`,
   `composition_coverage`, `composition_not_tree`: candidate ownership or design
   composition contradicts verified Block structure.
+- `block_component_binding_coverage`: a verified Block is missing, duplicated,
+  assigned to an unknown candidate/component, or disagrees with the final page
+  composition or semantic component instance.
 - `page_facts_incomplete`, `candidate_disposition`,
   `candidate_instance_coverage`: two-pass coverage is incomplete.
 - `unsupported_abstraction`, `invalid_reuse_mode`,

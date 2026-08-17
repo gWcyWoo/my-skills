@@ -221,6 +221,17 @@ definitions and instances, abstraction decisions, final design compositions,
 append-only cache events, candidate replacements, and the exact source member
 scope/relation topology needed by the next stage.
 
+Component design is not complete until it also writes one deterministic,
+hash-bound `block-component-bindings.json`. This is an overlay on the immutable
+extract artifacts, not an edit to them. It embeds every verified design Block with
+its complete source-node/asset evidence and binds that Block exactly once to its
+owning design instance, page candidate, semantic component instance, final
+component, parent design instance, and slot. One instance may own multiple Blocks,
+and multiple independent Block groups may use one shared definition; source-only
+instances have no fabricated Block. Stage 3 must consume this projection instead
+of reconstructing visual groups or reading a component definition without its
+Block evidence.
+
 An individual design is complete only when this exits zero:
 
 ```bash
