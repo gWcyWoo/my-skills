@@ -5,13 +5,29 @@ description: IOLE = Implement Oklik Loop Engineering. Analyze one ready task int
 
 # IOLE — Implement Oklik Loop Engineering
 
-Accept one required URL, one required role, and one optional interval:
+Accept one required URL, one required role, and two optional controls:
 
 1. `excel_url`: shared task document URL.
 2. `role`: exact role key from
    [role-mapping-v1.json](references/role-mapping-v1.json), currently `client` or
    `backend`.
 3. `im`: positive polling interval in minutes; default to `10`.
+4. `mr`: delivery mode `0|1|2`; default to `0`.
+
+Delivery mode is an authorization boundary:
+
+- `mr=0`: after verified ICP implementation, do not commit, push, or create an
+  MR. Leave the declared code changes in the current project checkout.
+- `mr=1`: commit only the verified declared files and push the current checked-out
+  branch directly. Do not create an MR.
+- `mr=2`: use the isolated branch/worktree flow, commit and push the verified
+  declared files, and create or update one MR targeting `dev`.
+
+For every mode, once ICP implementation and all required tests pass, IOLE must
+atomically move every claimed modify member to the selected role's `review`
+status and clear its lease/error fields. `mr=0|1` preserves the existing role PR
+cell; only `mr=2` writes the resulting MR URL. A successful code/test result must
+not remain `doing` merely because no MR was requested.
 
 Do not accept a raw `status` input. Resolve status values, role columns, and the
 worker Skill only from the external role mapping. Treat the current Codex project
@@ -21,10 +37,12 @@ For `$iole --help` or `$iole -h`, print this usage and stop without project or
 document effects:
 
 ```text
-$iole <excel_url> role=ROLE [im=MINUTES]
+$iole <excel_url> role=ROLE [im=MINUTES] [mr=0|1|2]
   excel_url  required shared Sheet or Excel URL
   role       required mapped engineering role: client or backend
   im         polling interval in minutes; default: 10
+  mr         delivery mode: 0 leave changes, 1 direct commit/push, 2 submit MR;
+             default: 0
 ```
 
 ## Role isolation
@@ -121,12 +139,12 @@ Run one new client flow in this order:
    slots, states, events, and the component lock. Only after ICP returns that
    verified lock may execution planning derive component decisions, ownership
    paths, and `claim_page_titles`; IOLE may validate and orchestrate those outputs
-   but must not author them. Until ICP's implementation-stage adapter exists, stop
-   the new source-bundle path after the component lock instead of falling back to
-   IOLE-authored component planning.
-   Steps 6–11 below are retained only for persisted execution flows that already
-   have their legacy plan/job artifacts. A new source-bundle flow stops at the
-   verified component lock for the current ICP milestone.
+   but must not author them. Run ICP implementation `begin`, author and record its
+   exact implementation plan, and derive `claim_page_titles` only from the frozen
+   `modify` page keys/source-context joins. The plan must close every design node,
+   semantic fact, interaction test, and presentation usage before claim. IOLE then
+   orchestrates Steps 6–11 against that hash-bound plan; it never falls back to an
+   IOLE-authored component or code plan.
 6. Pass one raw guard snapshot for every `claim_page_titles` member to
    `claim_flow_rows`. Require one shared lease and one all-or-none batch. Persist
    the raw rows, plan, claim result, and terminal intent outside the repository.
@@ -134,10 +152,13 @@ Run one new client flow in this order:
    expansion, append the new members' inspected guards; use the resulting exact
    bound snapshot for error and completion. Keep all members `doing` for the entire
    implementation.
-7. Fetch `origin/dev`, run v2 `branch-name`, and create one isolated worktree. If
-   the common existing PR is not both open and backed by a present source branch,
-   run v2 `pr-recovery-plan` against the exact fetched revision. All flow members
-   always share the same branch and PR.
+7. Select the Git execution boundary from the frozen `mr` value. For `mr=0|1`,
+   use the current project checkout and current `HEAD`; do not create a branch or
+   isolated worktree. Preserve unrelated changes and allow only ICP-declared files
+   into any later commit. For `mr=2`, fetch `origin/dev`, run v2 `branch-name`, and
+   create one isolated worktree. If the common existing PR is not both open and
+   backed by a present source branch, run v2 `pr-recovery-plan` against the exact
+   fetched revision. All flow members share that branch and MR.
 8. Let `build-plan` derive opaque internal page keys from normalized titles and
    require `iole.flow-plan.v3`. Run `build-job` to publish
    `icp.external-flow-job.v5`, then load ICP. ICP first returns
@@ -159,15 +180,19 @@ Run one new client flow in this order:
    PR, error, ignored, and other-role cells remain outside ICP.
 9. If a changed child is discovered after claim, stop before editing it and call
    `expand_flow_claim`; never modify an unclaimed page.
-10. Require `icp.flow-handoff-result.v2`, independently verify its declared files,
-    frozen implementation-contract SHA, exact required/covered clause equality,
-    and full-flow evidence, then commit/push only those files. Reuse or create one
-    PR against `dev`; never create one PR per page.
-11. Run `build-review-writeback --icp-result /absolute/result.json`; it fails
+10. Require `icp.flow-handoff-result.v2` and independently verify its declared
+    files, frozen implementation-contract SHA, exact required/covered clause
+    equality, and full-flow evidence. Then apply exactly one delivery action:
+    `mr=0` performs no Git mutation; `mr=1` commits only those files and pushes the
+    current branch directly; `mr=2` commits/pushes only those files and reuses or
+    creates one MR against `dev`. Never create one MR per page.
+11. Run `build-review-writeback --mr MR --icp-result /absolute/result.json`; pass
+    `--pr-url` only for `mr=2`. It fails
     unless the canonical v2 result matches the flow/member digests and has complete
     coverage. Reuse the exact bound `expected_values` for every
-    member, and call `complete_flow_rows`. Move all members
-    to `review` with the same PR and clear every lease/error, or mutate none. On a
+    member, and call `complete_flow_rows`. Move all members to `review` and clear
+    every lease/error, or mutate none. For `mr=0|1`, preserve each member's
+    existing PR cell; for `mr=2`, write the same MR URL to every member. On a
     controlled failure run `build-error-writeback`, then call `record_flow_error`;
     keep every member `doing`. Obey the returned `orchestrator_action`: immediately
     tell the user which node/gate failed, that the rows remain `doing`, and whether
@@ -212,6 +237,7 @@ python3 "$IOLE/scripts/iole_flow_contract_v2.py" schedule-plan \
   --excel-url 'SHARED_EXCEL_URL' \
   --role 'client' \
   --im 'INTERVAL_MINUTES' \
+  --mr '0|1|2' \
   --project-root '/absolute/current/project' \
   --mapping "$IOLE/references/role-mapping-v2.json"
 ```
@@ -246,7 +272,7 @@ python3 "$IOLE/scripts/iole_flow_contract_v2.py" pr-recovery-plan \
   --review-number 'LATEST_REVIEW_NUMBER'
 ```
 
-Omit `--im` to use `10`. Create or update one enabled recurring Codex automation
+Omit `--im` to use `10`; omit `--mr` to use `0`. Create or update one enabled recurring Codex automation
 for the exact project, provider, document, and role identity. Changing the default
 does not mutate an existing automation; update that automation's existing ID.
 Never create a nested schedule from `run-once`.
@@ -282,7 +308,9 @@ document access. Use this sequence only to resume persisted v1 claims and page j
 7. Parse the role's reviews cell as append-only numbered lines. Pass only the
    highest numbered opinion as `latest_review`. Empty reviews mean initial
    implementation.
-8. Fetch `origin/dev`. When the selected role PR column is empty, run `branch-name`
+8. Apply the same `mr` execution boundary as v2. For `mr=0|1`, use the current
+   checkout and current `HEAD` without creating a branch/worktree. For `mr=2`,
+   fetch `origin/dev`. When the selected role PR column is empty, run `branch-name`
    with the claimed `source_id`, role, and row identity, then create that exact
    branch plus an isolated worktree from the fetched revision. The command excludes
    review number, so every review round reuses the same branch. When the PR column
@@ -307,22 +335,27 @@ document access. Use this sequence only to resume persisted v1 claims and page j
     `reason=invalid-row-data` and its returned
     `detail`; write `code: detail` to `last_error`. Never write free-form logs,
     paths, credentials, or Sheet text.
-11. Commit and push only declared project files. For `reuse-existing-pr`, update
-    that PR. For `inspect-from-dev`, create a new PR against `dev` only when verified
-    changes exist and replace the role PR cell with its URL. If the latest `dev`
+11. After ICP and all required tests pass, `mr=0` performs no Git mutation;
+    `mr=1` commits only declared files and pushes the current branch directly;
+    `mr=2` commits and pushes only declared files. For `mr=2` and
+    `reuse-existing-pr`, update that MR. For `inspect-from-dev`, create a new MR
+    against `dev` only when verified changes exist and replace the role PR cell
+    with its URL. If the latest `dev`
     already satisfies the task and review, do not create an empty PR; preserve the
     existing PR URL and return the role to `review` after verification. Accept
     absolute HTTP or HTTPS PR URLs.
-12. Run `build-review-writeback`. Build `expected_values` with every returned
+12. Run `build-review-writeback --mr MR`, passing `--pr-url` only for `mr=2`.
+    Build `expected_values` with every returned
     `guard_columns` key and `raw_row.get(key)` value; preserve absent columns as
     JSON `null`. In one connector lock, require those exact immutable values, the
     same role status `doing`, and the same lease-bound physical-row locator; only
-    then set that role's PR column and status `review`, clear its lease fields, and
-    clear its `last_error`. A guard mismatch
+    then set that role's status to `review`, clear its lease fields and
+    `last_error`, and either preserve its PR (`mr=0|1`) or write the MR URL
+    (`mr=2`). A guard mismatch
     is `row-digest-drift`, not a retryable write.
 
-IOLE never writes `done` after creating or updating a PR. A reviewer sets the
-role's status to `done` only after approval and merge. On rejection, append the next
+IOLE never writes `done` after delivery. A reviewer sets the role's status to
+`done` only after approval (and merge when an MR exists). On rejection, append the next
 numbered opinion to that role's reviews cell and set its status back to `ready`.
 
 ## Review rules
@@ -340,8 +373,9 @@ opinions; append a correction instead. The latest opinion is the valid line with
 the greatest number. Because no separate processed-review column exists, treat the
 latest opinion as the complete authoritative request for that review round. Do not
 append another opinion while the role is `ready` or `doing`. Initial work requires
-both reviews and role PR to be empty; revision work requires both a latest review
-and an existing role PR URL.
+an empty reviews cell. Revision work requires a latest numbered review; an existing
+role PR URL is optional for `mr=0|1` and required only when reusing an MR under
+`mr=2`.
 
 ## Recovery and stop rules
 
@@ -356,8 +390,8 @@ and an existing role PR URL.
 - If the terminal connector response was lost, reconstruct success only when the
   guarded immutable values still match, status/PR equal the intended `review`
   transition, and lease/error fields are already clear.
-- Preserve the claim and never write `review` when worker verification, Git, push,
-  PR, lease, or terminal compare-and-set fails.
+- Preserve the claim and never write `review` when worker verification, the
+  delivery action required by `mr`, lease, or terminal compare-and-set fails.
 - Stop on role-column ambiguity, missing role headers, malformed numbered reviews,
   claim digest mismatch, row digest drift, lease mismatch, missing `origin/dev`, or a worker result that
   does not match the claimed job.

@@ -51,9 +51,9 @@ Use `branch-name` to derive
 deliberately absent so initial implementation, retries, and every numbered review
 reuse one branch and PR.
 
-An initial implementation has both an empty reviews cell and an empty role PR
-column. A revision has both a latest numbered review and an existing role PR URL.
-Reject either half-populated combination before worker dispatch.
+An initial implementation has an empty reviews cell. A revision has a latest
+numbered review; its role PR URL may be empty when the previous delivery used
+`mr=0|1`. A populated PR without a review remains invalid.
 
 Before building a worker job or terminal intent, recompute that digest from the
 claim content and reject any mismatch. A persisted claim is evidence only when its
@@ -101,15 +101,16 @@ and return to `review`. The deterministic recovery branch binds the old PR URL a
 latest review number so retries cannot create duplicate replacement PRs.
 `build-review-writeback` returns immutable `guard_columns` and the expected
 row digest. Select those column values from the persisted raw claimed row and pass
-them as `expected_values` to the connector. After verified push and PR creation or
-reuse, one connector lock must require every expected value plus the same role
-`doing` status and lease, then set only its PR column and status `review`. Any
+them as `expected_values` to the connector. After verified ICP completion and the
+delivery action selected by `mr`, one connector lock must require every expected
+value plus the same role `doing` status and lease, then set status `review`;
+preserve PR for `mr=0|1` or set the MR URL for `mr=2`. Any
 immutable value drift stops without writeback. Successful completion also clears
 that role's lease fields and `last_error`.
 
 Completion is replay-safe after a lost connector response: reconstruct the same
-ack only when all non-output guard values still match, status and PR already equal
-the intended terminal values, and lease/error fields are clear.
+ack only when all non-output guard values still match, status and the mode-specific
+PR outcome equal the intended terminal values, and lease/error fields are clear.
 
 On a controlled failure, `build-error-writeback` produces a bounded
 `machine-code: controlled detail` intent. The detail is one printable line and the

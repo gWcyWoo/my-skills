@@ -949,6 +949,8 @@ class FlowPlanContractTests(unittest.TestCase):
                     str(plan_path),
                     "--lease-token",
                     "flow-lease-1",
+                    "--mr",
+                    "2",
                     "--pr-url",
                     "https://git.example/team/app/pull/9",
                     "--icp-result",
@@ -958,7 +960,6 @@ class FlowPlanContractTests(unittest.TestCase):
                 capture_output=True,
                 text=True,
             )
-
         self.assertEqual(intent_process.returncode, 0, intent_process.stdout + intent_process.stderr)
         self.assertEqual(
             json.loads(intent_process.stdout)["connector_operation"],
@@ -1024,6 +1025,8 @@ class FlowPlanContractTests(unittest.TestCase):
                     str(plan_path),
                     "--lease-token",
                     "flow-lease-1",
+                    "--mr",
+                    "2",
                     "--pr-url",
                     "https://git.example/team/app/pull/9",
                     "--icp-result",
@@ -1066,6 +1069,8 @@ class FlowPlanContractTests(unittest.TestCase):
                     str(plan_path),
                     "--lease-token",
                     "flow-lease-1",
+                    "--mr",
+                    "2",
                     "--pr-url",
                     "https://git.example/team/app/pull/9",
                 ],
@@ -1474,6 +1479,7 @@ class FlowPlanContractTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         result = json.loads(completed.stdout)
         self.assertEqual(result["kind"], "iole.flow-schedule-plan.v2")
+        self.assertEqual(result["mr"], 0)
         self.assertEqual(result["mapping_path"], str(MAPPING))
         self.assertEqual(
             result["required_connector_operations"],
@@ -1496,6 +1502,58 @@ class FlowPlanContractTests(unittest.TestCase):
             "→「页面标题」",
         )
         self.assertIn("flow_contract_version", result["prompt"])
+
+    def test_schedule_binds_each_delivery_mode_and_rejects_unknown_mode(self) -> None:
+        for mr in (1, 2):
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "schedule-plan",
+                    "--excel-url",
+                    "https://docs.google.com/spreadsheets/d/book/edit",
+                    "--role",
+                    "client",
+                    "--mr",
+                    str(mr),
+                    "--project-root",
+                    str(Path.cwd()),
+                    "--mapping",
+                    str(MAPPING),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            result = json.loads(completed.stdout)
+            self.assertEqual(result["mr"], mr)
+            self.assertEqual(
+                json.loads(result["prompt"].split(" with ", 1)[1])["mr"], mr
+            )
+
+        rejected = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "schedule-plan",
+                "--excel-url",
+                "https://docs.google.com/spreadsheets/d/book/edit",
+                "--role",
+                "client",
+                "--mr",
+                "3",
+                "--project-root",
+                str(Path.cwd()),
+                "--mapping",
+                str(MAPPING),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(rejected.returncode, 2)
+        self.assertEqual(json.loads(rejected.stdout)["reason"], "mr must be 0, 1, or 2")
 
     def test_rejects_a_new_flow_mapping_that_uses_a_number_instead_of_title(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -1944,6 +2002,8 @@ class FlowPlanContractTests(unittest.TestCase):
                     str(plan_path),
                     "--lease-token",
                     "flow-lease-1",
+                    "--mr",
+                    "2",
                     "--pr-url",
                     "https://git.example/team/app/pull/9",
                 ],
@@ -1961,6 +2021,61 @@ class FlowPlanContractTests(unittest.TestCase):
         )
         self.assertEqual(intent["set"]["status"], "review")
         self.assertEqual(intent["set"]["pr_url"], "https://git.example/team/app/pull/9")
+
+    def test_default_delivery_builds_review_intent_without_pr(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            input_path = root / "flow-input.json"
+            input_path.write_text(json.dumps(base_input()), encoding="utf-8")
+            planned = subprocess.run(
+                [sys.executable, str(SCRIPT), "build-plan", "--input", str(input_path)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            plan_path = root / "flow-plan.json"
+            plan_path.write_text(planned.stdout, encoding="utf-8")
+            intent_process = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "build-review-writeback",
+                    "--plan",
+                    str(plan_path),
+                    "--lease-token",
+                    "flow-lease-1",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            direct_process = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "build-review-writeback",
+                    "--plan",
+                    str(plan_path),
+                    "--lease-token",
+                    "flow-lease-1",
+                    "--mr",
+                    "1",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(intent_process.returncode, 0, intent_process.stderr)
+        intent = json.loads(intent_process.stdout)
+        self.assertEqual(intent["mr"], 0)
+        self.assertEqual(intent["set"]["status"], "review")
+        self.assertIsNone(intent["set"]["pr_url"])
+
+        self.assertEqual(direct_process.returncode, 0, direct_process.stderr)
+        direct = json.loads(direct_process.stdout)
+        self.assertEqual(direct["mr"], 1)
+        self.assertIsNone(direct["set"]["pr_url"])
 
     def test_builds_one_error_intent_that_keeps_every_member_doing(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

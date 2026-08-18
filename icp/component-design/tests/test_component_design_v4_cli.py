@@ -119,14 +119,20 @@ class ComponentDesignV4CliTest(unittest.TestCase):
         source_contains_whitespace_only_clause: bool = False,
         design_b_scope: str = "modify",
         empty_interaction_for_design_b: bool = False,
+        design_a_relation_kind: str = "navigation",
     ) -> Path:
+        design_a_interaction = (
+            "Help opens Design B as a modal."
+            if design_a_relation_kind == "modal"
+            else "Selecting the offer navigates to Design B."
+        )
         raw_rows = {
             "Design A": member_row(
                 "Design A",
                 "design-a",
                 URL_A,
                 "Show the available withdrawal offer.",
-                "Selecting the offer navigates to Design B.",
+                design_a_interaction,
                 "Read the amount from the loan detail response.",
             ),
             "Design B": member_row(
@@ -199,7 +205,11 @@ class ComponentDesignV4CliTest(unittest.TestCase):
                                 "end": start + len(target),
                                 "quote": target,
                                 "target_title": target,
-                                "relation_kind": "navigation",
+                                "relation_kind": (
+                                    design_a_relation_kind
+                                    if target == "Design B"
+                                    else "navigation"
+                                ),
                             }
                         )
                 fields.append(
@@ -1259,6 +1269,128 @@ class ComponentDesignV4CliTest(unittest.TestCase):
                 if item["clause_id"].startswith("requirement:")
             )
         )
+
+    def test_modal_reference_becomes_an_exact_page_presentation_requirement(self) -> None:
+        self.bundle_path = self.build_source_bundle(design_a_relation_kind="modal")
+
+        begun = self.begin()
+
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        page = next(
+            item
+            for item in json.loads(begun.stdout)["pages"]
+            if item["member_title"] == "Design A"
+        )
+        template = read_json(Path(page["input_path"]))
+        interaction = "Help opens Design B as a modal."
+        start = interaction.index("Design B")
+        evidence = {
+            "reference_id": "Design A-交互描述-Design B",
+            "relation_kind": "modal",
+            "source_column": "交互描述",
+            "source_ref": {
+                "member_title": "Design A",
+                "clause_id": "page:interaction",
+                "source_sha256": hashlib.sha256(interaction.encode("utf-8")).hexdigest(),
+                "start": start,
+                "end": start + len("Design B"),
+                "quote": "Design B",
+            },
+            "target_member_title": "Design B",
+            "target_page_key": COMPONENT_DESIGN.page_key_for("Design B"),
+        }
+        self.assertEqual(
+            template["presentation_requirements"],
+            [
+                {
+                    "presentation_requirement_id": (
+                        "presentation-" + canonical_digest(evidence)[:20]
+                    ),
+                    **evidence,
+                }
+            ],
+        )
+
+    def test_abstraction_must_resolve_every_modal_to_final_component_data(self) -> None:
+        self.bundle_path = self.build_source_bundle(design_a_relation_kind="modal")
+        self.seal_all_pages()
+        plan = self.valid_abstraction_plan()
+
+        missing = self.record_abstraction(plan)
+
+        self.assertNotEqual(missing.returncode, 0)
+        self.assertIn("presentation_usage_missing", missing.stderr)
+
+        registry = read_json(self.stage_dir / "group-candidate-registry.json")
+        requirement = next(
+            requirement
+            for page in registry["pages"]
+            if page["member_title"] == "Design A"
+            for requirement in page["presentation_requirements"]
+        )
+        source_candidate = next(
+            item
+            for item in registry["candidates"]
+            if item["member_title"] == "Design A"
+            and any(
+                source_ref["clause_id"] == requirement["source_ref"]["clause_id"]
+                and source_ref["start"] <= requirement["source_ref"]["start"]
+                and source_ref["end"] >= requirement["source_ref"]["end"]
+                for fact in item["candidate"]["facts"]
+                for source_ref in fact["source_refs"]
+            )
+        )
+        source_fact_ids = [
+            fact["fact_id"]
+            for fact in source_candidate["candidate"]["facts"]
+            if any(
+                source_ref["clause_id"] == requirement["source_ref"]["clause_id"]
+                and source_ref["start"] <= requirement["source_ref"]["start"]
+                and source_ref["end"] >= requirement["source_ref"]["end"]
+                for source_ref in fact["source_refs"]
+            )
+        ]
+        source_instance = next(
+            item
+            for item in plan["component_instances"]
+            if source_candidate["candidate_id"] in item["candidate_ids"]
+        )
+        target_page = next(
+            item for item in registry["pages"] if item["member_title"] == "Design B"
+        )
+        target_root_candidate_id = target_page["root_candidate_ids"][0]
+        target_instance = next(
+            item
+            for item in plan["component_instances"]
+            if target_root_candidate_id in item["candidate_ids"]
+        )
+        usage_evidence = {
+            "presentation_requirement_id": requirement["presentation_requirement_id"],
+            "source_page_key": requirement["source_ref"]["member_title"]
+            and COMPONENT_DESIGN.page_key_for(requirement["source_ref"]["member_title"]),
+            "source_member_title": requirement["source_ref"]["member_title"],
+            "host_instance_id": source_instance["instance_id"],
+            "source_fact_ids": source_fact_ids,
+            "target_page_key": requirement["target_page_key"],
+            "target_member_title": requirement["target_member_title"],
+            "target_instance_id": target_instance["instance_id"],
+            "target_component_id": target_instance["component_id"],
+            "presentation_mode": "modal",
+        }
+        plan["presentation_usages"] = [
+            {
+                "usage_id": "usage-" + canonical_digest(usage_evidence)[:20],
+                **usage_evidence,
+            }
+        ]
+
+        recorded = self.record_abstraction(plan)
+
+        self.assertEqual(recorded.returncode, 0, recorded.stdout + recorded.stderr)
+        verified = self.verify()
+        self.assertEqual(verified.returncode, 0, verified.stdout + verified.stderr)
+        lock = read_json(self.stage_dir / "component-lock.json")
+        self.assertEqual(lock["presentation_usages"], plan["presentation_usages"])
 
     def test_lock_source_context_preserves_scope_identity_and_relation_topology(self) -> None:
         self.bundle_path = self.build_source_bundle(
@@ -2476,6 +2608,27 @@ class ComponentDesignV4CliTest(unittest.TestCase):
         )
         plan = read_json(self.stage_dir / "abstraction-plan.input.json")
         self.assertEqual(plan["mobile_component_pattern_context"], context)
+
+    def test_stage_one_complete_blocks_are_the_direct_design_input(self) -> None:
+        begun = self.begin()
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+
+        source_catalog = read_json(self.stage_dir / "source-catalog.json")
+        for design in source_catalog["designs"]:
+            self.assertIn("semantic_blocks", design["artifact_sha256"])
+            self.assertTrue(design["blocks"])
+            self.assertTrue(
+                all("source_nodes" in block for block in design["blocks"])
+            )
+
+    def test_begin_rejects_ui_supplement_not_used_for_stage_one_grouping(self) -> None:
+        self.bundle_path = self.build_source_bundle(source_contains_todo=True)
+
+        begun = self.begin()
+
+        self.assertEqual(begun.returncode, 2)
+        self.assertIn("iole_extract_mismatch", begun.stderr)
+        self.assertIn("was not used by extract", begun.stderr)
 
     def test_record_page_facts_rejects_changed_mobile_component_patterns(self) -> None:
         begun = self.begin()
@@ -3895,6 +4048,14 @@ class ComponentDesignV4CliTest(unittest.TestCase):
 
     def test_exact_business_source_may_legitimately_contain_todo_text(self) -> None:
         self.bundle_path = self.build_source_bundle(source_contains_todo=True)
+        self.project = create_verified_extract(
+            self.root / "todo-extract",
+            {
+                URL_A: "Show the customer's TODO items exactly as the business source names them.",
+                URL_B: "Show the selected withdrawal offer.",
+            },
+        )
+        self.stage_dir = self.project / ".icp" / "component-design"
         begun = self.begin()
         self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
         pages = json.loads(begun.stdout)["pages"]

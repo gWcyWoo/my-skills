@@ -91,6 +91,13 @@ def normalize_source(source: dict[str, Any], source_sha256: str) -> dict[str, An
         if node_id in nodes:
             raise ContractError("duplicate_source_id", f"duplicate source node id: {node_id}")
 
+        layers_kind = (
+            "missing"
+            if "layers" not in node
+            else "null"
+            if node.get("layers") is None
+            else "array"
+        )
         raw_children = node.get("layers", [])
         if raw_children is None:
             raw_children = []
@@ -108,6 +115,7 @@ def normalize_source(source: dict[str, Any], source_sha256: str) -> dict[str, An
             "parent_id": parent_id,
             "child_ids": [],
             "source_path": source_path,
+            "layers_kind": layers_kind,
             "payload": payload,
         }
         nodes[node_id] = record
@@ -181,21 +189,65 @@ def begin_run(args: argparse.Namespace) -> dict[str, Any]:
     if not project_root.is_dir():
         raise ContractError("missing_project", f"project root is not a directory: {project_root}")
     run_input = read_json(Path(args.urls_file).resolve())
-    if not isinstance(run_input, dict) or set(run_input) != {"schema", "design_urls"}:
-        raise ContractError("invalid_run_input", "run input requires schema and design_urls")
-    if run_input.get("schema") != "icp.extract.run-input.v1":
+    if not isinstance(run_input, dict):
+        raise ContractError("invalid_run_input", "run input must be an object")
+    if run_input.get("schema") == "icp.extract.run-input.v1":
+        if set(run_input) != {"schema", "design_urls"}:
+            raise ContractError("invalid_run_input", "v1 run input requires schema and design_urls")
+        urls = run_input.get("design_urls")
+        if (
+            not isinstance(urls, list)
+            or not urls
+            or any(not isinstance(url, str) or not url for url in urls)
+            or len(urls) != len(set(urls))
+        ):
+            raise ContractError(
+                "invalid_run_input",
+                "design_urls must be a non-empty unique string array",
+            )
+        requested_designs = [
+            {"design_url": url, "ui_supplement": None} for url in urls
+        ]
+    elif run_input.get("schema") == "icp.extract.run-input.v2":
+        if set(run_input) != {"schema", "designs"}:
+            raise ContractError("invalid_run_input", "v2 run input requires schema and designs")
+        requested_designs = run_input.get("designs")
+        if not isinstance(requested_designs, list) or not requested_designs:
+            raise ContractError("invalid_run_input", "designs must be a non-empty array")
+        normalized_designs: list[dict[str, Any]] = []
+        for index, item in enumerate(requested_designs):
+            if not isinstance(item, dict) or set(item) != {
+                "design_url",
+                "ui_supplement",
+            }:
+                raise ContractError(
+                    "invalid_run_input",
+                    f"designs[{index}] requires design_url and ui_supplement",
+                )
+            url = item.get("design_url")
+            ui_supplement = item.get("ui_supplement")
+            if not isinstance(url, str) or not url:
+                raise ContractError(
+                    "invalid_run_input", f"designs[{index}].design_url is invalid"
+                )
+            if ui_supplement is not None and not isinstance(ui_supplement, str):
+                raise ContractError(
+                    "invalid_run_input",
+                    f"designs[{index}].ui_supplement must be a string or null",
+                )
+            normalized_designs.append(
+                {"design_url": url, "ui_supplement": ui_supplement}
+            )
+        requested_designs = normalized_designs
+        urls = [item["design_url"] for item in requested_designs]
+        if len(urls) != len(set(urls)):
+            raise ContractError("invalid_run_input", "design URLs must be unique")
+    else:
         raise ContractError("invalid_run_input", "unsupported run input schema")
-    urls = run_input.get("design_urls")
-    if (
-        not isinstance(urls, list)
-        or not urls
-        or any(not isinstance(url, str) or not url for url in urls)
-        or len(urls) != len(set(urls))
-    ):
-        raise ContractError("invalid_run_input", "design_urls must be a non-empty unique string array")
-    designs = []
-    for url in urls:
-        designs.append({"design_url": url, **parsed_design_identity(url)})
+    designs = [
+        {**item, **parsed_design_identity(item["design_url"])}
+        for item in requested_designs
+    ]
     manifest = {
         "schema": "icp.extract.run-manifest.v1",
         "run_input_sha256": sha256_bytes(json_bytes(run_input)),
@@ -646,7 +698,23 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
     design_dir_name = safe_design_name(design_name)
     extract_root = project_root / ".icp" / "extract"
     stage_dir = extract_root / design_dir_name
-    batch_entry_for_prepare(project_root, args.design_url, source, design_dir_name)
+    batch_entry = batch_entry_for_prepare(
+        project_root, args.design_url, source, design_dir_name
+    )
+    ui_supplement = (
+        batch_entry.get("ui_supplement") if batch_entry is not None else None
+    )
+    if ui_supplement is not None and not isinstance(ui_supplement, str):
+        raise ContractError(
+            "batch_drift", "frozen UI supplement must be a string or null"
+        )
+    semantic_context = {
+        "schema": "icp.extract.semantic-context.v1",
+        "design_url": args.design_url,
+        "ui_supplement": ui_supplement,
+    }
+    semantic_context_raw = json_bytes(semantic_context)
+    semantic_context_sha = sha256_bytes(semantic_context_raw)
 
     if stage_dir.exists():
         manifest_path = stage_dir / "source-manifest.json"
@@ -664,6 +732,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
             "reference": reference_contract,
             "design_url": args.design_url,
             "assets": asset_records,
+            "semantic_context_sha256": semantic_context_sha,
         }
         if acquisition_provenance is not None:
             expected.update(acquisition_provenance)
@@ -734,6 +803,8 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         "assets": asset_records,
         "asset_index_file": "asset-index.json",
         "asset_index_sha256": sha256_bytes(asset_index_raw),
+        "semantic_context_file": "semantic-context.json",
+        "semantic_context_sha256": semantic_context_sha,
     }
     if acquisition_provenance is not None:
         manifest.update(acquisition_provenance)
@@ -742,6 +813,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         "state": "awaiting_semantic_draft",
         "revision": 0,
         "source_manifest_sha256": sha256_bytes(json_bytes(manifest)),
+        "semantic_context_sha256": semantic_context_sha,
     }
 
     extract_root.mkdir(parents=True, exist_ok=True)
@@ -756,6 +828,20 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
             shutil.copyfile(asset_source, asset_target)
         (temp_stage / "source-facts.json").write_bytes(facts_raw)
         (temp_stage / "asset-index.json").write_bytes(asset_index_raw)
+        (temp_stage / "semantic-context.json").write_bytes(semantic_context_raw)
+        write_json(
+            temp_stage / "semantic-authoring.input.json",
+            {
+                "schema": "icp.extract.semantic-authoring-input.v1",
+                "source_manifest_sha256": state["source_manifest_sha256"],
+                "reference": copy.deepcopy(reference_contract),
+                "ui_supplement": ui_supplement,
+                "instruction": (
+                    "Use the UI supplement only to inform visual-semantic Block "
+                    "boundaries; preserve all exact design facts from the frozen source."
+                ),
+            },
+        )
         write_json(temp_stage / "source-manifest.json", manifest)
         write_json(temp_stage / "state.json", state)
         os.replace(temp_stage, stage_dir)
@@ -1087,6 +1173,45 @@ def verify_frozen_sources(
         raise ContractError(
             "source_drift", "asset index does not match source nodes and local assets"
         )
+    semantic_context_path = stage_relative_file(
+        stage_dir, manifest.get("semantic_context_file"), "semantic context"
+    )
+    require_file(semantic_context_path, "semantic context")
+    semantic_context_raw = semantic_context_path.read_bytes()
+    if sha256_bytes(semantic_context_raw) != manifest.get(
+        "semantic_context_sha256"
+    ):
+        raise ContractError("source_drift", "semantic context hash changed")
+    if manifest.get("semantic_context_sha256") != state.get(
+        "semantic_context_sha256"
+    ):
+        raise ContractError("source_drift", "state semantic context binding changed")
+    semantic_context = read_json(semantic_context_path)
+    if (
+        not isinstance(semantic_context, dict)
+        or set(semantic_context) != {"schema", "design_url", "ui_supplement"}
+        or semantic_context.get("schema") != "icp.extract.semantic-context.v1"
+        or semantic_context.get("design_url") != manifest.get("design_url")
+        or (
+            semantic_context.get("ui_supplement") is not None
+            and not isinstance(semantic_context.get("ui_supplement"), str)
+        )
+    ):
+        raise ContractError("source_drift", "semantic context is invalid")
+    authoring_path = stage_dir / "semantic-authoring.input.json"
+    authoring = read_json(authoring_path)
+    expected_authoring = {
+        "schema": "icp.extract.semantic-authoring-input.v1",
+        "source_manifest_sha256": state.get("source_manifest_sha256"),
+        "reference": copy.deepcopy(reference_record),
+        "ui_supplement": semantic_context.get("ui_supplement"),
+        "instruction": (
+            "Use the UI supplement only to inform visual-semantic Block "
+            "boundaries; preserve all exact design facts from the frozen source."
+        ),
+    }
+    if authoring != expected_authoring:
+        raise ContractError("source_drift", "semantic authoring context changed")
     return manifest, recomputed_facts
 
 
@@ -1174,6 +1299,7 @@ def record_draft(args: argparse.Namespace) -> dict[str, Any]:
                 "status": "unresolved",
                 "block_id": None,
                 "geometry_basis": "not_applicable",
+                "content_role": "unresolved",
                 "rationale": "Pending source-to-semantic classification.",
             }
             for node_id in node_order
@@ -1199,10 +1325,18 @@ BINDING_FIELDS = {
     "status",
     "block_id",
     "geometry_basis",
+    "content_role",
     "rationale",
 }
 BINDING_STATUSES = {"mapped", "absorbed", "non_rendering", "unresolved"}
 GEOMETRY_BASES = {"frame", "real_frame", "combined", "not_applicable"}
+RENDERING_CONTENT_ROLES = {
+    "static_visual",
+    "static_copy",
+    "dynamic_content",
+    "platform_element",
+}
+CONTENT_ROLES = {*RENDERING_CONTENT_ROLES, "not_applicable", "unresolved"}
 
 
 def validate_bindings(
@@ -1256,6 +1390,12 @@ def validate_bindings(
             raise ContractError(
                 "invalid_bindings", f"unsupported geometry_basis for {node_id}: {geometry_basis}"
             )
+        content_role = assignment["content_role"]
+        if content_role not in CONTENT_ROLES:
+            raise ContractError(
+                "invalid_content_role",
+                f"unsupported content_role for {node_id}: {content_role}",
+            )
         require_non_empty_string(assignment["rationale"], f"{location}.rationale")
         block_id = assignment["block_id"]
         if status in {"mapped", "absorbed"}:
@@ -1281,6 +1421,11 @@ def validate_bindings(
             isinstance(payload.get(field), dict) for field in geometry_fields.values()
         )
         if status in {"mapped", "absorbed"}:
+            if content_role not in RENDERING_CONTENT_ROLES:
+                raise ContractError(
+                    "invalid_content_role",
+                    f"rendering source node {node_id} requires a rendering content_role",
+                )
             if geometry_basis == "not_applicable" and has_geometry:
                 raise ContractError(
                     "invalid_geometry_basis", f"rendering source node {node_id} has geometry"
@@ -1307,6 +1452,17 @@ def validate_bindings(
             raise ContractError(
                 "invalid_geometry_basis",
                 f"{status} source node {node_id} must use not_applicable geometry",
+            )
+        expected_content_role = (
+            "not_applicable" if status == "non_rendering" else "unresolved"
+        )
+        if (
+            status in {"non_rendering", "unresolved"}
+            and content_role != expected_content_role
+        ):
+            raise ContractError(
+                "invalid_content_role",
+                f"{status} source node {node_id} must use {expected_content_role} content_role",
             )
         indexed[node_id] = assignment
     return bindings, indexed
@@ -1387,6 +1543,7 @@ def expand_bindings(args: argparse.Namespace) -> dict[str, Any]:
         "source_subtree_roots",
         "status",
         "block_id",
+        "content_role",
         "rationale",
     }
     for index, rule in enumerate(rules):
@@ -1402,12 +1559,32 @@ def expand_bindings(args: argparse.Namespace) -> dict[str, Any]:
             raise ContractError("invalid_binding_plan", f"rule {index} selectors are invalid")
         status = rule["status"]
         block_id = rule["block_id"]
+        content_role = rule["content_role"]
         if status not in BINDING_STATUSES:
             raise ContractError("invalid_binding_plan", f"rule {index} status is invalid")
         if status in {"mapped", "absorbed"} and block_id not in block_ids:
             raise ContractError("invalid_binding_plan", f"rule {index} block is unknown")
         if status in {"non_rendering", "unresolved"} and block_id is not None:
             raise ContractError("invalid_binding_plan", f"rule {index} must use null block_id")
+        if content_role not in CONTENT_ROLES:
+            raise ContractError(
+                "invalid_binding_plan", f"rule {index} content_role is invalid"
+            )
+        if status in {"mapped", "absorbed"} and content_role not in RENDERING_CONTENT_ROLES:
+            raise ContractError(
+                "invalid_binding_plan",
+                f"rule {index} rendering nodes require a rendering content_role",
+            )
+        if status == "non_rendering" and content_role != "not_applicable":
+            raise ContractError(
+                "invalid_binding_plan",
+                f"rule {index} non_rendering nodes require not_applicable content_role",
+            )
+        if status == "unresolved" and content_role != "unresolved":
+            raise ContractError(
+                "invalid_binding_plan",
+                f"rule {index} unresolved nodes require unresolved content_role",
+            )
         require_non_empty_string(rule["rationale"], f"rules[{index}].rationale")
         selected = list(node_ids)
         for root_id in subtree_roots:
@@ -1437,6 +1614,7 @@ def expand_bindings(args: argparse.Namespace) -> dict[str, Any]:
                 "geometry_basis": inferred_geometry_basis(
                     nodes[node_id], selections[node_id]["status"]
                 ),
+                "content_role": selections[node_id]["content_role"],
                 "rationale": selections[node_id]["rationale"],
             }
             for node_id in node_order
@@ -1556,6 +1734,169 @@ def build_reverse_binding_evidence(
         "bindings_sha256": bindings_sha256,
         "nodes": evidence_nodes,
     }
+
+
+def build_semantic_blocks(
+    stage_dir: Path,
+    manifest: dict[str, Any],
+    state: dict[str, Any],
+    semantic_draft: dict[str, Any],
+    facts: dict[str, Any],
+    bindings: dict[str, Any],
+) -> dict[str, Any]:
+    """Materialize self-contained Blocks that losslessly reconstruct source facts."""
+
+    node_order = facts.get("node_order")
+    nodes = facts.get("nodes")
+    if not isinstance(node_order, list) or not isinstance(nodes, dict):
+        raise ContractError("invalid_stage", "source facts inventory is invalid")
+    assignments = {
+        item["source_node_id"]: item
+        for item in bindings.get("assignments", [])
+        if isinstance(item, dict) and isinstance(item.get("source_node_id"), str)
+    }
+    if set(assignments) != set(node_order):
+        raise ContractError(
+            "stage_drift", "semantic Block materialization needs every source assignment"
+        )
+    asset_index = read_json(stage_dir / "asset-index.json")
+    if not isinstance(asset_index, dict):
+        raise ContractError("invalid_stage", "asset index must be an object")
+    assets_by_node: dict[str, list[dict[str, Any]]] = {}
+    for asset in asset_index.get("assets", []):
+        if not isinstance(asset, dict):
+            raise ContractError("invalid_stage", "asset index entry must be an object")
+        references = asset.get("source_references")
+        if not isinstance(references, list):
+            raise ContractError("invalid_stage", "asset source references must be an array")
+        for reference in references:
+            if not isinstance(reference, dict):
+                raise ContractError("invalid_stage", "asset source reference must be an object")
+            node_id = reference.get("source_node_id")
+            if node_id not in nodes:
+                raise ContractError("stage_drift", "asset references an unknown source node")
+            assets_by_node.setdefault(node_id, []).append(copy.deepcopy(asset))
+    source_document = read_json(stage_dir / manifest["source_file"])
+    if not isinstance(source_document, dict):
+        raise ContractError("source_drift", "source design document must be an object")
+    source_document_without_artboard = copy.deepcopy(source_document)
+    source_figma = source_document_without_artboard.get("figma_json")
+    if not isinstance(source_figma, dict) or "artboard" not in source_figma:
+        raise ContractError("source_drift", "source design artboard is missing")
+    source_figma.pop("artboard")
+    semantic_context = read_json(stage_dir / manifest["semantic_context_file"])
+    if (
+        not isinstance(semantic_context, dict)
+        or sha256_bytes(json_bytes(semantic_context))
+        != state["semantic_context_sha256"]
+    ):
+        raise ContractError("source_drift", "semantic context changed")
+
+    members_by_block = {
+        block["block_id"]: [] for block in semantic_draft["blocks"]
+    }
+    non_rendering: list[dict[str, Any]] = []
+    for node_id in node_order:
+        assignment = assignments[node_id]
+        member = {
+            "source_node_id": node_id,
+            "status": assignment.get("status"),
+            "geometry_basis": assignment.get("geometry_basis"),
+            "content_role": assignment.get("content_role"),
+            "rationale": assignment.get("rationale"),
+            "source_fact": copy.deepcopy(nodes[node_id]),
+            "assets": copy.deepcopy(assets_by_node.get(node_id, [])),
+        }
+        block_id = assignment.get("block_id")
+        if block_id is None:
+            non_rendering.append(member)
+        elif block_id in members_by_block:
+            members_by_block[block_id].append(member)
+        else:
+            raise ContractError("stage_drift", "assignment targets an unknown Block")
+
+    roots = [
+        block["block_id"]
+        for block in semantic_draft["blocks"]
+        if block.get("parent_block_id") is None
+    ]
+    if len(roots) != 1:
+        raise ContractError("stage_drift", "semantic Blocks need exactly one root")
+    result = {
+        "schema": "icp.extract.semantic-blocks.v1",
+        "source_manifest_sha256": state["source_manifest_sha256"],
+        "source_sha256": manifest["source_sha256"],
+        "source_facts_sha256": manifest["source_facts_sha256"],
+        "asset_index_sha256": manifest["asset_index_sha256"],
+        "semantic_context_sha256": state["semantic_context_sha256"],
+        "semantic_context": semantic_context,
+        "semantic_draft_sha256": state["semantic_draft_sha256"],
+        "bindings_sha256": state["bindings_sha256"],
+        "root_node_id": facts["root_node_id"],
+        "root_block_id": roots[0],
+        "node_order": copy.deepcopy(node_order),
+        "source_document_without_artboard": source_document_without_artboard,
+        "blocks": [
+            {
+                "block_id": block["block_id"],
+                "semantic": copy.deepcopy(block),
+                "source_nodes": members_by_block[block["block_id"]],
+            }
+            for block in semantic_draft["blocks"]
+        ],
+        "non_rendering_source_nodes": non_rendering,
+    }
+    grouped_nodes = {
+        member["source_node_id"]: member["source_fact"]
+        for block in result["blocks"]
+        for member in block["source_nodes"]
+    }
+    grouped_nodes.update(
+        {
+            member["source_node_id"]: member["source_fact"]
+            for member in non_rendering
+        }
+    )
+    if set(grouped_nodes) != set(node_order):
+        raise ContractError(
+            "stage_drift", "semantic Blocks do not contain every source node exactly once"
+        )
+    reconstructed_nodes = {node_id: grouped_nodes[node_id] for node_id in node_order}
+    reconstructed_facts = {
+        "schema": facts["schema"],
+        "source_sha256": facts["source_sha256"],
+        "root_node_id": facts["root_node_id"],
+        "node_order": copy.deepcopy(node_order),
+        "nodes": reconstructed_nodes,
+    }
+    if (
+        reconstructed_facts != facts
+        or sha256_bytes(json_bytes(reconstructed_facts))
+        != manifest["source_facts_sha256"]
+    ):
+        raise ContractError(
+            "stage_drift", "semantic Blocks cannot losslessly reconstruct source facts"
+        )
+    def rebuild_node(node_id: str) -> dict[str, Any]:
+        record = reconstructed_nodes[node_id]
+        node = copy.deepcopy(record["payload"])
+        if record.get("layers_kind") == "array":
+            node["layers"] = [
+                rebuild_node(child_id) for child_id in record["child_ids"]
+            ]
+        elif record.get("layers_kind") == "null":
+            node["layers"] = None
+        return node
+
+    reconstructed_document = copy.deepcopy(source_document_without_artboard)
+    reconstructed_document["figma_json"]["artboard"] = rebuild_node(
+        facts["root_node_id"]
+    )
+    if reconstructed_document != source_document:
+        raise ContractError(
+            "stage_drift", "semantic Blocks cannot reconstruct the complete design JSON"
+        )
+    return result
 
 
 def repair_packet(
@@ -1735,11 +2076,13 @@ def record_bindings(args: argparse.Namespace) -> dict[str, Any]:
         next_state["reverse_binding_evidence_sha256"] = reverse_binding_evidence_sha
     semantic_review_input = None
     if complete:
+        semantic_context = read_json(stage_dir / "semantic-context.json")
         semantic_review_input = {
             "schema": "icp.extract.semantic-review.v1",
             "source_manifest_sha256": state["source_manifest_sha256"],
             "semantic_draft_sha256": state["semantic_draft_sha256"],
             "coverage_sha256": coverage_sha,
+            "semantic_context": semantic_context,
             "binding_evidence": binding_evidence,
             "reverse_binding_evidence": reverse_binding_evidence,
             "decision": "revise",
@@ -1760,6 +2103,7 @@ def record_bindings(args: argparse.Namespace) -> dict[str, Any]:
                 {
                     "source_node_id": item["source_node"]["id"],
                     "semantic_assignment_correct": False,
+                    "content_role_correct": False,
                     "independent_grouping_correct": False,
                     "parent_child_relation_correct": False,
                     "evidence": [
@@ -1894,6 +2238,7 @@ BLOCK_REVIEW_FIELDS = {
 SOURCE_NODE_REVIEW_FIELDS = {
     "source_node_id",
     "semantic_assignment_correct",
+    "content_role_correct",
     "independent_grouping_correct",
     "parent_child_relation_correct",
     "evidence",
@@ -1938,6 +2283,7 @@ def validate_semantic_review(
         "source_manifest_sha256",
         "semantic_draft_sha256",
         "coverage_sha256",
+        "semantic_context",
         "binding_evidence",
         "reverse_binding_evidence",
         "decision",
@@ -1954,6 +2300,15 @@ def validate_semantic_review(
     for field in ("source_manifest_sha256", "semantic_draft_sha256", "coverage_sha256"):
         if review.get(field) != state.get(field):
             raise ContractError("review_input_mismatch", f"semantic review {field} is stale")
+    semantic_context = review.get("semantic_context")
+    if (
+        not isinstance(semantic_context, dict)
+        or sha256_bytes(json_bytes(semantic_context))
+        != state.get("semantic_context_sha256")
+    ):
+        raise ContractError(
+            "review_input_mismatch", "semantic review context is stale"
+        )
     if sha256_bytes(json_bytes(review.get("binding_evidence"))) != state.get(
         "binding_evidence_sha256"
     ):
@@ -2056,6 +2411,7 @@ def validate_semantic_review(
         reviewed_source_node_ids.append(source_node_id)
         for field in (
             "semantic_assignment_correct",
+            "content_role_correct",
             "independent_grouping_correct",
             "parent_child_relation_correct",
         ):
@@ -2123,6 +2479,7 @@ def build_stage_result(
     semantic_draft: dict[str, Any],
     coverage: dict[str, Any],
     review_sha: str,
+    semantic_blocks_sha: str,
 ) -> dict[str, Any]:
     return {
         "schema": "icp.extract.stage-result.v1",
@@ -2130,6 +2487,7 @@ def build_stage_result(
         "status": "complete",
         "source_node_count": coverage["source_node_count"],
         "semantic_block_count": len(semantic_draft["blocks"]),
+        "content_roles_reviewed": True,
         "exact_coverage_equation": (
             "all_source_nodes = mapped ⊎ absorbed ⊎ non_rendering; unresolved = ∅"
         ),
@@ -2140,6 +2498,7 @@ def build_stage_result(
             "exact_coverage": True,
             "no_duplicate_bindings": True,
             "no_synthetic_source_ids": True,
+            "semantic_blocks_reconstruct_complete_design_json": True,
             "reverse_json_semantic_audit": True,
             "semantic_review_passed": True,
         },
@@ -2161,6 +2520,10 @@ def build_stage_result(
                 "path": "semantic-draft.json",
                 "sha256": state["semantic_draft_sha256"],
             },
+            "semantic_blocks": {
+                "path": "semantic-blocks.json",
+                "sha256": semantic_blocks_sha,
+            },
             "bindings": {"path": "bindings.json", "sha256": state["bindings_sha256"]},
             "coverage": {"path": "coverage.json", "sha256": state["coverage_sha256"]},
             "semantic_review": {"path": "semantic-review.json", "sha256": review_sha},
@@ -2175,7 +2538,7 @@ def record_review(args: argparse.Namespace) -> dict[str, Any]:
             "invalid_transition", f"cannot record semantic review while state={state.get('state')}"
         )
     manifest, facts = verify_frozen_sources(stage_dir, state)
-    semantic_draft, _, coverage = verify_exact_coverage(stage_dir, state, facts)
+    semantic_draft, bindings, coverage = verify_exact_coverage(stage_dir, state, facts)
     review, evidence_passes = validate_semantic_review(
         read_json(Path(args.review).resolve()), state, semantic_draft
     )
@@ -2207,6 +2570,7 @@ def record_review(args: argparse.Namespace) -> dict[str, Any]:
                 item[field]
                 for field in (
                     "semantic_assignment_correct",
+                    "content_role_correct",
                     "independent_grouping_correct",
                     "parent_child_relation_correct",
                 )
@@ -2246,6 +2610,7 @@ def record_review(args: argparse.Namespace) -> dict[str, Any]:
                         "merge_semantic_blocks",
                         "create_semantic_block",
                         "fix_parent_child_relation",
+                        "classify_content_role",
                         "classify_non_rendering",
                     ],
                 }
@@ -2265,9 +2630,23 @@ def record_review(args: argparse.Namespace) -> dict[str, Any]:
             "complete": False,
         }
 
-    stage_result = build_stage_result(manifest, state, semantic_draft, coverage, review_sha)
+    semantic_blocks = build_semantic_blocks(
+        stage_dir, manifest, state, semantic_draft, facts, bindings
+    )
+    semantic_blocks_raw = json_bytes(semantic_blocks)
+    semantic_blocks_sha = sha256_bytes(semantic_blocks_raw)
+    next_state["semantic_blocks_sha256"] = semantic_blocks_sha
+    stage_result = build_stage_result(
+        manifest,
+        state,
+        semantic_draft,
+        coverage,
+        review_sha,
+        semantic_blocks_sha,
+    )
     result_sha = sha256_bytes(json_bytes(stage_result))
     next_state["stage_result_sha256"] = result_sha
+    atomic_write_json(stage_dir / "semantic-blocks.json", semantic_blocks)
     atomic_write_json(stage_dir / "stage-result.json", stage_result)
     atomic_write_json(stage_dir / "state.json", next_state)
     sync_stage_index(args.project_root, stage_dir, next_state)
@@ -2286,7 +2665,7 @@ def verify_complete(args: argparse.Namespace) -> dict[str, Any]:
     if state.get("state") != "complete":
         raise ContractError("stage_incomplete", f"extract state is {state.get('state')}")
     manifest, facts = verify_frozen_sources(stage_dir, state)
-    semantic_draft, _, coverage = verify_exact_coverage(stage_dir, state, facts)
+    semantic_draft, bindings, coverage = verify_exact_coverage(stage_dir, state, facts)
     review_path = stage_dir / "semantic-review.json"
     review = read_json(review_path)
     if sha256_bytes(review_path.read_bytes()) != state.get("semantic_review_sha256"):
@@ -2294,12 +2673,27 @@ def verify_complete(args: argparse.Namespace) -> dict[str, Any]:
     _, evidence_passes = validate_semantic_review(review, state, semantic_draft)
     if not evidence_passes:
         raise ContractError("stage_incomplete", "semantic review does not pass")
+    expected_semantic_blocks = build_semantic_blocks(
+        stage_dir, manifest, state, semantic_draft, facts, bindings
+    )
+    semantic_blocks_path = stage_dir / "semantic-blocks.json"
+    actual_semantic_blocks = read_json(semantic_blocks_path)
+    semantic_blocks_sha = sha256_bytes(json_bytes(expected_semantic_blocks))
+    if (
+        actual_semantic_blocks != expected_semantic_blocks
+        or sha256_bytes(semantic_blocks_path.read_bytes()) != semantic_blocks_sha
+        or state.get("semantic_blocks_sha256") != semantic_blocks_sha
+    ):
+        raise ContractError(
+            "stage_drift", "semantic Blocks do not match complete source evidence"
+        )
     expected_result = build_stage_result(
         manifest,
         state,
         semantic_draft,
         coverage,
         state["semantic_review_sha256"],
+        semantic_blocks_sha,
     )
     result_path = stage_dir / "stage-result.json"
     actual_result = read_json(result_path)

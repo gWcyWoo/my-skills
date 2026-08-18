@@ -220,6 +220,50 @@ class AtomicSheetQueueTests(unittest.TestCase):
         self.assertEqual(store.rows[0].values["状态"], "doing")
         self.assertNotIn("PR地址", store.rows[0].values)
 
+    def test_completion_without_mr_preserves_pr_value(self) -> None:
+        store = MemorySheetStore(
+            [
+                SheetRow(
+                    2,
+                    {
+                        "编号": "A",
+                        "状态": "ready",
+                        "lease_token": "",
+                        "PR地址": "",
+                    },
+                )
+            ]
+        )
+        mapping = QueueMapping(
+            row_id="编号",
+            status="状态",
+            lease_token="lease_token",
+            lease_until="lease_until",
+            pr_url="PR地址",
+            ready="ready",
+            doing="doing",
+            done="review",
+        )
+        with tempfile.TemporaryDirectory() as lock_directory:
+            queue = AtomicSheetQueue(
+                store=store,
+                lock_root=Path(lock_directory),
+                token_factory=lambda: "lease-A",
+            )
+            queue.claim("book", "Tasks", mapping, lease_seconds=3600)
+            result = queue.complete(
+                "book",
+                "Tasks",
+                mapping,
+                row_id="A",
+                lease_token="lease-A",
+                pr_url=None,
+            )
+
+        self.assertEqual(result["row_status"], "review")
+        self.assertEqual(store.rows[0].values["状态"], "review")
+        self.assertEqual(store.rows[0].values["PR地址"], "")
+
 
 if __name__ == "__main__":
     unittest.main()

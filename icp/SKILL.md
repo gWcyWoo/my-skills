@@ -1,6 +1,6 @@
 ---
 name: icp
-description: Build a source-bound, staged design-to-code contract. Use when a user invokes ICP, asks to extract one or many Lanhu designs into trustworthy structured data, or wants to turn verified designs plus IOLE UI and interaction requirements into a locked business-component system. The current implementation covers extract and component-design.
+description: Build a source-bound, staged design-to-code contract. Use when a user invokes ICP, asks to extract one or many Lanhu designs into trustworthy structured data, turns verified designs plus IOLE requirements into a locked business-component system, or implements that lock with strict interaction TDD and visual verification.
 ---
 
 # ICP
@@ -15,6 +15,9 @@ Turn rendered designs and their machine-readable sources into reviewable contrac
   extraction, props/slots/variants/states/events, or the implementation component
   lock, read [component-design/STAGE.md](component-design/STAGE.md) completely
   before acting.
+- For target-platform planning, DTOs/mocks/adapters, code generation, interaction
+  TDD, responsive runtime evidence, or visual fidelity, read
+  [implementation/STAGE.md](implementation/STAGE.md) completely before acting.
 
 Run `component-design` only after the same project's complete extract batch passes
 live verification and with IOLE's exact `iole.flow-source-bundle.v2`. The bundle
@@ -29,9 +32,8 @@ business-column analysis, field and cross-row review, and hashes that still matc
 every member's `row_data` and relation graph. Reject legacy analysis, a missing
 member/declared field, stale evidence, false review pass, or an unbound relation.
 One source member may own multiple ordered design states. Do not create
-placeholder directories or pretend to run later stages. Implementation, fidelity
-acceptance, and interaction/final inspection remain pending until their own
-contracts exist.
+placeholder directories or pretend to run later stages. Start implementation only
+from a live-verified component lock and its deterministic implementation universe.
 
 ## Project-owned artifacts
 
@@ -40,18 +42,29 @@ Write process artifacts under the target project:
 ```text
 <project>/.icp/extract/<design-name>/
 <project>/.icp/component-design/
+<project>/.icp/implementation/
 ```
 
 The extract batch manifest, index, and result live directly in `.icp/extract/`.
 Component design owns one cross-design contract in `.icp/component-design/`.
-Preserve both directories on failure because their hashes, revisions, and repair
-packets are evidence.
+Implementation owns plans, page codegen packets, TDD evidence, runtime evidence,
+and its final result in `.icp/implementation/`. Preserve all three directories on
+failure because their hashes, revisions, and repair packets are evidence.
 
 ## Self-contained boundary
 
 ICP owns its Lanhu acquisition path: URL parsing, configured-cookie resolution, HTTP and gzip handling, metadata and design JSON retrieval, complete cover validation, exported-slice discovery, downloads, and hashes. Do not call, import, or locate another skill at runtime.
 
 The model may interpret semantics, roles, hierarchy, relationships, and source-node classifications. It may not invent source IDs, dimensions, colors, spacing values, or other exact facts. Scripts own source normalization, hashes, exact partitions, source-node-to-local-asset references, reference-pixel-to-logical-coordinate mapping, repair packets, state transitions, and completion verification.
+
+Stage 1 receives the exact same-row `UI补充描述` as a string or JSON `null`.
+Use it only to help interpret the rendered design and choose visual-semantic Block
+boundaries, names, and grouping. It is not design-data authority and cannot add,
+delete, replace, or override any Lanhu JSON fact. Stage 1 is complete only when
+its self-contained `semantic-blocks.json` retains every ordered source node,
+relationship, payload field, content role, and asset relation, and those Block
+members plus the explicit non-rendering set reconstruct the complete parsed
+design JSON exactly.
 
 Exact source-node coverage is necessary but never sufficient for extract. After
 binding, traverse the complete JSON inventory again in source order. For every
@@ -128,6 +141,13 @@ leaf. A shared capability/data/action meaning must exactly match a bound
 canonical fact meaning on every instance; kind-only bindings do not prove a shared
 invariant. Visual similarity and numeric scores never authorize reuse.
 
+Component design consumes the verified Stage-1 `semantic-blocks.json` directly.
+It binds those immutable Blocks to page candidates, component instances, and
+final component definitions; it must not rebuild, reinterpret, or repair Stage-1
+design grouping from separate source facts and bindings. Before using a design,
+require its frozen Stage-1 `ui_supplement` to equal the owning IOLE member's exact
+current `UI补充描述`, including `null`.
+
 Component design owns one advisory mobile morphology knowledge file at
 `component-design/references/mobile-component-patterns.md`. At stage start, freeze
 its complete UTF-8 bytes and SHA-256 into `.icp/component-design/`, then inject the
@@ -186,6 +206,44 @@ exact IOLE source contract—including title/route, `UI补充描述`, `交互描
 `接口描述`, UT, IT, and E2E clauses—as authoritative for copy, values, data rules,
 validation, enabled/disabled behavior, state transitions, actions, and acceptance.
 
+At implementation start, require the target project's root `common-rules.md` and
+freeze its exact UTF-8 bytes, content, and SHA-256 into the implementation stage.
+When the same-page description is silent or ambiguous about a project-wide policy,
+consult this frozen public rule before platform best practices. An explicit
+same-page clause always wins. Inject the complete frozen common rules into every
+page codegen packet; a later file change is stage drift.
+
+Also freeze the skill-owned Stage 3 implementation prompt. The page packet must preserve the complete
+Stage 1 Block binding through design instance, semantic component instance, final
+component, parent instance, and slot. Before coding, query the live codebase once
+per Stage 2 component definition using the complete semantic contract, and let the
+implementing model reuse a suitable public component or create the required one.
+
+Stage 3 does only implementation and implementation verification: create every
+integration test from three preserved sources—same-page `IT`, same-page
+`交互描述`, and model inference over each frozen component's complete semantic
+contract—obtain RED, implement all frozen component
+behavior and every Stage 1 design element/asset, obtain GREEN, audit the complete
+obligation set, and compare every design state with its reference at the exact
+frozen reference viewport. At that viewport check colors, component structure,
+spacing, and font sizes; whole-image MAE is diagnostic only. Compact, expanded,
+and other sizes instead check
+natural text reflow, clipping, overlap, horizontal overflow, scroll reachability,
+control operation, system bars, and safe insets. Every component must be
+constraint-driven and content-adaptive; they never use screenshot MAE as a gate.
+The reference artboard is not a fixed runtime geometry template: do not hard-code
+text/card/section/page heights or use locale/copy-specific line breaks, font
+metrics, spacing, offsets, or geometry merely to reduce diagnostic MAE. Interaction
+tests own behavior-driven visual state even when the static artboard differs. On
+reference-fidelity failure,
+collect all failed designs in one
+regional difference report and trace each affected obligation back through its
+code mapping and frozen Stage 1 source node. Repair code when the frozen data is
+correct and the repair preserves the responsive contract. If Stage 1 data/grouping is wrong, stop changing code, return to Stage 1
+with the exact design/Block/source-node/field, repair the owning data, rerun Stage
+2, and then resume implementation. The model handles this correction loop itself;
+Stage 3 adds no diagnosis protocol or state lock.
+
 Treat every IOLE member/physical row as an independent page scope. Multiple
 designs may be states of that page, but a rule from page A cannot constrain page
 B merely because both instantiate one shared component. Shared components reuse
@@ -203,6 +261,12 @@ description conflict, use the description without treating the design placeholde
 as an unresolved blocker. If a description field is empty, preserve the absence:
 use the design for structure and visuals, but do not invent business behavior from
 the screenshot.
+
+Stage 1 freezes every rendering source node as
+`static_visual|static_copy|dynamic_content|platform_element` and reverse-reviews
+that role with the Block assignment. Later stages must preserve it. In particular,
+`dynamic_content` may require DTO/mock/API data plumbing, but its captured sample
+value is never itself a rule.
 
 Do not use a title/substring/score heuristic to decide fact scope or atomicity.
 Page isolation is structural: page key, design ownership, candidate-owned Blocks,
@@ -232,6 +296,25 @@ instances have no fabricated Block. Stage 3 must consume this projection instead
 of reconstructing visual groups or reading a component definition without its
 Block evidence.
 
+Stage 3 must also prove that it consumed exact exported assets. For every rendered
+design element with source assets, its plan selects at least one frozen asset ID and
+SHA-256 plus one project-relative target resource. Verification requires identical
+source and target bytes by SHA-256; code anchors alone do not prove the asset was
+used, and redrawing or approximating an exported icon is forbidden.
+
+Visual evidence must be produced by ICP's reversible device-capture process. For
+each design state, freeze package, locale, and exact state-setup commands; snapshot
+the emulator's size/density override modes, locale, font scale, and navigation
+mode; convert it to the reference pixel size and logical scale; capture the full
+long artboard; normalize the PNG to the reference dimensions; and restore the exact
+snapshot in a `finally` path. Verification rejects missing conversion/restoration
+evidence before recording diagnostic MAE and applying reference-fidelity checks.
+
+Every IOLE `modal|component` reference must also terminate in one Stage 2
+`presentation_usage`: exact source page/facts/host instance to exact referenced
+member/root instance/final component. Navigation edges do not create component
+usage. Stage 3 may implement this binding but cannot infer, remove, or retarget it.
+
 An individual design is complete only when this exits zero:
 
 ```bash
@@ -251,3 +334,17 @@ python3 <icp-skill>/component-design/scripts/component_design.py verify \
 
 Stop after reporting the component lock and stage result; do not begin production
 implementation implicitly.
+
+An implementation run is complete only when this exits zero:
+
+```bash
+python3 <icp-skill>/implementation/scripts/implementation.py verify \
+  --project-root <project> \
+  --evidence <runtime-evidence.json>
+```
+
+This requires exact code coverage and asset hashes, strict interaction RED/GREEN
+evidence, successful lint/build/integration commands, adaptive evidence for every
+component, compact and expanded runtime checks, exact visual device
+conversion/restoration evidence, and passing reference-viewport color,
+component-structure, spacing, and font-size checks. PNG MAE is diagnostic only.

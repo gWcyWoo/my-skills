@@ -239,6 +239,8 @@ class IoleContractV1Tests(unittest.TestCase):
         self.assertEqual(result["worker_skill_name"], "icp")
         self.assertEqual(result["worker_skill"], "~/.agents/skills/icp/SKILL.md")
         self.assertEqual(result["rrule"], "FREQ=MINUTELY;INTERVAL=5")
+        self.assertEqual(result["mr"], 0)
+        self.assertEqual(json.loads(result["prompt"].split(" with ", 1)[1])["mr"], 0)
         self.assertEqual(result["role_queue"]["status"], "frontend status")
         self.assertEqual(result["role_queue"]["pr_url"], "frontend pr")
         self.assertNotIn("watch_status", result)
@@ -407,7 +409,7 @@ class IoleContractV1Tests(unittest.TestCase):
                 json.dumps(inconsistent_row, ensure_ascii=False),
                 encoding="utf-8",
             )
-            inconsistent = self.run_cli(
+            without_pr = self.run_cli(
                 "map-row",
                 "--mapping",
                 str(MAPPING),
@@ -420,7 +422,10 @@ class IoleContractV1Tests(unittest.TestCase):
                 "--output",
                 str(root / "inconsistent-claim.json"),
             )
-            self.assertEqual(inconsistent.returncode, 2, inconsistent.stderr)
+            self.assertEqual(without_pr.returncode, 0, without_pr.stderr)
+            without_pr_result = json.loads(
+                (root / "inconsistent-claim.json").read_text(encoding="utf-8")
+            )
 
         self.assertEqual(result["kind"], "iole.claimed-row.v1")
         self.assertEqual(result["role"], "client")
@@ -430,6 +435,11 @@ class IoleContractV1Tests(unittest.TestCase):
         self.assertEqual(
             result["existing_pr_url"],
             "http://gitlab.example/client/merge_requests/7",
+        )
+        self.assertIsNone(without_pr_result["existing_pr_url"])
+        self.assertEqual(
+            without_pr_result["latest_review"],
+            {"number": 2, "text": "点击按钮没有跳转"},
         )
 
     def test_map_row_reports_detailed_missing_fields(self) -> None:
@@ -664,6 +674,8 @@ class IoleContractV1Tests(unittest.TestCase):
                 str(MAPPING),
                 "--claim",
                 str(claim_path),
+                "--mr",
+                "2",
                 "--pr-url",
                 "https://gitlab.example/client/merge_requests/8",
             )
@@ -673,6 +685,8 @@ class IoleContractV1Tests(unittest.TestCase):
                 str(MAPPING),
                 "--claim",
                 str(claim_path),
+                "--mr",
+                "2",
                 "--pr-url",
                 "http://gitlab.example/client/merge_requests/8\ninjected",
             )
@@ -723,6 +737,49 @@ class IoleContractV1Tests(unittest.TestCase):
                 "stop_current_run": True,
             },
         )
+
+    def test_review_writeback_default_preserves_pr_without_git_delivery(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            claim_path = Path(temporary_directory) / "claim.json"
+            claim_path.write_text(
+                json.dumps(
+                    {
+                        "kind": "iole.claimed-row.v1",
+                        "schema_version": 1,
+                        "source_id": SOURCE_ID,
+                        "role": "client",
+                        "row_id": "42",
+                        "status": "doing",
+                        "lease_token": "lease-client-42",
+                        "row_digest": claim_digest(None),
+                        "existing_pr_url": None,
+                        "latest_review": None,
+                        "design_source": "lanhu-figma",
+                        "design_ref": "https://design.example/page-42",
+                        "page": {
+                            "title": "Loan home",
+                            "route": "/loan",
+                            "requirement": "实现贷款首页",
+                            "acceptance_criteria": ["UT: 组件测试通过"],
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            completed = self.run_cli(
+                "build-review-writeback",
+                "--mapping",
+                str(MAPPING),
+                "--claim",
+                str(claim_path),
+            )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["mr"], 0)
+        self.assertEqual(result["set"]["status"], "review")
+        self.assertIsNone(result["set"]["pr_url"])
 
 
 if __name__ == "__main__":

@@ -910,10 +910,8 @@ def build_source_bundle(
             pr_url = exact_cell(raw_row, str(queue["pr_url"]), "pr_url").strip()
             reviews = exact_cell(raw_row, str(queue["reviews"]), "reviews")
             latest_review = parse_latest_review(reviews)
-            if bool(pr_url) != (latest_review is not None):
-                raise ValueError(
-                    "review and PR URL must either both exist or both be empty"
-                )
+            if pr_url and latest_review is None:
+                raise ValueError("an existing PR URL requires a numbered review")
             if pr_url:
                 parsed_pr = urlparse(pr_url)
                 if parsed_pr.scheme not in {"http", "https"} or not parsed_pr.hostname:
@@ -1030,11 +1028,14 @@ def build_schedule_plan(
     excel_url: str,
     role: str,
     interval_minutes: int,
+    mr: int,
     project_root: Path,
     mapping_path: Path,
 ) -> dict[str, object]:
     if interval_minutes <= 0:
         raise ValueError("polling interval must be positive")
+    if mr not in {0, 1, 2}:
+        raise ValueError("mr must be 0, 1, or 2")
     parsed = urlparse(excel_url)
     hostname = (parsed.hostname or "").lower()
     if (
@@ -1076,6 +1077,7 @@ def build_schedule_plan(
     prompt_payload = {
         "excel_url": excel_url,
         "role": role,
+        "mr": mr,
         "flow_contract_version": 2,
         "mapping_path": str(mapping_path),
         "project_root": str(project_root.resolve()),
@@ -1086,6 +1088,7 @@ def build_schedule_plan(
         "schedule_identity": f"iole-flow-{identity[:24]}",
         "provider": provider,
         "role": role,
+        "mr": mr,
         "mapping_path": str(mapping_path),
         "worker_skill_name": "icp",
         "worker_skill": ICP_SKILL_PATH,
@@ -1201,8 +1204,8 @@ def build_flow_input(
         pr_url = exact_cell(raw_row, str(queue["pr_url"]), "pr_url").strip()
         reviews = exact_cell(raw_row, str(queue["reviews"]), "reviews")
         latest_review = parse_latest_review(reviews)
-        if bool(pr_url) != (latest_review is not None):
-            raise ValueError("review and PR URL must either both exist or both be empty")
+        if pr_url and latest_review is None:
+            raise ValueError("an existing PR URL requires a numbered review")
         if pr_url:
             parsed_pr = urlparse(pr_url)
             if parsed_pr.scheme not in {"http", "https"} or not parsed_pr.hostname:
@@ -1862,9 +1865,12 @@ def build_pr_recovery_plan(
 def build_review_writeback(
     plan_path: Path,
     lease_token: str,
-    pr_url: str,
+    mr: int,
+    pr_url: str | None,
     icp_result_path: Path | None = None,
 ) -> dict[str, object]:
+    if mr not in {0, 1, 2}:
+        raise ValueError("mr must be 0, 1, or 2")
     plan = load_input_document(plan_path, "flow plan")
     if (
         (plan.get("kind"), plan.get("schema_version"))
@@ -2000,9 +2006,14 @@ def build_review_writeback(
         or any(ord(character) < 32 or ord(character) == 127 for character in lease_token)
     ):
         raise ValueError("flow lease token is invalid")
-    parsed_pr = urlparse(pr_url)
-    if parsed_pr.scheme not in {"http", "https"} or not parsed_pr.hostname:
-        raise ValueError("PR URL is invalid")
+    if mr == 2:
+        if pr_url is None:
+            raise ValueError("mr=2 requires a PR URL")
+        parsed_pr = urlparse(pr_url)
+        if parsed_pr.scheme not in {"http", "https"} or not parsed_pr.hostname:
+            raise ValueError("PR URL is invalid")
+    elif pr_url is not None:
+        raise ValueError("PR URL is allowed only when mr=2")
     members = plan.get("claim_page_titles")
     member_digests = plan.get("member_digests")
     if not isinstance(members, list) or not members or not isinstance(member_digests, dict):
@@ -2010,6 +2021,7 @@ def build_review_writeback(
     return {
         "kind": "iole.flow-review-writeback-intent.v2",
         "schema_version": 2,
+        "mr": mr,
         "connector_operation": "complete_flow_rows",
         "flow_id": plan["flow_id"],
         "role": plan["role"],
@@ -2090,6 +2102,7 @@ def main(argv: list[str] | None = None) -> int:
     schedule_parser.add_argument("--excel-url", required=True)
     schedule_parser.add_argument("--role", required=True)
     schedule_parser.add_argument("--im", type=int, default=10)
+    schedule_parser.add_argument("--mr", type=int, default=0)
     schedule_parser.add_argument("--project-root", required=True, type=Path)
     schedule_parser.add_argument("--mapping", type=Path, default=DEFAULT_MAPPING)
     input_parser = subparsers.add_parser("build-input")
@@ -2125,7 +2138,8 @@ def main(argv: list[str] | None = None) -> int:
     writeback_parser = subparsers.add_parser("build-review-writeback")
     writeback_parser.add_argument("--plan", required=True, type=Path)
     writeback_parser.add_argument("--lease-token", required=True)
-    writeback_parser.add_argument("--pr-url", required=True)
+    writeback_parser.add_argument("--mr", type=int, default=0)
+    writeback_parser.add_argument("--pr-url")
     writeback_parser.add_argument("--icp-result", type=Path)
     error_parser = subparsers.add_parser("build-error-writeback")
     error_parser.add_argument("--plan", required=True, type=Path)
@@ -2138,6 +2152,7 @@ def main(argv: list[str] | None = None) -> int:
                 arguments.excel_url,
                 arguments.role,
                 arguments.im,
+                arguments.mr,
                 arguments.project_root,
                 arguments.mapping,
             )
@@ -2172,6 +2187,7 @@ def main(argv: list[str] | None = None) -> int:
             result = build_review_writeback(
                 arguments.plan,
                 arguments.lease_token,
+                arguments.mr,
                 arguments.pr_url,
                 arguments.icp_result,
             )

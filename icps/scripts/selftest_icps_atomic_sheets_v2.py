@@ -924,6 +924,39 @@ class AtomicSheetFlowQueueTests(unittest.TestCase):
             self.assertEqual(row.values["frontend lease_token"], "")
             self.assertEqual(row.values["frontend lease_until"], "")
 
+    def test_completion_without_mr_preserves_pr_and_moves_all_members_to_review(self) -> None:
+        store = MemoryFlowSheetStore(ready_rows())
+        with tempfile.TemporaryDirectory() as lock_directory:
+            queue = AtomicSheetFlowQueue(
+                store=store,
+                lock_root=Path(lock_directory),
+                token_factory=lambda: "flow-lease-1",
+            )
+            queue.claim_flow(
+                "book",
+                "Tasks",
+                mapping(),
+                flow_id="iole-flow-abc",
+                row_ids=["PAGE-001", "PAGE-002", "PAGE-003"],
+                lease_seconds=3600,
+                expected_values=guards("PAGE-001", "PAGE-002", "PAGE-003"),
+            )
+            result = queue.complete_flow(
+                "book",
+                "Tasks",
+                mapping(),
+                flow_id="iole-flow-abc",
+                lease_token="flow-lease-1",
+                pr_url=None,
+                expected_values=guards("PAGE-001", "PAGE-002", "PAGE-003"),
+            )
+
+        self.assertEqual(result["status"], "review")
+        self.assertIsNone(result["pr_url"])
+        for row in store.rows:
+            self.assertEqual(row.values["frontend status"], "review")
+            self.assertEqual(row.values["frontend pr"], "")
+
     def test_completion_mutates_nothing_when_one_member_drifted(self) -> None:
         store = MemoryFlowSheetStore(ready_rows())
         with tempfile.TemporaryDirectory() as lock_directory:

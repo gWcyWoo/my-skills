@@ -400,69 +400,56 @@ def build_source_catalog(project_root: Path) -> tuple[dict[str, Any], str]:
         bindings_path, bindings = verified_artifact(
             stage_dir, artifacts.get("bindings"), f"{design_name} bindings"
         )
+        semantic_blocks_path, semantic_blocks = verified_artifact(
+            stage_dir,
+            artifacts.get("semantic_blocks"),
+            f"{design_name} semantic-blocks",
+        )
 
         manifest = require_dict(manifest, f"{design_name} source-manifest")
         facts = require_dict(facts, f"{design_name} source-facts")
         asset_index = require_dict(asset_index, f"{design_name} asset-index")
         semantic = require_dict(semantic, f"{design_name} semantic-draft")
         bindings = require_dict(bindings, f"{design_name} bindings")
-        blocks = require_list(semantic.get("blocks"), f"{design_name} semantic blocks")
-        nodes = require_dict(facts.get("nodes"), f"{design_name} source nodes")
-        block_ids = {
-            require_string(require_dict(block, "semantic block").get("block_id"), "block_id")
-            for block in blocks
-        }
-        assignments_by_block: dict[str, list[dict[str, Any]]] = {
-            block_id: [] for block_id in block_ids
-        }
-        non_rendering: list[dict[str, Any]] = []
-
-        assets_by_node: dict[str, list[dict[str, Any]]] = {}
-        for asset in require_list(asset_index.get("assets", []), f"{design_name} assets"):
-            asset = require_dict(asset, "asset")
-            for reference in require_list(asset.get("source_references", []), "asset references"):
-                reference = require_dict(reference, "asset reference")
-                node_id = require_string(reference.get("source_node_id"), "asset source node")
-                assets_by_node.setdefault(node_id, []).append(copy.deepcopy(asset))
-
-        for assignment in require_list(bindings.get("assignments"), f"{design_name} assignments"):
-            assignment = require_dict(assignment, "binding assignment")
-            node_id = require_string(assignment.get("source_node_id"), "source_node_id")
-            if node_id not in nodes:
-                raise ContractError("extract_drift", f"binding references missing node {node_id}")
-            joined = {
-                "source_node_id": node_id,
-                "status": assignment.get("status"),
-                "geometry_basis": assignment.get("geometry_basis"),
-                "rationale": assignment.get("rationale"),
-                "source_fact": copy.deepcopy(nodes[node_id]),
-                "assets": copy.deepcopy(assets_by_node.get(node_id, [])),
-            }
-            block_id = assignment.get("block_id")
-            if block_id is None:
-                non_rendering.append(joined)
-            elif block_id in assignments_by_block:
-                assignments_by_block[block_id].append(joined)
-            else:
-                raise ContractError(
-                    "extract_drift", f"binding references missing block {design_name}/{block_id}"
-                )
-
-        joined_blocks: list[dict[str, Any]] = []
-        root_block_ids: list[str] = []
-        for block_value in blocks:
-            block = require_dict(block_value, "semantic block")
-            block_id = require_string(block.get("block_id"), "block_id")
-            if block.get("parent_block_id") is None:
-                root_block_ids.append(block_id)
-            joined_blocks.append(
-                {
-                    "block_id": block_id,
-                    "semantic": copy.deepcopy(block),
-                    "source_nodes": assignments_by_block[block_id],
-                }
+        semantic_blocks = require_dict(
+            semantic_blocks, f"{design_name} semantic-blocks"
+        )
+        if semantic_blocks.get("schema") != "icp.extract.semantic-blocks.v1":
+            raise ContractError(
+                "extract_drift", f"extract design {design_name} has invalid semantic Blocks"
             )
-        if len(root_block_ids) != 1:
+        if (
+            semantic_blocks.get("source_facts_sha256")
+            != sha256_bytes(facts_path.read_bytes())
+            or semantic_blocks.get("asset_index_sha256")
+            != sha256_bytes(assets_path.read_bytes())
+            or semantic_blocks.get("semantic_draft_sha256")
+            != sha256_bytes(semantic_path.read_bytes())
+            or semantic_blocks.get("bindings_sha256")
+            != sha256_bytes(bindings_path.read_bytes())
+        ):
+            raise ContractError(
+                "extract_drift",
+                f"extract design {design_name} semantic Blocks lost source bindings",
+            )
+        joined_blocks = copy.deepcopy(
+            require_list(semantic_blocks.get("blocks"), f"{design_name} Blocks")
+        )
+        non_rendering = copy.deepcopy(
+            require_list(
+                semantic_blocks.get("non_rendering_source_nodes"),
+                f"{design_name} non-rendering source nodes",
+            )
+        )
+        root_block_id = require_string(
+            semantic_blocks.get("root_block_id"), f"{design_name} root Block"
+        )
+        if sum(
+            1
+            for block_value in joined_blocks
+            if require_dict(block_value, "semantic Block").get("block_id")
+            == root_block_id
+        ) != 1:
             raise ContractError(
                 "extract_drift", f"extract design {design_name} must have one semantic root"
             )
@@ -476,7 +463,13 @@ def build_source_catalog(project_root: Path) -> tuple[dict[str, Any], str]:
                 "version_id": manifest.get("version_id"),
                 "project_id": source_identity.get("project_id", ""),
                 "image_id": source_identity.get("image_id", ""),
-                "root_block_id": root_block_ids[0],
+                "root_block_id": root_block_id,
+                "semantic_context": copy.deepcopy(
+                    require_dict(
+                        semantic_blocks.get("semantic_context"),
+                        f"{design_name} semantic context",
+                    )
+                ),
                 "stage_result_sha256": stage_result_sha,
                 "artifact_sha256": {
                     "source_manifest": sha256_bytes(manifest_path.read_bytes()),
@@ -484,6 +477,9 @@ def build_source_catalog(project_root: Path) -> tuple[dict[str, Any], str]:
                     "asset_index": sha256_bytes(assets_path.read_bytes()),
                     "semantic_draft": sha256_bytes(semantic_path.read_bytes()),
                     "bindings": sha256_bytes(bindings_path.read_bytes()),
+                    "semantic_blocks": sha256_bytes(
+                        semantic_blocks_path.read_bytes()
+                    ),
                 },
                 "blocks": joined_blocks,
                 "non_rendering_source_nodes": non_rendering,
@@ -866,10 +862,9 @@ def build_business_context(
         raise ContractError("invalid_iole_input", "IOLE source bundle digest mismatch")
 
     catalog_designs = {
-        require_string(design.get("design_url"), "catalog design URL"): require_string(
-            design.get("design_name"), "catalog design name"
-        )
-        for design in require_list(catalog.get("designs"), "catalog designs")
+        require_string(design.get("design_url"), "catalog design URL"): design
+        for design_value in require_list(catalog.get("designs"), "catalog designs")
+        for design in [require_dict(design_value, "catalog design")]
     }
     matched_designs: dict[str, str] = {}
     titles: set[str] = set()
@@ -995,6 +990,16 @@ def build_business_context(
                     "text": section_text or "",
                 }
             )
+        ui_supplements = [
+            require_nullable_text(section.get("value"), "UI supplement")
+            for section in requirement_sections
+            if section.get("label") == "UI补充描述"
+        ]
+        if len(ui_supplements) > 1:
+            raise ContractError(
+                "invalid_iole_input", f"member {title} declares UI补充描述 more than once"
+            )
+        ui_supplement = ui_supplements[0] if ui_supplements else None
         acceptance_sections = require_list(
             source_contract.get("acceptance_sections"),
             f"{label}.source_contract.acceptance_sections",
@@ -1049,11 +1054,26 @@ def build_business_context(
 
         design_states: list[dict[str, Any]] = []
         for ref in design_refs:
-            design_name = catalog_designs.get(ref["url"])
-            if design_name is None:
+            catalog_design = catalog_designs.get(ref["url"])
+            if catalog_design is None:
                 raise ContractError(
                     "iole_extract_mismatch",
                     f"member {title} has no verified extract for {ref['url']}",
+                )
+            design_name = require_string(
+                catalog_design.get("design_name"), "catalog design name"
+            )
+            semantic_context = require_dict(
+                catalog_design.get("semantic_context"),
+                f"catalog semantic context for {design_name}",
+            )
+            if (
+                semantic_context.get("design_url") != ref["url"]
+                or semantic_context.get("ui_supplement") != ui_supplement
+            ):
+                raise ContractError(
+                    "iole_extract_mismatch",
+                    f"member {title} UI补充描述 was not used by extract {design_name}",
                 )
             if design_name in matched_designs:
                 raise ContractError(
@@ -1102,7 +1122,10 @@ def build_business_context(
             }
         )
 
-    expected_design_names = set(catalog_designs.values())
+    expected_design_names = {
+        require_string(design.get("design_name"), "catalog design name")
+        for design in catalog_designs.values()
+    }
     if set(matched_designs) != expected_design_names:
         raise ContractError(
             "iole_extract_mismatch",
@@ -1339,8 +1362,117 @@ def validate_source_context_joins(
                 )
 
 
+def build_presentation_requirements(
+    member: dict[str, Any], business_context: dict[str, Any]
+) -> list[dict[str, Any]]:
+    member_title = require_string(member.get("title"), "business member title")
+    members_by_title = {
+        require_string(item.get("title"), "business member title"): item
+        for item_value in require_list(
+            business_context.get("members"), "business context members"
+        )
+        for item in [require_dict(item_value, "business context member")]
+    }
+    clauses_by_label: dict[str, list[dict[str, Any]]] = {}
+    for clause_value in require_list(member.get("clauses"), "business clauses"):
+        clause = require_dict(clause_value, "business clause")
+        clauses_by_label.setdefault(
+            require_string(clause.get("label"), "business clause label"), []
+        ).append(clause)
+    analysis = require_dict(
+        require_dict(
+            business_context.get("source_closure"), "business source closure"
+        ).get("analysis"),
+        "business source analysis",
+    )
+    row = next(
+        (
+            require_dict(value, "business source analysis row")
+            for value in require_list(analysis.get("rows"), "business source rows")
+            if require_dict(value, "business source analysis row").get("title")
+            == member_title
+        ),
+        None,
+    )
+    if row is None:
+        raise ContractError(
+            "invalid_business_context", f"source analysis is missing {member_title}"
+        )
+    requirements: list[dict[str, Any]] = []
+    for field_value in require_list(row.get("fields"), "business source fields"):
+        field = require_dict(field_value, "business source field")
+        column = require_string(field.get("column"), "business source column")
+        for reference_value in require_list(
+            field.get("references"), "business source references"
+        ):
+            reference = require_dict(reference_value, "business source reference")
+            relation_kind = reference.get("relation_kind")
+            if relation_kind not in {"modal", "component"}:
+                continue
+            matching_clauses = [
+                clause
+                for clause in clauses_by_label.get(column, [])
+                if clause.get("text") is not None
+                and sha256_bytes(
+                    require_text(clause.get("text"), "business clause text").encode(
+                        "utf-8"
+                    )
+                )
+                == field.get("source_sha256")
+            ]
+            matching_clauses.sort(
+                key=lambda clause: (
+                    clause.get("clause_id") != "page:interaction",
+                    require_string(clause.get("clause_id"), "business clause_id"),
+                )
+            )
+            if not matching_clauses:
+                raise ContractError(
+                    "presentation_source_unmapped",
+                    f"{member_title}/{column} presentation reference has no source clause",
+                )
+            clause = matching_clauses[0]
+            target_title = require_string(
+                reference.get("target_title"), "presentation target title"
+            )
+            target_member = members_by_title.get(target_title)
+            if target_member is None or not member_requires_semantic_work_item(
+                target_member
+            ):
+                raise ContractError(
+                    "presentation_target_unmapped",
+                    f"presentation target has no component work item: {target_title}",
+                )
+            evidence = {
+                "reference_id": require_string(
+                    reference.get("reference_id"), "presentation reference_id"
+                ),
+                "relation_kind": relation_kind,
+                "source_column": column,
+                "source_ref": {
+                    "member_title": member_title,
+                    "clause_id": clause["clause_id"],
+                    "source_sha256": field["source_sha256"],
+                    "start": reference["start"],
+                    "end": reference["end"],
+                    "quote": reference["quote"],
+                },
+                "target_member_title": target_title,
+                "target_page_key": page_key_for(target_title),
+            }
+            requirements.append(
+                {
+                    "presentation_requirement_id": "presentation-"
+                    + sha256_bytes(canonical_bytes(evidence))[:20],
+                    **evidence,
+                }
+            )
+    return requirements
+
+
 def build_page_facts_template(
     member: dict[str, Any],
+    business_context: dict[str, Any],
     source_catalog_sha: str,
     business_context_sha: str,
     mobile_component_pattern_context: dict[str, str],
@@ -1393,6 +1525,9 @@ def build_page_facts_template(
             for state in require_list(member.get("design_states"), "design states")
         ],
         "source_coverage": source_coverage,
+        "presentation_requirements": build_presentation_requirements(
+            member, business_context
+        ),
         "interaction_items": interaction_items,
         "candidates": [],
         "design_compositions": [],
@@ -1591,6 +1726,7 @@ def begin(args: argparse.Namespace) -> dict[str, Any]:
             continue
         template = build_page_facts_template(
             member,
+            business_context,
             catalog_sha,
             business_context_sha,
             mobile_pattern_context,
@@ -1791,6 +1927,7 @@ def validate_page_facts(
             "mobile_component_pattern_context",
             "design_names",
             "source_coverage",
+            "presentation_requirements",
             "interaction_items",
             "candidates",
             "design_compositions",
@@ -1818,6 +1955,14 @@ def validate_page_facts(
     )
     if design_names != expected_designs:
         raise ContractError("page_identity_mismatch", "page design order changed")
+    expected_presentation_requirements = build_presentation_requirements(
+        member, business_context
+    )
+    if facts.get("presentation_requirements") != expected_presentation_requirements:
+        raise ContractError(
+            "presentation_requirement_drift",
+            "page presentation requirements changed from the verified source closure",
+        )
     allowed_designs = set(design_names)
     clause_map = {
         require_string(item.get("clause_id"), "business clause_id"): item
@@ -2569,6 +2714,9 @@ def build_page_review_input(page_facts: dict[str, Any]) -> dict[str, Any]:
             page_facts["mobile_component_pattern_context"]
         ),
         "candidate_projection": candidate_projection,
+        "presentation_requirements": copy.deepcopy(
+            page_facts["presentation_requirements"]
+        ),
         "interaction_items": copy.deepcopy(page_facts["interaction_items"]),
         "segment_reviews": segment_reviews,
         "cross_page_review": {
@@ -2613,6 +2761,7 @@ def validate_page_review(
             "business_context_sha256",
             "mobile_component_pattern_context",
             "candidate_projection",
+            "presentation_requirements",
             "interaction_items",
             "segment_reviews",
             "cross_page_review",
@@ -2629,6 +2778,7 @@ def validate_page_review(
         "business_context_sha256",
         "mobile_component_pattern_context",
         "candidate_projection",
+        "presentation_requirements",
         "interaction_items",
     ):
         if review.get(field) != expected.get(field):
@@ -2781,6 +2931,37 @@ def materialize_group_registry(
                     "candidate": copy.deepcopy(candidate),
                 }
             )
+        root_candidate_ids: list[str] = []
+        for composition_value in require_list(
+            page.get("design_compositions"), "page design compositions"
+        ):
+            composition = require_dict(
+                composition_value, "page design composition"
+            )
+            root_instance_id = require_string(
+                composition.get("root_instance_id"), "root design instance ID"
+            )
+            root_instance = next(
+                (
+                    require_dict(value, "page design instance")
+                    for value in require_list(
+                        composition.get("instances"), "page design instances"
+                    )
+                    if require_dict(value, "page design instance").get("instance_id")
+                    == root_instance_id
+                ),
+                None,
+            )
+            if root_instance is None:
+                raise ContractError(
+                    "composition_not_tree",
+                    f"page composition has no root instance: {page_key}",
+                )
+            root_candidate_ids.append(
+                require_string(
+                    root_instance.get("candidate_id"), "root candidate ID"
+                )
+            )
         pages.append(
             {
                 "page_key": page_key,
@@ -2788,6 +2969,10 @@ def materialize_group_registry(
                 "page_facts_sha256": page_sha,
                 "page_review_sha256": review_sha,
                 "candidate_ids": sorted(candidate_ids),
+                "root_candidate_ids": root_candidate_ids,
+                "presentation_requirements": copy.deepcopy(
+                    page["presentation_requirements"]
+                ),
             }
         )
     candidates.sort(key=lambda item: item["candidate_id"])
@@ -2813,6 +2998,7 @@ def materialize_group_registry(
         "decisions": [],
         "component_definitions": [],
         "component_instances": [],
+        "presentation_usages": [],
     }
     if write:
         atomic_write_json(stage_dir / "group-candidate-registry.json", registry)
@@ -3059,6 +3245,7 @@ def validate_abstraction_plan(
             "decisions",
             "component_definitions",
             "component_instances",
+            "presentation_usages",
         },
         "abstraction plan",
     )
@@ -3424,6 +3611,188 @@ def validate_abstraction_plan(
         instances_by_component.setdefault(component_id, []).append(normalized_instance)
     if instantiated_candidates != set(registry_candidates):
         raise ContractError("candidate_instance_coverage", "every candidate needs exactly one component instance")
+    instances_by_id = {item["instance_id"]: item for item in instances}
+    instance_by_candidate_id = {
+        candidate_id: instance
+        for instance in instances
+        for candidate_id in instance["candidate_ids"]
+    }
+    requirements_by_id: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
+    for page_value in require_list(registry.get("pages"), "registry pages"):
+        page = require_dict(page_value, "registry page")
+        for requirement_value in require_list(
+            page.get("presentation_requirements"), "presentation requirements"
+        ):
+            requirement = require_dict(
+                requirement_value, "presentation requirement"
+            )
+            requirement_id = require_string(
+                requirement.get("presentation_requirement_id"),
+                "presentation requirement ID",
+            )
+            if requirement_id in requirements_by_id:
+                raise ContractError(
+                    "presentation_usage_invalid",
+                    f"duplicate presentation requirement {requirement_id}",
+                )
+            requirements_by_id[requirement_id] = (page, requirement)
+
+    normalized_usages: list[dict[str, Any]] = []
+    seen_requirement_ids: set[str] = set()
+    usage_ids: set[str] = set()
+    for usage_index, usage_value in enumerate(
+        require_list(plan.get("presentation_usages"), "presentation usages")
+    ):
+        label = f"presentation usages[{usage_index}]"
+        usage = require_dict(usage_value, label)
+        require_exact_keys(
+            usage,
+            {
+                "usage_id",
+                "presentation_requirement_id",
+                "source_page_key",
+                "source_member_title",
+                "host_instance_id",
+                "source_fact_ids",
+                "target_page_key",
+                "target_member_title",
+                "target_instance_id",
+                "target_component_id",
+                "presentation_mode",
+            },
+            label,
+        )
+        usage_id = require_string(usage.get("usage_id"), f"{label}.usage_id")
+        requirement_id = require_string(
+            usage.get("presentation_requirement_id"),
+            f"{label}.presentation_requirement_id",
+        )
+        if usage_id in usage_ids or requirement_id in seen_requirement_ids:
+            raise ContractError(
+                "presentation_usage_invalid",
+                "presentation usages must be unique per requirement",
+            )
+        usage_ids.add(usage_id)
+        seen_requirement_ids.add(requirement_id)
+        requirement_entry = requirements_by_id.get(requirement_id)
+        if requirement_entry is None:
+            raise ContractError(
+                "presentation_usage_invalid",
+                f"unknown presentation requirement {requirement_id}",
+            )
+        source_page, requirement = requirement_entry
+        expected_identity = {
+            "source_page_key": source_page["page_key"],
+            "source_member_title": source_page["member_title"],
+            "target_page_key": requirement["target_page_key"],
+            "target_member_title": requirement["target_member_title"],
+            "presentation_mode": requirement["relation_kind"],
+        }
+        if any(usage.get(key) != value for key, value in expected_identity.items()):
+            raise ContractError(
+                "presentation_usage_invalid",
+                f"presentation usage changes verified source identity: {requirement_id}",
+            )
+        source_ref = require_dict(
+            requirement.get("source_ref"), "presentation source_ref"
+        )
+        matching_fact_ids: list[str] = []
+        matching_candidate_ids: list[str] = []
+        for candidate_id in source_page["candidate_ids"]:
+            candidate = registry_candidates[candidate_id]["candidate"]
+            candidate_matches: list[str] = []
+            for fact_value in require_list(candidate.get("facts"), "candidate facts"):
+                fact = require_dict(fact_value, "candidate fact")
+                if any(
+                    ref.get("clause_id") == source_ref.get("clause_id")
+                    and ref.get("source_sha256") == source_ref.get("source_sha256")
+                    and ref.get("start") <= source_ref.get("start")
+                    and ref.get("end") >= source_ref.get("end")
+                    for source_ref_value in require_list(
+                        fact.get("source_refs"), "fact source_refs"
+                    )
+                    for ref in [require_dict(source_ref_value, "fact source_ref")]
+                ):
+                    candidate_matches.append(
+                        require_string(fact.get("fact_id"), "presentation source fact ID")
+                    )
+            if candidate_matches:
+                matching_candidate_ids.append(candidate_id)
+                matching_fact_ids.extend(candidate_matches)
+        if not matching_fact_ids:
+            raise ContractError(
+                "presentation_source_fact_missing",
+                f"presentation reference has no page semantic fact: {requirement_id}",
+            )
+        host_instances = {
+            instance_by_candidate_id[candidate_id]["instance_id"]
+            for candidate_id in matching_candidate_ids
+        }
+        if len(host_instances) != 1:
+            raise ContractError(
+                "presentation_usage_invalid",
+                f"presentation source facts span multiple host components: {requirement_id}",
+            )
+        host_instance_id = require_string(
+            usage.get("host_instance_id"), f"{label}.host_instance_id"
+        )
+        if host_instance_id != next(iter(host_instances)):
+            raise ContractError(
+                "presentation_usage_invalid",
+                f"presentation host does not own its source facts: {requirement_id}",
+            )
+        source_fact_ids = require_string_list(
+            usage.get("source_fact_ids"), f"{label}.source_fact_ids"
+        )
+        if source_fact_ids != matching_fact_ids:
+            raise ContractError(
+                "presentation_usage_invalid",
+                f"presentation usage does not bind every exact source fact: {requirement_id}",
+            )
+        target_instance_id = require_string(
+            usage.get("target_instance_id"), f"{label}.target_instance_id"
+        )
+        target_instance = instances_by_id.get(target_instance_id)
+        if (
+            target_instance is None
+            or target_instance.get("page_key") != requirement["target_page_key"]
+            or target_instance.get("member_title") != requirement["target_member_title"]
+            or usage.get("target_component_id") != target_instance.get("component_id")
+        ):
+            raise ContractError(
+                "presentation_usage_invalid",
+                f"presentation target does not resolve to the referenced member: {requirement_id}",
+            )
+        target_page = next(
+            page
+            for page_value in require_list(registry.get("pages"), "registry pages")
+            for page in [require_dict(page_value, "registry page")]
+            if page.get("page_key") == requirement["target_page_key"]
+        )
+        target_root_candidate_ids = require_string_list(
+            target_page.get("root_candidate_ids"), "target root candidate IDs", nonempty=False
+        )
+        if target_root_candidate_ids and not set(
+            target_instance["candidate_ids"]
+        ).intersection(target_root_candidate_ids):
+            raise ContractError(
+                "presentation_usage_invalid",
+                f"presentation target is not a referenced page root: {requirement_id}",
+            )
+        evidence = {key: copy.deepcopy(value) for key, value in usage.items() if key != "usage_id"}
+        expected_usage_id = "usage-" + sha256_bytes(canonical_bytes(evidence))[:20]
+        if usage_id != expected_usage_id:
+            raise ContractError(
+                "presentation_usage_invalid",
+                f"presentation usage ID is not evidence-derived: {requirement_id}",
+            )
+        normalized_usages.append(copy.deepcopy(usage))
+    if seen_requirement_ids != set(requirements_by_id):
+        missing = sorted(set(requirements_by_id) - seen_requirement_ids)
+        raise ContractError(
+            "presentation_usage_missing",
+            f"every modal/component reference needs one final component usage: {missing}",
+        )
     active_definitions = {
         **{
             component_id: require_dict(
@@ -3535,6 +3904,7 @@ def validate_abstraction_plan(
         "decisions": decisions,
         "component_definitions": definitions,
         "component_instances": instances,
+        "presentation_usages": normalized_usages,
     }
 
 
@@ -3746,6 +4116,7 @@ def record_abstraction(args: argparse.Namespace) -> dict[str, Any]:
             item["component_id"] for item in plan["component_definitions"]
         ),
         "component_instances": copy.deepcopy(plan["component_instances"]),
+        "presentation_usages": copy.deepcopy(plan["presentation_usages"]),
         "decisions": copy.deepcopy(plan["decisions"]),
     }
     atomic_write_json(system_path, system)
@@ -4306,6 +4677,7 @@ def build_v6_lock(
         "context_members": context_members,
         "component_definitions": copy.deepcopy(system["component_definitions"]),
         "component_instances": component_instances,
+        "presentation_usages": copy.deepcopy(system["presentation_usages"]),
         "decisions": copy.deepcopy(system["decisions"]),
         "page_compositions": page_compositions,
         "block_component_bindings": {
@@ -4375,6 +4747,7 @@ def verify_v6(args: argparse.Namespace) -> dict[str, Any]:
             item["component_id"] for item in plan["component_definitions"]
         ),
         "component_instances": copy.deepcopy(plan["component_instances"]),
+        "presentation_usages": copy.deepcopy(plan["presentation_usages"]),
         "decisions": copy.deepcopy(plan["decisions"]),
     }
     if system != expected_system:

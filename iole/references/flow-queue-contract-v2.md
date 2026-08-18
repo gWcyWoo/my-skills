@@ -44,6 +44,12 @@ to set it to `ready`. Never reopen it silently. If any member is already `doing`
 block without mutation. Non-empty member PRs must be empty or all identical;
 different PRs are `blocked/pr-conflict`.
 
+`mr` is a closed delivery mode: `0` leaves verified changes uncommitted, `1`
+commits and pushes the current branch directly, and `2` creates or updates one MR.
+It defaults to `0`. This choice does not change the terminal queue outcome: after
+ICP and all tests pass, all claimed modify members move atomically to `review`.
+Modes `0|1` preserve PR cells; mode `2` writes the common MR URL.
+
 ## ICP source bundle
 
 Persist the exact connector rows as the raw-rows object described below. Create a
@@ -296,16 +302,19 @@ writes `review`. On a controlled failure, call `record_flow_error` so every acti
 member retains `doing` and the shared lease while receiving the same bounded error.
 
 After ICP returns `icp.flow-handoff-result.v2`, run
-`build-review-writeback --icp-result` first. It rejects wrong flow/member identity,
+`build-review-writeback --mr MR --icp-result` first, passing `--pr-url` only for
+`mr=2`. It rejects wrong flow/member identity,
 generic pass claims, invalid digests, and any required/covered clause difference.
-After that gate and one PR succeed, call `complete_flow_rows` with every
-member's immutable guards. Under one lock, require every row to remain `doing` with
-the shared lease and unchanged guards, then set the same PR URL and `review` status
-on every member and clear all leases/errors in one batch. One mismatch produces
-zero terminal mutation.
+After that gate and the delivery action required by `mr` succeeds, call
+`complete_flow_rows` with every member's immutable guards. Under one lock, require
+every row to remain `doing` with the shared lease and unchanged guards, then set
+`review` on every member and clear all leases/errors in one batch. With `mr=0|1`,
+pass a null PR intent and preserve each current PR cell; with `mr=2`, set the same
+MR URL on every member. One mismatch produces zero terminal mutation.
 
-Reconstruct a lost completion response only when every member has the intended PR,
-`review`, cleared lease/error fields, and matching immutable guards. IOLE never
+Reconstruct a lost completion response only when every member has `review`,
+cleared lease/error fields, matching immutable guards, and either the preserved PR
+for `mr=0|1` or intended MR for `mr=2`. IOLE never
 writes `done`; review and merge own that transition.
 
 ## Atomicity boundary

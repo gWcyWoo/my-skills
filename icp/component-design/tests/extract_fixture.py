@@ -19,6 +19,7 @@ URL_B = (
     "https://lanhuapp.com/web/#/item/project/detailDetach?"
     "pid=project-1&image_id=image-b&fromEditor=true"
 )
+EXPORTED_ASSET_URL = "https://assets.invalid/FigmaSlicePNGfixture.png"
 
 
 def write_json(path: Path, value: object) -> None:
@@ -65,6 +66,8 @@ def source_for(name: str, suffix: str, url: str) -> dict:
                         "name": f"{name} content",
                         "frame": {"x": 0, "y": 0, "width": 1, "height": 1},
                         "text": {"value": name, "style": {"content": name}},
+                        "hasExportImage": True,
+                        "image": {"imageUrl": EXPORTED_ASSET_URL},
                     }
                 ],
             }
@@ -140,6 +143,7 @@ def complete_extract_design(project: Path, name: str, suffix: str) -> None:
                 "status": "mapped",
                 "block_id": "page",
                 "geometry_basis": "frame",
+                "content_role": "static_visual",
                 "rationale": "The artboard directly represents the page boundary.",
             },
             {
@@ -147,6 +151,7 @@ def complete_extract_design(project: Path, name: str, suffix: str) -> None:
                 "status": "mapped",
                 "block_id": "content",
                 "geometry_basis": "frame",
+                "content_role": "static_copy",
                 "rationale": "The text directly represents the content block.",
             },
         ],
@@ -178,6 +183,7 @@ def complete_extract_design(project: Path, name: str, suffix: str) -> None:
         item["issues"] = []
     for item in review["source_node_reviews"]:
         item["semantic_assignment_correct"] = True
+        item["content_role_correct"] = True
         item["independent_grouping_correct"] = True
         item["parent_child_relation_correct"] = True
         item["evidence"] = [
@@ -216,15 +222,33 @@ def complete_extract_design(project: Path, name: str, suffix: str) -> None:
         raise AssertionError(result.stderr)
 
 
-def create_verified_extract(root: Path) -> Path:
+def create_verified_extract(
+    root: Path, ui_supplements: dict[str, str | None] | None = None
+) -> Path:
+    ui_supplements = ui_supplements or {
+        URL_A: "Show the available withdrawal offer.",
+        URL_B: "Show the selected withdrawal offer.",
+    }
     project = root / "project"
-    project.mkdir()
+    project.mkdir(parents=True)
     urls_path = root / "urls.json"
     reference_path = root / "reference.png"
     reference_path.write_bytes(PNG_1X1)
+    assets_path = root / "assets"
+    assets_path.mkdir()
+    (assets_path / "fixture.png").write_bytes(PNG_1X1)
     write_json(
         urls_path,
-        {"schema": "icp.extract.run-input.v1", "design_urls": [URL_A, URL_B]},
+        {
+            "schema": "icp.extract.run-input.v2",
+            "designs": [
+                {
+                    "design_url": url,
+                    "ui_supplement": ui_supplements.get(url),
+                }
+                for url in (URL_A, URL_B)
+            ],
+        },
     )
     result = run_command(
         EXTRACT_SCRIPT,
@@ -251,6 +275,8 @@ def create_verified_extract(root: Path) -> Path:
             str(source_path),
             "--reference-image",
             str(reference_path),
+            "--assets-dir",
+            str(assets_path),
             "--allow-loose-input",
             "--design-url",
             url,

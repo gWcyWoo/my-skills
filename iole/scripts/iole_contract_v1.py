@@ -466,11 +466,14 @@ def build_schedule_plan(
     excel_url: str,
     role: str,
     im: int,
+    mr: int,
     project_root: Path,
     mapping_path: Path,
 ) -> dict[str, object]:
     if im <= 0:
         raise ValueError("im must be a positive integer")
+    if mr not in {0, 1, 2}:
+        raise ValueError("mr must be 0, 1, or 2")
     selection = classify_excel_url(excel_url)
     mapping = load_mapping(mapping_path)
     role_config = select_role(mapping, role)
@@ -490,12 +493,14 @@ def build_schedule_plan(
         "mapping_path": str(mapping_path.resolve()),
         "project_root": str(project_root.resolve()),
         "role": role,
+        "mr": mr,
     }
     return {
         "kind": "iole.schedule-plan.v1",
         "schema_version": 1,
         "document_digest": hashlib.sha256(excel_url.encode("utf-8")).hexdigest(),
         "role": role,
+        "mr": mr,
         "provider": selection["provider"],
         "connector_family": selection["connector_family"],
         "mapping_path": str(mapping_path.resolve()),
@@ -654,8 +659,8 @@ def map_row(
     existing_pr_url = text_value(row.get(queue["pr_url"])) or None
     if existing_pr_url is not None:
         validate_http_url(existing_pr_url, "existing PR URL")
-    if (latest_review is None) != (existing_pr_url is None):
-        raise ValueError("review and existing PR URL must either both exist or both be empty")
+    if existing_pr_url is not None and latest_review is None:
+        raise ValueError("an existing PR URL requires a numbered review")
     page = {
         "title": title,
         "route": route,
@@ -826,9 +831,19 @@ def build_job(
 
 
 def build_review_writeback(
-    mapping_path: Path, claim_path: Path, pr_url: str
+    mapping_path: Path,
+    claim_path: Path,
+    mr: int,
+    pr_url: str | None,
 ) -> dict[str, object]:
-    validate_http_url(pr_url, "PR URL")
+    if mr not in {0, 1, 2}:
+        raise ValueError("mr must be 0, 1, or 2")
+    if mr == 2:
+        if pr_url is None:
+            raise ValueError("mr=2 requires a PR URL")
+        validate_http_url(pr_url, "PR URL")
+    elif pr_url is not None:
+        raise ValueError("PR URL is allowed only when mr=2")
     claim = load_claim(claim_path)
     mapping = load_mapping(mapping_path)
     role_config = select_role(mapping, str(claim["role"]))
@@ -839,6 +854,7 @@ def build_review_writeback(
     return {
         "kind": "iole.role-writeback-intent.v1",
         "schema_version": 1,
+        "mr": mr,
         "role": claim["role"],
         "row_id": claim["row_id"],
         "expected_row_digest": claim["row_digest"],
@@ -940,6 +956,7 @@ def build_parser() -> argparse.ArgumentParser:
     schedule_parser.add_argument("--excel-url", required=True)
     schedule_parser.add_argument("--role", required=True)
     schedule_parser.add_argument("--im", type=int, default=10)
+    schedule_parser.add_argument("--mr", type=int, default=0)
     schedule_parser.add_argument("--project-root", default=str(Path.cwd()))
     schedule_parser.add_argument("--mapping", default=str(DEFAULT_MAPPING))
 
@@ -960,7 +977,8 @@ def build_parser() -> argparse.ArgumentParser:
     writeback_parser = subparsers.add_parser("build-review-writeback")
     writeback_parser.add_argument("--mapping", required=True)
     writeback_parser.add_argument("--claim", required=True)
-    writeback_parser.add_argument("--pr-url", required=True)
+    writeback_parser.add_argument("--mr", type=int, default=0)
+    writeback_parser.add_argument("--pr-url")
 
     error_parser = subparsers.add_parser("build-error-writeback")
     error_parser.add_argument("--mapping", required=True)
@@ -1006,6 +1024,7 @@ def main(argv: list[str] | None = None) -> int:
                 arguments.excel_url,
                 arguments.role,
                 arguments.im,
+                arguments.mr,
                 Path(arguments.project_root),
                 Path(arguments.mapping),
             )
@@ -1029,6 +1048,7 @@ def main(argv: list[str] | None = None) -> int:
             result = build_review_writeback(
                 Path(arguments.mapping),
                 Path(arguments.claim),
+                arguments.mr,
                 arguments.pr_url,
             )
         else:

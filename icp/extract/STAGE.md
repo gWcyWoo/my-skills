@@ -4,6 +4,11 @@
 
 Convert every expected Lanhu design into trustworthy structured data under `<project>/.icp/extract/<design-name>/`. Each result combines an image-first semantic hierarchy, lossless source facts, exact source bindings, targeted repair evidence, and a binary semantic review.
 
+`UI补充描述` has one role in this stage: help the model understand the rendered
+design and choose correct visual-semantic Block boundaries, names, and grouping.
+It cannot add, delete, replace, or override design data. A missing value is exact
+JSON `null`. The Lanhu JSON remains the sole authority for every exact design fact.
+
 There is no score or tolerance in this stage:
 
 ```text
@@ -13,6 +18,7 @@ duplicate_bindings = ∅
 synthetic_source_ids = ∅
 every semantic leaf is source-reachable
 every JSON source node is reverse-reviewed against its exact assigned Block
+all Block members plus the non-rendering set reconstruct the complete design JSON
 every independent source subtree remains an independent semantic group when required
 source parent-child relations agree with the semantic hierarchy
 every exported source field resolves to one hashed local asset
@@ -36,6 +42,8 @@ The model owns semantic interpretation and classification. The scripts own Lanhu
     ├── source-manifest.json
     ├── source-facts.json
     ├── asset-index.json
+    ├── semantic-context.json
+    ├── semantic-authoring.input.json
     ├── state.json
     ├── semantic-draft.input.json
     ├── semantic-draft.json
@@ -45,6 +53,7 @@ The model owns semantic interpretation and classification. The scripts own Lanhu
     ├── repair-packets/revision-NNNN/*.json
     ├── semantic-review.input.json
     ├── semantic-review.json
+    ├── semantic-blocks.json
     ├── semantic-repair.json
     ├── revisions/*.json
     └── stage-result.json
@@ -54,12 +63,16 @@ Files ending in `.input.json` are model work products. Canonical files without `
 
 ## 1. Freeze the full design set
 
-Create a run input containing every requested URL, exactly once and in the requested order:
+Create a run input containing every requested URL, exactly once and in the
+requested order. Copy the exact same-row `UI补充描述`; use `null` when absent:
 
 ```json
 {
-  "schema": "icp.extract.run-input.v1",
-  "design_urls": ["<lanhu-url-1>", "<lanhu-url-2>"]
+  "schema": "icp.extract.run-input.v2",
+  "designs": [
+    {"design_url": "<lanhu-url-1>", "ui_supplement": "<exact text or null>"},
+    {"design_url": "<lanhu-url-2>", "ui_supplement": null}
+  ]
 }
 ```
 
@@ -107,7 +120,11 @@ No exported source field, local asset, semantic block, source node, or reference
 
 ## 3. Author the image-first semantic draft
 
-Inspect only `<design-dir>/source/reference.png` first. Do not read `source-facts.json` until the semantic draft is frozen; source-layer grouping must not anchor semantic interpretation.
+Inspect `<design-dir>/source/reference.png` together with the generated
+`semantic-authoring.input.json`. Use its `ui_supplement` only to assist visual
+grouping. Do not read `source-facts.json` until the semantic draft is frozen;
+source-layer grouping must not anchor semantic interpretation, and description
+text must not manufacture design facts.
 
 Copy [templates/semantic-draft.input.json](templates/semantic-draft.input.json) to `<design-dir>/semantic-draft.input.json` and replace every placeholder. Every block needs a stable local ID, role and basis, hierarchy, qualitative background/border/spacing, content/composition, and evidenced relations. Do not include source IDs, frames, pixel values, or other numeric source facts.
 
@@ -150,6 +167,13 @@ python3 <icp-skill>/extract/scripts/extract.py expand-bindings \
 
 Rules must form an exact partition of all source nodes. Unknown IDs, overlapping explicit nodes/subtrees, or omitted nodes fail; the script preserves source order and derives the required geometry basis. The plan does not infer semantics—the model still chooses every node or subtree boundary and gives its rationale.
 
+Every assignment also freezes one `content_role`. Rendering nodes use exactly one
+of `static_visual|static_copy|dynamic_content|platform_element`.
+`non_rendering` uses `not_applicable`; `unresolved` uses `unresolved`. This role is
+not a business rule: it distinguishes design-owned visuals/copy from runtime data
+and platform-owned controls so later stages cannot mistake a screenshot sample
+value for validation or other business behavior.
+
 Whether authored directly or expanded, every assignment selects exactly one status:
 
 - `mapped`: the node independently represents the block.
@@ -170,12 +194,15 @@ When state becomes `repair_required`, read `coverage.json` and only its referenc
 
 ## 5. Perform the binary semantic review
 
-Reopen the rendered reference and edit `semantic-review.input.json`. The script supplies two mandatory views of the same frozen result:
+Reopen the rendered reference, reread the exact injected `semantic_context`, and
+edit `semantic-review.input.json`. Confirm that the UI supplement improved only
+visual-semantic grouping and did not override the source JSON. The script supplies
+two mandatory views of the same frozen result:
 
 1. Block-first evidence: every Block's exact mapped/absorbed source IDs plus every non-rendering node and rationale.
 2. JSON-first reverse evidence: every complete source node payload, its complete parent and children, its current assignment, and the complete assigned Block.
 
-Review every Block and then traverse every JSON node in exact source order. For each source node, independently decide whether its assigned Block is semantically correct, whether the node or subtree needs its own semantic group, and whether the source parent-child relation is preserved by the Block hierarchy. This is not a node-count check: a node that exists but is swallowed by the wrong Block must fail. Review role, hierarchy, appearance, grouping, source binding, relations, reading order, omissions, and non-rendering classifications. Replace every `TODO`; placeholders cannot pass.
+Review every Block and then traverse every JSON node in exact source order. For each source node, independently decide whether its assigned Block and `content_role` are semantically correct, whether the node or subtree needs its own semantic group, and whether the source parent-child relation is preserved by the Block hierarchy. This is not a node-count check: a node that exists but is swallowed by the wrong Block must fail. Review role, hierarchy, appearance, grouping, source binding, content role, relations, reading order, omissions, and non-rendering classifications. Replace every `TODO`; placeholders cannot pass.
 
 `decision: pass` is valid only when every boolean is true and every issue array is empty.
 
@@ -211,6 +238,13 @@ python3 <icp-skill>/extract/scripts/extract.py verify-run \
 
 Only exit code zero from `verify-run` makes a multi-design extract deliverable. Report the absolute `run-result.json` path and per-design `stage-result.json` paths, then stop before component design.
 
+On a passing review the script writes `semantic-blocks.json`. Every Block embeds
+its complete ordered source-node records, assignments, content roles, and asset
+evidence. Non-rendering source nodes remain in one explicit top-level set. The
+artifact also preserves the source document outside the artboard; rebuilding the
+artboard from the Block members and restoring it into that envelope must reproduce
+the complete parsed design JSON exactly. Stage 2 consumes this artifact directly.
+
 `stage-result.json` must expose `source_asset_relations_resolvable` and `reference_coordinate_mapping_exact` as passing gates, and must link directly to the frozen asset index and reference mapping. The second stage may materialize a joined view, but it must not repair or guess any first-stage relation.
 
 ## Fail closed
@@ -222,5 +256,6 @@ Only exit code zero from `verify-run` makes a multi-design extract deliverable. 
 - `reference_size_mismatch` or `invalid_reference`: source coordinates and the full reference image do not share one valid exact scale.
 - `unbound_semantic_leaf`: the semantic structure contains a block with no source reachability.
 - `false_semantic_pass`: a pass decision contradicts at least one failed JSON-node or Block review.
+- `stage_drift`: the semantic Blocks no longer reconstruct the complete frozen design JSON.
 - `repair_required`: continue the bounded repair loop; it is not completion.
 - `batch_incomplete`: at least one frozen URL lacks a verified complete design.

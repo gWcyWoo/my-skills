@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import base64
+import hashlib
 import subprocess
 import sys
 import tempfile
@@ -156,6 +157,7 @@ class BatchCliTest(unittest.TestCase):
                     "status": "mapped",
                     "block_id": "page",
                     "geometry_basis": "frame",
+                    "content_role": "static_visual",
                     "rationale": "The artboard directly represents the page.",
                 }
             ],
@@ -185,6 +187,7 @@ class BatchCliTest(unittest.TestCase):
             item["issues"] = []
         for item in review["source_node_reviews"]:
             item["semantic_assignment_correct"] = True
+            item["content_role_correct"] = True
             item["independent_grouping_correct"] = True
             item["parent_child_relation_correct"] = True
             item["evidence"] = [
@@ -262,6 +265,102 @@ class BatchCliTest(unittest.TestCase):
         cross_wired = self.run_cli("verify-run", "--project-root", str(self.project))
         self.assertEqual(cross_wired.returncode, 2)
         self.assertIn("batch_stage_mismatch", cross_wired.stderr)
+
+    def test_ui_context_is_injected_and_complete_blocks_reconstruct_source_facts(self) -> None:
+        ui_supplement = "Keep the account summary and primary action in separate visual groups."
+        write_json(
+            self.urls_file,
+            {
+                "schema": "icp.extract.run-input.v2",
+                "designs": [
+                    {"design_url": URL_A, "ui_supplement": ui_supplement},
+                    {"design_url": URL_B, "ui_supplement": None},
+                ],
+            },
+        )
+        begun = self.begin()
+        self.assertEqual(begun.returncode, 0, begun.stderr)
+
+        source_a = source_for("Design A", "design-a", "version-a", URL_A, "root:a")
+        self.assertEqual(self.prepare_design(source_a).returncode, 0)
+        stage_dir = self.project / ".icp" / "extract" / "Design A"
+        authoring = read_json(stage_dir / "semantic-authoring.input.json")
+        self.assertEqual(authoring["ui_supplement"], ui_supplement)
+        self.assertEqual(
+            authoring["source_manifest_sha256"],
+            read_json(stage_dir / "state.json")["source_manifest_sha256"],
+        )
+        source_b = source_for("Design B", "design-b", "version-b", URL_B, "root:b")
+        self.assertEqual(self.prepare_design(source_b).returncode, 0)
+        self.assertIsNone(
+            read_json(
+                self.project
+                / ".icp"
+                / "extract"
+                / "Design B"
+                / "semantic-authoring.input.json"
+            )["ui_supplement"]
+        )
+
+        self.complete_design("Design A", URL_A, "root:a")
+        review = read_json(stage_dir / "semantic-review.json")
+        self.assertEqual(review["semantic_context"]["ui_supplement"], ui_supplement)
+
+        semantic_blocks = read_json(stage_dir / "semantic-blocks.json")
+        source_facts = read_json(stage_dir / "source-facts.json")
+        reconstructed_nodes = {}
+        for block in semantic_blocks["blocks"]:
+            for source_node in block["source_nodes"]:
+                reconstructed_nodes[source_node["source_node_id"]] = source_node[
+                    "source_fact"
+                ]
+        for source_node in semantic_blocks["non_rendering_source_nodes"]:
+            reconstructed_nodes[source_node["source_node_id"]] = source_node[
+                "source_fact"
+            ]
+        self.assertEqual(semantic_blocks["node_order"], source_facts["node_order"])
+        self.assertEqual(reconstructed_nodes, source_facts["nodes"])
+        self.assertEqual(
+            semantic_blocks["source_facts_sha256"],
+            hashlib.sha256((stage_dir / "source-facts.json").read_bytes()).hexdigest(),
+        )
+        def rebuild_node(node_id: str) -> dict:
+            record = reconstructed_nodes[node_id]
+            node = dict(record["payload"])
+            if record["layers_kind"] == "array":
+                node["layers"] = [
+                    rebuild_node(child_id) for child_id in record["child_ids"]
+                ]
+            elif record["layers_kind"] == "null":
+                node["layers"] = None
+            return node
+
+        reconstructed_design = json.loads(
+            json.dumps(semantic_blocks["source_document_without_artboard"])
+        )
+        reconstructed_design["figma_json"]["artboard"] = rebuild_node(
+            semantic_blocks["root_node_id"]
+        )
+        self.assertEqual(reconstructed_design, source_a)
+        stage_result = read_json(stage_dir / "stage-result.json")
+        self.assertEqual(
+            stage_result["artifacts"]["semantic_blocks"]["path"],
+            "semantic-blocks.json",
+        )
+
+        semantic_blocks["blocks"][0]["source_nodes"][0]["source_fact"]["payload"][
+            "name"
+        ] = "tampered"
+        write_json(stage_dir / "semantic-blocks.json", semantic_blocks)
+        rejected = self.run_cli(
+            "verify",
+            "--project-root",
+            str(self.project),
+            "--design-name",
+            "Design A",
+        )
+        self.assertEqual(rejected.returncode, 2)
+        self.assertIn("stage_drift", rejected.stderr)
 
     def test_batch_rejects_different_designs_with_the_same_safe_name(self) -> None:
         self.assertEqual(self.begin().returncode, 0)

@@ -1062,14 +1062,15 @@ class AtomicSheetFlowQueue:
         mapping: FlowQueueMapping,
         flow_id: str,
         lease_token: str,
-        pr_url: str,
+        pr_url: str | None,
         expected_values: dict[str, dict[str, object]],
     ) -> dict[str, object]:
-        if any(ord(character) < 32 or ord(character) == 127 for character in pr_url):
-            raise ValueError("PR URL contains control characters")
-        parsed_pr = urlparse(pr_url)
-        if parsed_pr.scheme not in {"http", "https"} or not parsed_pr.hostname:
-            raise ValueError("PR URL must be an absolute HTTP or HTTPS URL")
+        if pr_url is not None:
+            if any(ord(character) < 32 or ord(character) == 127 for character in pr_url):
+                raise ValueError("PR URL contains control characters")
+            parsed_pr = urlparse(pr_url)
+            if parsed_pr.scheme not in {"http", "https"} or not parsed_pr.hostname:
+                raise ValueError("PR URL must be an absolute HTTP or HTTPS URL")
         if not isinstance(expected_values, dict) or not expected_values:
             raise ValueError("flow expected values are invalid")
         with self._locked(spreadsheet_id, sheet_name):
@@ -1095,7 +1096,7 @@ class AtomicSheetFlowQueue:
                     raise ValueError("flow member identity drift")
             terminal_matches = all(
                 row.values.get(mapping.status) == mapping.review
-                and row.values.get(mapping.pr_url) == pr_url
+                and (pr_url is None or row.values.get(mapping.pr_url) == pr_url)
                 and row.values.get(mapping.lease_token) in {"", None}
                 and row.values.get(mapping.lease_until) in {"", None}
                 and row.values.get(mapping.last_error) in {"", None}
@@ -1105,7 +1106,7 @@ class AtomicSheetFlowQueue:
                 for member, row in zip(members, selected, strict=True):
                     row_id = str(member["row_id"])
                     if any(
-                        column != mapping.pr_url
+                        (pr_url is None or column != mapping.pr_url)
                         and row.values.get(column) != expected
                         for column, expected in expected_values[row_id].items()
                     ):
@@ -1131,17 +1132,19 @@ class AtomicSheetFlowQueue:
                     raise ValueError("flow member is not doing")
                 if row.values.get(mapping.lease_token) != lease_token:
                     raise ValueError("flow claim lease mismatch")
+            terminal_updates = {
+                mapping.status: mapping.review,
+                mapping.lease_token: "",
+                mapping.lease_until: "",
+                mapping.last_error: "",
+            }
+            if pr_url is not None:
+                terminal_updates[mapping.pr_url] = pr_url
             updated = self.store.update_rows(
                 spreadsheet_id,
                 sheet_name,
                 {
-                    row.row_number: {
-                        mapping.status: mapping.review,
-                        mapping.pr_url: pr_url,
-                        mapping.lease_token: "",
-                        mapping.lease_until: "",
-                        mapping.last_error: "",
-                    }
+                    row.row_number: terminal_updates
                     for row in selected
                 },
             )

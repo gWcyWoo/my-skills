@@ -229,14 +229,15 @@ class AtomicSheetQueue:
         mapping: QueueMapping,
         row_id: str,
         lease_token: str,
-        pr_url: str,
+        pr_url: str | None,
         expected_values: dict[str, object] | None = None,
     ) -> dict[str, object]:
-        if any(ord(character) < 32 or ord(character) == 127 for character in pr_url):
-            raise ValueError("PR URL contains control characters")
-        parsed_pr_url = urlparse(pr_url)
-        if parsed_pr_url.scheme not in {"http", "https"} or not parsed_pr_url.hostname:
-            raise ValueError("PR URL must be an absolute HTTP or HTTPS URL")
+        if pr_url is not None:
+            if any(ord(character) < 32 or ord(character) == 127 for character in pr_url):
+                raise ValueError("PR URL contains control characters")
+            parsed_pr_url = urlparse(pr_url)
+            if parsed_pr_url.scheme not in {"http", "https"} or not parsed_pr_url.hostname:
+                raise ValueError("PR URL must be an absolute HTTP or HTTPS URL")
         with self._locked(spreadsheet_id, sheet_name):
             selected = self._read_claimed_row(
                 spreadsheet_id,
@@ -256,10 +257,11 @@ class AtomicSheetQueue:
                 raise ValueError("expected row values are invalid")
             terminal_mutations = {
                 mapping.status,
-                mapping.pr_url,
                 mapping.lease_token,
                 mapping.lease_until,
             }
+            if pr_url is not None:
+                terminal_mutations.add(mapping.pr_url)
             if mapping.last_error is not None:
                 terminal_mutations.add(mapping.last_error)
             terminal_guard_matches = expected_values is None or all(
@@ -273,7 +275,7 @@ class AtomicSheetQueue:
             )
             if (
                 selected.values.get(mapping.status) == mapping.done
-                and selected.values.get(mapping.pr_url) == pr_url
+                and (pr_url is None or selected.values.get(mapping.pr_url) == pr_url)
                 and selected.values.get(mapping.lease_token) in {"", None}
                 and selected.values.get(mapping.lease_until) in {"", None}
                 and terminal_error_clear
@@ -306,11 +308,12 @@ class AtomicSheetQueue:
                 ):
                     raise ValueError("row input drift")
             updates = {
-                mapping.pr_url: pr_url,
                 mapping.status: mapping.done,
                 mapping.lease_token: "",
                 mapping.lease_until: "",
             }
+            if pr_url is not None:
+                updates[mapping.pr_url] = pr_url
             if mapping.last_error is not None:
                 updates[mapping.last_error] = ""
             updated = self.store.update_row(

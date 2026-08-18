@@ -189,6 +189,9 @@ class ExtractCliTest(unittest.TestCase):
                     "status": "mapped" if node_id == "root:1" else "absorbed",
                     "block_id": "page",
                     "geometry_basis": basis,
+                    "content_role": (
+                        "static_copy" if node_id == "text:1" else "static_visual"
+                    ),
                     "rationale": "The current draft assigns this exact node to the page Block.",
                 }
             )
@@ -220,6 +223,7 @@ class ExtractCliTest(unittest.TestCase):
             item["issues"] = []
         for item in review["source_node_reviews"]:
             item["semantic_assignment_correct"] = True
+            item["content_role_correct"] = True
             item["independent_grouping_correct"] = True
             item["parent_child_relation_correct"] = True
             item["evidence"] = [
@@ -235,6 +239,40 @@ class ExtractCliTest(unittest.TestCase):
             "The complete source-node order and Block graph were checked for omissions."
         ]
         cross["issues"] = []
+
+    def test_bindings_freeze_a_reviewed_content_role_for_every_source_node(self) -> None:
+        review = self.prepare_single_block_reverse_review()
+
+        roles = {
+            item["source_node"]["id"]: item["assignment"]["content_role"]
+            for item in review["reverse_binding_evidence"]["nodes"]
+        }
+        self.assertEqual(
+            roles,
+            {
+                "root:1": "static_visual",
+                "text:1": "static_copy",
+                "group:1": "static_visual",
+                "button:1": "static_visual",
+            },
+        )
+        self.assertTrue(
+            all(
+                item["content_role_correct"] is False
+                for item in review["source_node_reviews"]
+            )
+        )
+
+        self.fill_passing_semantic_review(review)
+        review_path = self.root / "content-role-review.json"
+        write_json(review_path, review)
+        recorded = self.run_stage_cli(
+            "record-review", "--review", str(review_path)
+        )
+
+        self.assertEqual(recorded.returncode, 0, recorded.stdout + recorded.stderr)
+        stage_result = read_json(self.extract_dir / "stage-result.json")
+        self.assertTrue(stage_result["content_roles_reviewed"])
 
     def test_prepare_creates_lossless_extract_workspace_and_fails_on_drift(self) -> None:
         result = self.prepare_workspace()
@@ -486,6 +524,12 @@ class ExtractCliTest(unittest.TestCase):
         self.assertTrue(
             all(item["status"] == "unresolved" for item in binding_template["assignments"])
         )
+        self.assertTrue(
+            all(
+                item["content_role"] == "unresolved"
+                for item in binding_template["assignments"]
+            )
+        )
         self.assertEqual(binding_template["semantic_draft_sha256"], state["semantic_draft_sha256"])
 
         forbidden = json.loads(json.dumps(draft))
@@ -612,6 +656,7 @@ class ExtractCliTest(unittest.TestCase):
                     "source_subtree_roots": [],
                     "status": "absorbed",
                     "block_id": "page",
+                    "content_role": "static_visual",
                     "rationale": "These nodes directly form the page context.",
                 },
                 {
@@ -619,6 +664,7 @@ class ExtractCliTest(unittest.TestCase):
                     "source_subtree_roots": ["group:1"],
                     "status": "mapped",
                     "block_id": "offer",
+                    "content_role": "static_visual",
                     "rationale": "The complete group subtree forms the offer.",
                 },
             ],
@@ -699,6 +745,7 @@ class ExtractCliTest(unittest.TestCase):
                     "source_subtree_roots": [],
                     "status": "absorbed",
                     "block_id": "page",
+                    "content_role": "static_visual",
                     "rationale": "These nodes form the visible page context.",
                 },
                 {
@@ -706,6 +753,7 @@ class ExtractCliTest(unittest.TestCase):
                     "source_subtree_roots": [],
                     "status": "mapped",
                     "block_id": "offer",
+                    "content_role": "static_visual",
                     "rationale": "The visible group forms the offer.",
                 },
                 {
@@ -713,6 +761,7 @@ class ExtractCliTest(unittest.TestCase):
                     "source_subtree_roots": ["button:1"],
                     "status": "unresolved",
                     "block_id": None,
+                    "content_role": "unresolved",
                     "rationale": rationale,
                 },
             ],
@@ -731,6 +780,7 @@ class ExtractCliTest(unittest.TestCase):
                 "status": "unresolved",
                 "block_id": None,
                 "geometry_basis": "not_applicable",
+                "content_role": "unresolved",
                 "rationale": rationale,
             },
         )
@@ -818,6 +868,7 @@ class ExtractCliTest(unittest.TestCase):
                     "status": "mapped",
                     "block_id": "page",
                     "geometry_basis": "frame",
+                    "content_role": "static_visual",
                     "rationale": "Artboard defines the page.",
                 },
                 {
@@ -825,6 +876,7 @@ class ExtractCliTest(unittest.TestCase):
                     "status": "absorbed",
                     "block_id": "page",
                     "geometry_basis": "frame",
+                    "content_role": "static_copy",
                     "rationale": "Title is page content.",
                 },
                 {
@@ -832,6 +884,7 @@ class ExtractCliTest(unittest.TestCase):
                     "status": "mapped",
                     "block_id": "offer",
                     "geometry_basis": "frame",
+                    "content_role": "static_visual",
                     "rationale": "Group represents the offer.",
                 },
             ],
@@ -881,6 +934,7 @@ class ExtractCliTest(unittest.TestCase):
                 "status": "absorbed",
                 "block_id": "page",
                 "geometry_basis": "real_frame",
+                "content_role": "static_visual",
                 "rationale": "Incorrectly collapses the action into the page.",
             }
         )
@@ -900,6 +954,7 @@ class ExtractCliTest(unittest.TestCase):
                 "status": "absorbed",
                 "block_id": "offer",
                 "geometry_basis": "real_frame",
+                "content_role": "static_visual",
                 "rationale": "Rotated action is part of the offer.",
             }
         )
@@ -1013,6 +1068,9 @@ class ExtractCliTest(unittest.TestCase):
                     "geometry_basis": "real_frame" if node_id == "text:1" else (
                         "real_frame" if node_id == "button:1" else "frame"
                     ),
+                    "content_role": (
+                        "static_copy" if node_id == "text:1" else "static_visual"
+                    ),
                     "rationale": "Every source node contributes to the page.",
                 }
                 for node_id in ("root:1", "text:1", "group:1", "button:1")
@@ -1078,6 +1136,7 @@ class ExtractCliTest(unittest.TestCase):
                     "status": "mapped",
                     "block_id": "page",
                     "geometry_basis": "frame",
+                    "content_role": "static_visual",
                     "rationale": "The artboard defines the page.",
                 },
                 {
@@ -1085,6 +1144,7 @@ class ExtractCliTest(unittest.TestCase):
                     "status": "absorbed",
                     "block_id": "page",
                     "geometry_basis": "frame",
+                    "content_role": "static_visual",
                     "rationale": "The metadata contributes to the page.",
                 },
             ],
@@ -1293,6 +1353,7 @@ class ExtractCliTest(unittest.TestCase):
                     "status": "mapped",
                     "block_id": "page",
                     "geometry_basis": "frame",
+                    "content_role": "static_visual",
                     "rationale": "Artboard defines the page.",
                 },
                 {
@@ -1300,6 +1361,7 @@ class ExtractCliTest(unittest.TestCase):
                     "status": "absorbed",
                     "block_id": "page",
                     "geometry_basis": "frame",
+                    "content_role": "static_copy",
                     "rationale": "Heading is page content.",
                 },
                 {
@@ -1307,6 +1369,7 @@ class ExtractCliTest(unittest.TestCase):
                     "status": "absorbed",
                     "block_id": "page",
                     "geometry_basis": "frame",
+                    "content_role": "static_visual",
                     "rationale": "Offer is part of the task.",
                 },
                 {
@@ -1314,6 +1377,7 @@ class ExtractCliTest(unittest.TestCase):
                     "status": "absorbed",
                     "block_id": "page",
                     "geometry_basis": "real_frame",
+                    "content_role": "static_visual",
                     "rationale": "Action is part of the offer.",
                 },
             ],
@@ -1338,6 +1402,7 @@ class ExtractCliTest(unittest.TestCase):
             item["issues"] = []
         for item in review["source_node_reviews"]:
             item["semantic_assignment_correct"] = True
+            item["content_role_correct"] = True
             item["independent_grouping_correct"] = True
             item["parent_child_relation_correct"] = True
             item["evidence"] = [
@@ -1404,6 +1469,7 @@ class ExtractCliTest(unittest.TestCase):
                 "exact_coverage": True,
                 "no_duplicate_bindings": True,
                 "no_synthetic_source_ids": True,
+                "semantic_blocks_reconstruct_complete_design_json": True,
                 "reverse_json_semantic_audit": True,
                 "semantic_review_passed": True,
             },

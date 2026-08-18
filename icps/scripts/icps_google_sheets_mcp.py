@@ -395,14 +395,14 @@ def complete_claimed_row(
     pr_url_column: str,
     row_id: str,
     lease_token: str,
-    pr_url: str,
+    pr_url: str | None,
     ready_value: str = "ready",
     doing_value: str = "doing",
     done_value: str = "done",
     expected_values: dict[str, object] | None = None,
     last_error_column: str | None = None,
 ) -> dict[str, object]:
-    """Write PR/status only when lease and optional immutable row values still match."""
+    """Write review status and optionally PR when lease and immutable values match."""
     mapping = mapping_from_arguments(
         row_id_column,
         status_column,
@@ -706,14 +706,14 @@ def complete_flow_rows(
     last_error_column: str,
     flow_id: str,
     lease_token: str,
-    pr_url: str,
+    pr_url: str | None,
     expected_values: dict[str, dict[str, object]],
     ready_value: str = "ready",
     doing_value: str = "doing",
     review_value: str = "review",
     done_value: str = "done",
 ) -> dict[str, object]:
-    """Move every flow member to review with one PR or mutate no member."""
+    """Move every flow member to review, optionally setting one PR, or mutate none."""
     mapping = flow_mapping_from_arguments(
         row_id_column,
         status_column,

@@ -1,4 +1,4 @@
 interface:
   display_name: "ICP"
-  short_description: "Extract designs and lock component semantics"
-  default_prompt: "Use $icp to extract verified design evidence, seal page-local component facts, and lock an evidence-bound group component system without implementing components."
+  short_description: "Extract, design components, and implement with TDD"
+  default_prompt: "Use $icp to extract verified design evidence, lock page-isolated component semantics, then implement the frozen lock with strict interaction TDD, responsive runtime checks, and visual MAE verification."

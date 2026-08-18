@@ -36,6 +36,7 @@ every replacement = append-only supersession event with an acyclic materialized 
 every final composition slot = a declared slot on its final parent definition
 every source member = one ordered lock manifest entry with exact change scope
 every source relation = preserved in order with member-closed endpoints
+every modal/component source reference = one exact source-fact host plus one final target component usage
 component lock = exact hashes plus complete stage-3 semantic input
 ```
 
@@ -46,6 +47,11 @@ IOLE's exact title, route, `UI补充描述`, `交互描述`, `接口描述`, UT,
 values. A design supplies verified hierarchy, layout, visual treatment, assets,
 and semantic grouping. Its copy, sample data, and captured control state are
 placeholders unless the same page's description confirms them.
+
+Keep every atomic `IT` fact and its exact same-page source span in the sealed page
+facts. Stage 3 derives documented integration obligations from those facts,
+separately from the interaction ledger; semantic overlap never permits either
+source to be dropped.
 
 Treat every IOLE member/physical row as an independent page scope. Multiple
 designs may be ordered states of one page. A behavior, state, value, validation,
@@ -95,6 +101,11 @@ or an API dependency. When both sources support one meaning, record
 Require both:
 
 1. A complete `.icp/extract/run-result.json` whose live `verify-run` succeeds.
+   Every design must expose its verified `semantic-blocks.json`; component design
+   reads those self-contained Blocks directly and never rejoins raw source facts,
+   bindings, and assets into a new visual grouping. Its frozen `ui_supplement`
+   must exactly equal the same member's current `UI补充描述` (including `null`),
+   otherwise Stage 1 did not group against the authoritative same-row context.
 2. The exact unchanged `iole.flow-source-bundle.v2` from IOLE's closed related-row
    graph. `row_data_columns` declares the mapping-owned ICP inputs and every member
    includes exactly that ordered set in `row_data`; non-empty values are exact
@@ -215,7 +226,16 @@ designless member with no such data remains losslessly preserved in
 `business-context.json` and the final lock's `context_members`; it cannot
 manufacture semantics. Read a
 page work item's business context, its ordered design states, and the joined
-source catalog. Do not read another page as authority for this page.
+source catalog. Each catalog Block is copied from the verified Stage-1
+`semantic-blocks.json`, including its complete source-node and asset evidence.
+Do not reinterpret or repair Stage-1 grouping, and do not read another page as
+authority for this page.
+
+`begin` also projects every IOLE `modal|component` reference into the source
+page's immutable `presentation_requirements`. Each requirement retains the exact
+reference ID, column, source clause/span/hash, relation kind, target member, and
+target page key. `navigation|data|reference` edges do not imply rendered component
+usage. The page author cannot remove or rewrite this projection.
 
 ### Page candidates
 
@@ -498,6 +518,10 @@ instances—even inside one page—must be declared and validated as `shared`.
 `keep-local` and `keep-separate` are therefore unary dispositions and cannot hide a
 merge behind a non-merge label.
 
+`abstraction-plan.input.json` also contains `presentation_usages`. It starts empty
+but must close every immutable page `presentation_requirement` before the group
+can be recorded.
+
 Record the complete group once:
 
 ```bash
@@ -505,6 +529,13 @@ python3 <icp-skill>/component-design/scripts/component_design.py record-abstract
   --project-root "<project>" \
   --plan "<project>/.icp/component-design/abstraction-plan.input.json"
 ```
+
+The plan must resolve every `presentation_requirement` exactly once in
+`presentation_usages`. Bind it to the source page's semantic host instance and
+all exact source facts that contain the reference, then to the referenced member's
+final root/source-only instance and component ID. Preserve `modal|component` as
+the presentation mode. Do not copy target-page business facts into the source
+page, and do not let stage 3 infer a missing drawer, modal, or embedded component.
 
 ## Append-only component cache
 
@@ -539,6 +570,7 @@ the exact business source as a model placeholder. Success writes
   relation graph;
 - complete page semantic facts and exact evidence;
 - final component definitions and page instances;
+- exact source-page-to-target-component `presentation_usages`;
 - abstraction decisions;
 - final per-design composition trees with candidate-to-component replacement;
 - one hash-bound `block-component-bindings.json` projection that embeds every
