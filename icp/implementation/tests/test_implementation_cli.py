@@ -126,6 +126,16 @@ class ImplementationCliTest(unittest.TestCase):
             }
             for item in universe["component_instances"]
         ]
+        component_pages: dict[str, set[str]] = {}
+        for mapping in plan["component_mappings"]:
+            component_pages.setdefault(mapping["component_id"], set()).add(
+                mapping["page_key"]
+            )
+        for mapping in plan["component_mappings"]:
+            if len(component_pages[mapping["component_id"]]) > 1:
+                token = hashlib.sha256(mapping["component_id"].encode()).hexdigest()[:8]
+                mapping["source_file"] = f"app/src/main/java/test/Shared{token}.kt"
+                mapping["symbol"] = f"SharedComponent{token}"
         component_by_id = {
             item["component_instance_id"]: item for item in plan["component_mappings"]
         }
@@ -135,6 +145,14 @@ class ImplementationCliTest(unittest.TestCase):
                 "source_file": component_by_id[item["component_instance_id"]]["source_file"],
                 "symbol": component_by_id[item["component_instance_id"]]["symbol"],
                 "implementation_anchor": "ICP:" + item["obligation_id"],
+                "runtime_probe_tag": next(
+                    (
+                        assertion["probe_tag"]
+                        for assertion in universe["reference_viewport_assertions"]
+                        if assertion["obligation_id"] == item["obligation_id"]
+                    ),
+                    None,
+                ),
                 "asset_mappings": [
                     {
                         "source_asset_id": asset["asset_id"],
@@ -179,7 +197,11 @@ class ImplementationCliTest(unittest.TestCase):
                 "basis_fact_ids": item["basis_fact_ids"],
                 "component_instance_id": item["component_instance_id"],
                 "page_key": item["page_key"],
-                "test_file": "app/src/androidTest/java/test/InteractionTest.kt",
+                "test_file": (
+                    "app/src/androidTest/java/test/Interaction_"
+                    + hashlib.sha256(item["page_key"].encode()).hexdigest()[:8]
+                    + ".kt"
+                ),
                 "test_name": "integration_" + hashlib.sha256(item["obligation_id"].encode()).hexdigest()[:8],
                 "command": ["./gradlew", "connectedDebugAndroidTest"],
             }
@@ -198,20 +220,119 @@ class ImplementationCliTest(unittest.TestCase):
             }
             for item in universe["presentation_usages"]
         ]
-        plan["visual_capture_cases"] = [
-            {
-                "design_name": item["design_name"],
-                "package_name": "test.app",
-                "locale": "ru-RU",
-                "state_setup_commands": [],
-            }
-            for item in universe["visual_references"]
-        ]
+        seen_visual_pages: set[str] = set()
+        plan["visual_capture_cases"] = []
+        for item in universe["visual_references"]:
+            page_key = item["page_key"]
+            component = next(
+                mapping
+                for mapping in plan["component_mappings"]
+                if mapping["page_key"] == page_key
+            )
+            page_cases = [
+                case
+                for case in plan["integration_test_cases"]
+                if case["page_key"] == page_key
+            ]
+            interaction_trace = []
+            if page_key in seen_visual_pages:
+                interaction_trace = [
+                    {
+                        "case_id": page_cases[0]["case_id"],
+                        "action": "click",
+                        "target_tag": "trigger-" + item["visual_state_id"],
+                    }
+                ]
+            seen_visual_pages.add(page_key)
+            plan["visual_capture_cases"].append(
+                {
+                    "design_name": item["design_name"],
+                    "visual_state_id": item["visual_state_id"],
+                    "page_key": page_key,
+                    "package_name": "test.app",
+                    "locale": "ru-RU",
+                    "precondition_commands": [],
+                    "interaction_trace": interaction_trace,
+                    "production_render": {
+                        "component_instance_id": component["component_instance_id"],
+                        "source_file": component["source_file"],
+                        "symbol": component["symbol"],
+                        "root_tag": "root-" + item["visual_state_id"],
+                    },
+                }
+            )
         plan["verification_commands"] = {
             "lint": [["./gradlew", "lintDebug"]],
             "build": [["./gradlew", "assembleDebug"]],
             "integration": [["./gradlew", "connectedDebugAndroidTest"]],
         }
+        page_node_ids = {
+            page_key: f"page:{page_key}" for page_key in universe["page_keys"]
+        }
+        plan["execution_nodes"] = [
+            {
+                "node_id": "foundation",
+                "kind": "foundation",
+                "page_keys": [],
+                "depends_on": [],
+                "case_ids": [],
+            },
+            *[
+                {
+                    "node_id": page_node_ids[page_key],
+                    "kind": "page",
+                    "page_keys": [page_key],
+                    "depends_on": ["foundation"],
+                    "case_ids": [
+                        case["case_id"]
+                        for case in plan["integration_test_cases"]
+                        if case["page_key"] == page_key
+                    ],
+                }
+                for page_key in universe["page_keys"]
+            ],
+            {
+                "node_id": "flow-integration",
+                "kind": "flow-integration",
+                "page_keys": list(universe["page_keys"]),
+                "depends_on": [page_node_ids[key] for key in universe["page_keys"]],
+                "case_ids": [],
+            },
+        ]
+        file_owners: dict[str, str] = {
+            "app/src/main/AndroidManifest.xml": "foundation",
+            "app/src/main/MainActivity.kt": "flow-integration",
+        }
+        for page in plan["pages"]:
+            owner = page_node_ids[page["page_key"]]
+            for field in ("source_file", "dto_file", "mock_fixture_path"):
+                file_owners[page[field]] = owner
+        for case in plan["integration_test_cases"]:
+            file_owners[case["test_file"]] = page_node_ids[case["page_key"]]
+        for mapping in plan["component_mappings"]:
+            file_owners[mapping["source_file"]] = (
+                "foundation"
+                if len(component_pages[mapping["component_id"]]) > 1
+                else page_node_ids[mapping["page_key"]]
+            )
+        for field in (
+            "design_element_mappings",
+            "semantic_fact_mappings",
+            "presentation_mappings",
+        ):
+            for mapping in plan[field]:
+                owner = file_owners.get(mapping["source_file"])
+                if owner is None:
+                    page = next(
+                        page
+                        for page in plan["pages"]
+                        if page["source_file"] == mapping["source_file"]
+                    )
+                    owner = page_node_ids[page["page_key"]]
+                    file_owners[mapping["source_file"]] = owner
+                for asset in mapping.get("asset_mappings", []):
+                    file_owners[asset["target_resource_path"]] = owner
+        plan["file_owners"] = file_owners
         return plan
 
     def record_plan(self, plan: dict) -> subprocess.CompletedProcess[str]:
@@ -310,6 +431,10 @@ class ImplementationCliTest(unittest.TestCase):
             file_lines.setdefault(mapping["source_file"], []).append(
                 f"fun {mapping['symbol']}() = Unit"
             )
+        for visual in plan["visual_capture_cases"]:
+            file_lines.setdefault(
+                visual["production_render"]["source_file"], []
+            ).append("// " + visual["production_render"]["root_tag"])
         for field in (
             "design_element_mappings",
             "semantic_fact_mappings",
@@ -320,6 +445,12 @@ class ImplementationCliTest(unittest.TestCase):
                     [
                         f"fun {mapping['symbol']}() = Unit",
                         "// " + mapping["implementation_anchor"],
+                        *(
+                            ["// " + mapping["runtime_probe_tag"]]
+                            if field == "design_element_mappings"
+                            and mapping["runtime_probe_tag"] is not None
+                            else []
+                        ),
                     ]
                 )
         for relative, lines in file_lines.items():
@@ -405,7 +536,7 @@ class ImplementationCliTest(unittest.TestCase):
                 "locale": "ru-RU",
             }
             capture = {
-                "schema": "icp.implementation.visual-capture-evidence.v1",
+                "schema": "icp.implementation.visual-capture-evidence.v3",
                 "evaluation_scope": "reference_viewport_visual_fidelity",
                 "implementation_plan_sha256": plan_sha,
                 "design_name": reference["design_name"],
@@ -414,6 +545,50 @@ class ImplementationCliTest(unittest.TestCase):
                 "reference_pixel_size": reference["pixel_size"],
                 "logical_scale": reference["logical_scale"],
                 "capture_strategy": "extended-viewport-full-page",
+                "visual_state_id": reference["visual_state_id"],
+                "cold_start": {
+                    "activity_resumed": True,
+                    "process_alive": True,
+                    "no_fatal_exception": True,
+                    "fatal_log_tail": "",
+                },
+                "interaction": {
+                    "schema": "icp.visual-interaction.v1",
+                    "steps": next(
+                        item["interaction_trace"]
+                        for item in plan["visual_capture_cases"]
+                        if item["design_name"] == reference["design_name"]
+                    ),
+                },
+                "production_state": {
+                    "visual_state_id": reference["visual_state_id"],
+                    "root_tag": next(
+                        item["production_render"]["root_tag"]
+                        for item in plan["visual_capture_cases"]
+                        if item["design_name"] == reference["design_name"]
+                    ),
+                    "state_attested": True,
+                    "root_attested": True,
+                },
+                "measurements": {
+                    "schema": "icp.visual-measurements.v1",
+                    "visual_state_id": reference["visual_state_id"],
+                    "root_tag": next(
+                        item["production_render"]["root_tag"]
+                        for item in plan["visual_capture_cases"]
+                        if item["design_name"] == reference["design_name"]
+                    ),
+                    "measurements": [
+                        {
+                            "assertion_id": item["assertion_id"],
+                            "probe_tag": item["probe_tag"],
+                            "kind": item["kind"],
+                            "actual": item["expected"],
+                        }
+                        for item in universe["reference_viewport_assertions"]
+                        if item["design_name"] == reference["design_name"]
+                    ],
+                },
                 "before": config,
                 "applied": applied,
                 "raw_pixel_size": [
@@ -435,12 +610,6 @@ class ImplementationCliTest(unittest.TestCase):
                     "design_name": reference["design_name"],
                     "actual_screenshot": str(actual.relative_to(self.project)),
                     "capture_evidence": str(capture_path.relative_to(self.project)),
-                    "reference_fidelity": {
-                        "colors": True,
-                        "component_structure": True,
-                        "spacing": True,
-                        "font_sizes": True,
-                    },
                 }
             )
         return universe, evidence
@@ -550,6 +719,146 @@ class ImplementationCliTest(unittest.TestCase):
         self.assertEqual(plan_input["integration_test_cases"], [])
         self.assertEqual(plan_input["visual_capture_cases"], [])
 
+    def test_begin_derives_reference_viewport_assertions_from_stage1_facts(self) -> None:
+        begun = self.begin()
+
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        universe = read_json(self.stage_dir / "coverage-universe.json")
+        assertions = universe["reference_viewport_assertions"]
+        self.assertTrue(assertions)
+        bounds = next(item for item in assertions if item["kind"] == "bounds")
+        source = next(
+            item
+            for item in universe["design_elements"]
+            if item["obligation_id"] == bounds["obligation_id"]
+        )
+        frame = source["source_fact"]["payload"]["frame"]
+        self.assertEqual(
+            bounds["expected"],
+            {
+                "left": frame.get("left", frame.get("x")),
+                "top": frame.get("top", frame.get("y")),
+                "width": frame["width"],
+                "height": frame["height"],
+            },
+        )
+        self.assertEqual(bounds["source_node_id"], source["source_node_id"])
+        self.assertEqual(bounds["mode"], "exact_at_reference")
+        self.assertEqual(bounds["probe_tag"], "icp-probe-" + bounds["obligation_id"])
+
+    def test_every_framed_design_element_gets_a_reference_bounds_assertion(self) -> None:
+        begun = self.begin()
+
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        universe = read_json(self.stage_dir / "coverage-universe.json")
+        framed = {
+            item["obligation_id"]
+            for item in universe["design_elements"]
+            if isinstance(item["source_fact"].get("payload", {}).get("frame"), dict)
+        }
+        bounded = {
+            item["obligation_id"]
+            for item in universe["reference_viewport_assertions"]
+            if item["kind"] == "bounds"
+        }
+
+        self.assertEqual(bounded, framed)
+        adaptive_text_bounds = [
+            item
+            for item in universe["reference_viewport_assertions"]
+            if item["kind"] == "bounds"
+            and next(
+                element["content_role"]
+                for element in universe["design_elements"]
+                if element["obligation_id"] == item["obligation_id"]
+            )
+            in {"static_copy", "dynamic_content"}
+        ]
+        self.assertTrue(adaptive_text_bounds)
+        self.assertTrue(
+            all(item["mode"] == "adaptive_at_reference" for item in adaptive_text_bounds)
+        )
+
+    def test_begin_derives_typography_assertions_from_stage1_text_style(self) -> None:
+        begun = self.begin()
+
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        assertions = read_json(self.stage_dir / "coverage-universe.json")[
+            "reference_viewport_assertions"
+        ]
+        font_size = next(item for item in assertions if item["kind"] == "font_size")
+        line_height = next(item for item in assertions if item["kind"] == "line_height")
+        self.assertEqual(font_size["expected"], {"sp": 14})
+        self.assertEqual(line_height["expected"], {"dp": 22})
+        self.assertEqual(font_size["obligation_id"], line_height["obligation_id"])
+        self.assertEqual(font_size["mode"], "exact_at_reference")
+
+    def test_begin_derives_color_assertions_from_stage1_style(self) -> None:
+        begun = self.begin()
+
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        universe = read_json(self.stage_dir / "coverage-universe.json")
+        text_element = next(
+            item
+            for item in universe["design_elements"]
+            if item["content_role"] == "static_copy"
+        )
+        color = next(
+            item
+            for item in universe["reference_viewport_assertions"]
+            if item["obligation_id"] == text_element["obligation_id"]
+            and item["kind"] == "color"
+        )
+
+        self.assertEqual(
+            color["expected"], {"r": 32, "g": 64, "b": 128, "a": 255}
+        )
+        self.assertEqual(color["mode"], "exact_at_reference")
+        visual_element = next(
+            item
+            for item in universe["design_elements"]
+            if item["content_role"] == "static_visual"
+        )
+        visual_color = next(
+            item
+            for item in universe["reference_viewport_assertions"]
+            if item["obligation_id"] == visual_element["obligation_id"]
+            and item["kind"] == "color"
+        )
+        self.assertEqual(
+            visual_color["expected"], {"r": 91, "g": 92, "b": 226, "a": 255}
+        )
+
+    def test_plan_binds_each_reference_assertion_to_a_runtime_probe_tag(self) -> None:
+        begun = self.begin()
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        plan = self.valid_plan()
+        universe = read_json(self.stage_dir / "coverage-universe.json")
+        assertions_by_obligation = {
+            item["obligation_id"]: item
+            for item in universe["reference_viewport_assertions"]
+        }
+        self.assertTrue(assertions_by_obligation)
+        for mapping in plan["design_element_mappings"]:
+            assertion = assertions_by_obligation.get(mapping["obligation_id"])
+            mapping["runtime_probe_tag"] = (
+                assertion["probe_tag"] if assertion is not None else None
+            )
+
+        accepted = self.record_plan(plan)
+
+        self.assertEqual(accepted.returncode, 0, accepted.stdout + accepted.stderr)
+        frozen = read_json(self.stage_dir / "implementation-plan.json")
+        frozen_by_obligation = {
+            item["obligation_id"]: item
+            for item in frozen["design_element_mappings"]
+        }
+        for obligation_id, assertion in assertions_by_obligation.items():
+            self.assertEqual(
+                frozen_by_obligation[obligation_id]["runtime_probe_tag"],
+                assertion["probe_tag"],
+            )
+
     def test_integration_obligations_have_it_interaction_and_model_inference_sources(self) -> None:
         page = {
             "page_key": "page-a",
@@ -629,7 +938,16 @@ class ImplementationCliTest(unittest.TestCase):
             "Read the entire packet before editing",
             "Query the live codebase for every `component_id`",
             "`platform_best_practices` fills only",
-            "Create every planned integration test",
+            "Work one strict vertical case at a time",
+            "only the current page node",
+            "`file_owners`",
+            "`visual_state_id`",
+            "cold start",
+            "Never inject a terminal `icp_state`",
+            "production interaction trace",
+            "`runtime_probe_tag`",
+            "Do not create a debug-only duplicate renderer",
+            "Human-authored fidelity booleans are forbidden",
             "Implement every Stage 1 `design_element`",
             "affected design-element obligation",
             "fix the implementation",
@@ -655,6 +973,15 @@ class ImplementationCliTest(unittest.TestCase):
         self.assertEqual(packet["platform_best_practices"], plan_input["platform_best_practices"])
         self.assertNotIn("codebase_index", packet)
         self.assertNotIn("component_implementation_origins", packet)
+        self.assertTrue(packet["reference_viewport_assertions"])
+        self.assertEqual(
+            {
+                item["runtime_probe_tag"]
+                for item in packet["design_element_mappings"]
+                if item["runtime_probe_tag"] is not None
+            },
+            {item["probe_tag"] for item in packet["reference_viewport_assertions"]},
+        )
         packet_component_ids = {item["component_id"] for item in packet["component_instances"]}
         self.assertEqual(
             {item["component_id"] for item in packet["component_definitions"]},
@@ -726,7 +1053,7 @@ class ImplementationCliTest(unittest.TestCase):
         self.assertNotEqual(rejected.returncode, 0)
         self.assertIn("responsive_evidence_invalid", rejected.stderr)
 
-    def test_every_component_must_be_adaptive_and_reference_fidelity_must_pass(self) -> None:
+    def test_every_component_must_have_adaptive_layout_evidence(self) -> None:
         begun = self.begin()
         self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
         plan = self.valid_plan()
@@ -737,14 +1064,6 @@ class ImplementationCliTest(unittest.TestCase):
 
         self.assertNotEqual(rejected_component.returncode, 0)
         self.assertIn("responsive_evidence_invalid", rejected_component.stderr)
-
-        evidence["adaptive_components"].append(missing_component)
-        evidence["visual_runs"][0]["reference_fidelity"]["spacing"] = False
-
-        rejected_fidelity = self.verify_implementation(evidence)
-
-        self.assertNotEqual(rejected_fidelity.returncode, 0)
-        self.assertIn("visual_evidence_invalid", rejected_fidelity.stderr)
 
     def test_project_common_rules_are_a_frozen_codegen_input_and_drift_fails_closed(self) -> None:
         begun = self.begin()
@@ -783,6 +1102,184 @@ class ImplementationCliTest(unittest.TestCase):
             self.assertEqual(packet["page"]["page_key"], page_key)
             self.assertTrue(packet["component_mappings"])
             self.assertTrue(packet["design_elements"])
+
+    def test_component_coverage_is_order_independent(self) -> None:
+        begun = self.begin()
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        plan = self.valid_plan()
+        page = next(
+            item for item in plan["pages"] if len(item["component_instance_ids"]) > 1
+        )
+        page["component_instance_ids"].reverse()
+
+        recorded = self.record_plan(plan)
+
+        self.assertEqual(recorded.returncode, 0, recorded.stdout + recorded.stderr)
+
+    def test_component_coverage_error_reports_exact_missing_and_unexpected_ids(self) -> None:
+        begun = self.begin()
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        plan = self.valid_plan()
+        page = plan["pages"][0]
+        missing = page["component_instance_ids"][0]
+        page["component_instance_ids"][0] = "unexpected-instance"
+
+        rejected = self.record_plan(plan)
+
+        self.assertNotEqual(rejected.returncode, 0)
+        error = json.loads(rejected.stderr)
+        self.assertEqual(error["error"], "component_coverage_mismatch")
+        self.assertEqual(error["details"]["page_key"], page["page_key"])
+        self.assertEqual(error["details"]["missing"], [missing])
+        self.assertEqual(error["details"]["unexpected"], ["unexpected-instance"])
+
+    def test_execution_plan_assigns_cross_cutting_and_page_files_to_one_owner(self) -> None:
+        begun = self.begin()
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        plan = self.valid_plan()
+
+        recorded = self.record_plan(plan)
+
+        self.assertEqual(recorded.returncode, 0, recorded.stdout + recorded.stderr)
+        frozen = read_json(self.stage_dir / "implementation-plan.json")
+        self.assertEqual(
+            frozen["file_owners"]["app/src/main/AndroidManifest.xml"], "foundation"
+        )
+        self.assertEqual(
+            frozen["file_owners"]["app/src/main/MainActivity.kt"],
+            "flow-integration",
+        )
+        self.assertEqual(
+            {node["kind"] for node in frozen["execution_nodes"]},
+            {"foundation", "page", "flow-integration"},
+        )
+
+    def test_visual_states_use_unique_deterministic_ids(self) -> None:
+        begun = self.begin()
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        plan = self.valid_plan()
+        self.assertGreaterEqual(len(plan["visual_capture_cases"]), 2)
+        first, second = plan["visual_capture_cases"][:2]
+        self.assertNotEqual(first["visual_state_id"], second["visual_state_id"])
+        second["visual_state_id"] = first["visual_state_id"]
+
+        rejected = self.record_plan(plan)
+
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("visual_state_identity_mismatch", rejected.stderr)
+
+    def test_visual_state_rejects_debug_terminal_state_setup(self) -> None:
+        begun = self.begin()
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        plan = self.valid_plan()
+        secondary = plan["visual_capture_cases"][0]
+        page_case = next(
+            case
+            for case in plan["integration_test_cases"]
+            if case["page_key"] == secondary["page_key"]
+        )
+        secondary["interaction_trace"] = [
+            {
+                "case_id": page_case["case_id"],
+                "action": "click",
+                "target_tag": "feedback-photo-source-trigger",
+            }
+        ]
+        secondary["precondition_commands"] = [
+            [
+                "adb",
+                "shell",
+                "am",
+                "start",
+                "--es",
+                "icp_state",
+                secondary["visual_state_id"],
+            ]
+        ]
+
+        rejected = self.record_plan(plan)
+
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("visual_production_path_unproven", rejected.stderr)
+
+    def test_visual_state_must_target_the_frozen_production_renderer(self) -> None:
+        begun = self.begin()
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        plan = self.valid_plan()
+        visual = plan["visual_capture_cases"][0]
+        visual["production_render"]["symbol"] = "IcpDebugOnlyDialog"
+
+        rejected = self.record_plan(plan)
+
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("visual_render_identity_mismatch", rejected.stderr)
+
+    def test_verify_derives_fidelity_from_measurements_instead_of_human_booleans(self) -> None:
+        begun = self.begin()
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        plan = self.valid_plan()
+        _, evidence = self.prepare_verifiable_implementation(plan)
+        visual = evidence["visual_runs"][0]
+        visual.pop("reference_fidelity", None)
+        capture_path = self.project / visual["capture_evidence"]
+        capture = read_json(capture_path)
+        capture["measurements"]["measurements"][0]["actual"] = {
+            "left": 999,
+            "top": 999,
+            "width": 999,
+            "height": 999,
+        }
+        capture_path.write_text(
+            json.dumps(capture, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+
+        rejected = self.verify_implementation(evidence)
+
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("reference_viewport_measurement_failed", rejected.stderr)
+
+    def test_verify_rejects_measurements_not_wired_to_production_element_probes(self) -> None:
+        begun = self.begin()
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        plan = self.valid_plan()
+        _, evidence = self.prepare_verifiable_implementation(plan)
+        probed = next(
+            mapping
+            for mapping in plan["design_element_mappings"]
+            if mapping["runtime_probe_tag"] is not None
+        )
+        source_path = self.project / probed["source_file"]
+        source_path.write_text(
+            source_path.read_text(encoding="utf-8").replace(
+                "// " + probed["runtime_probe_tag"] + "\n", ""
+            ),
+            encoding="utf-8",
+        )
+
+        rejected = self.verify_implementation(evidence)
+
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("visual_render_identity_mismatch", rejected.stderr)
+
+    def test_verify_rejects_a_debug_duplicate_of_the_production_renderer(self) -> None:
+        begun = self.begin()
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        plan = self.valid_plan()
+        _, evidence = self.prepare_verifiable_implementation(plan)
+        visual = plan["visual_capture_cases"][0]
+        duplicate = self.project / "app/src/debug/java/demo/IcpDebugDialog.kt"
+        duplicate.parent.mkdir(parents=True, exist_ok=True)
+        duplicate.write_text(
+            "fun IcpDebugDialog() = Unit\n// "
+            + visual["production_render"]["root_tag"]
+            + "\n",
+            encoding="utf-8",
+        )
+
+        rejected = self.verify_implementation(evidence)
+
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("visual_render_identity_mismatch", rejected.stderr)
 
     def test_exported_design_assets_require_one_exact_source_to_target_mapping(self) -> None:
         begun = self.begin()
@@ -843,6 +1340,85 @@ class ImplementationCliTest(unittest.TestCase):
         )
         self.assertTrue(all(item["red"]["exit_code"] != 0 for item in evidence["cases"]))
         self.assertTrue(all(item["green"]["exit_code"] == 0 for item in evidence["cases"]))
+
+    def test_one_page_can_complete_red_green_before_another_page_starts_red(self) -> None:
+        begun = self.begin()
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        plan = self.valid_plan()
+        page_keys = list(
+            dict.fromkeys(case["page_key"] for case in plan["integration_test_cases"])
+        )
+        self.assertGreaterEqual(len(page_keys), 2)
+        first_page = page_keys[0]
+        second_page = page_keys[1]
+        behavior_path = self.project / "page_behavior.py"
+        behavior_path.write_text("IMPLEMENTED = False\n", encoding="utf-8")
+        for index, case in enumerate(plan["integration_test_cases"]):
+            test_path = self.project / f"page_case_{index}.py"
+            test_path.write_text(
+                "from page_behavior import IMPLEMENTED\n"
+                "raise SystemExit(0 if IMPLEMENTED else 1)\n",
+                encoding="utf-8",
+            )
+            case["command"] = [sys.executable, test_path.name]
+        recorded = self.record_plan(plan)
+        self.assertEqual(recorded.returncode, 0, recorded.stdout + recorded.stderr)
+
+        first_page_cases = [
+            case for case in plan["integration_test_cases"] if case["page_key"] == first_page
+        ]
+        for case in first_page_cases:
+            red = self.run_case(case["case_id"], "red")
+            self.assertEqual(red.returncode, 0, red.stdout + red.stderr)
+        behavior_path.write_text("IMPLEMENTED = True\n", encoding="utf-8")
+        for case in first_page_cases:
+            green = self.run_case(case["case_id"], "green")
+            self.assertEqual(green.returncode, 0, green.stdout + green.stderr)
+
+        evidence = read_json(self.stage_dir / "tdd-evidence.json")
+        by_id = {case["case_id"]: case for case in evidence["cases"]}
+        self.assertTrue(
+            all(by_id[case["case_id"]]["green"] is not None for case in first_page_cases)
+        )
+        self.assertTrue(
+            all(
+                case["red"] is None
+                for case in evidence["cases"]
+                if case["page_key"] == second_page
+            )
+        )
+
+    def test_one_vertical_case_can_green_before_its_page_sibling_starts_red(self) -> None:
+        begun = self.begin()
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        plan = self.valid_plan()
+        page_key = plan["integration_test_cases"][0]["page_key"]
+        siblings = [
+            case for case in plan["integration_test_cases"] if case["page_key"] == page_key
+        ]
+        self.assertGreaterEqual(len(siblings), 2)
+        behavior_path = self.project / "vertical_behavior.py"
+        behavior_path.write_text("IMPLEMENTED = False\n", encoding="utf-8")
+        for index, case in enumerate(plan["integration_test_cases"]):
+            test_path = self.project / f"vertical_case_{index}.py"
+            test_path.write_text(
+                "from vertical_behavior import IMPLEMENTED\n"
+                "raise SystemExit(0 if IMPLEMENTED else 1)\n",
+                encoding="utf-8",
+            )
+            case["command"] = [sys.executable, test_path.name]
+        recorded = self.record_plan(plan)
+        self.assertEqual(recorded.returncode, 0, recorded.stdout + recorded.stderr)
+
+        red = self.run_case(siblings[0]["case_id"], "red")
+        self.assertEqual(red.returncode, 0, red.stdout + red.stderr)
+        behavior_path.write_text("IMPLEMENTED = True\n", encoding="utf-8")
+        green = self.run_case(siblings[0]["case_id"], "green")
+
+        self.assertEqual(green.returncode, 0, green.stdout + green.stderr)
+        evidence = read_json(self.stage_dir / "tdd-evidence.json")
+        by_id = {case["case_id"]: case for case in evidence["cases"]}
+        self.assertIsNone(by_id[siblings[1]["case_id"]]["red"])
 
     def test_parallel_case_recording_preserves_both_green_results(self) -> None:
         begun = self.begin()
@@ -929,9 +1505,26 @@ class ImplementationCliTest(unittest.TestCase):
             f"reference_path = Path({str(reference_path)!r})\n"
             f"fail_marker = Path({str(fail_marker)!r})\n"
             "p=argparse.ArgumentParser(); p.add_argument('operation'); "
-            "p.add_argument('--package'); p.add_argument('--config'); p.add_argument('--output'); a=p.parse_args()\n"
+            "p.add_argument('--package'); p.add_argument('--config'); p.add_argument('--output'); "
+            "p.add_argument('--trace'); p.add_argument('--contract'); p.add_argument('--state-id'); "
+            "p.add_argument('--root-tag'); a=p.parse_args()\n"
             "if a.operation == 'snapshot': print(state_path.read_text())\n"
             "elif a.operation in {'apply','restore'}: state_path.write_text(Path(a.config).read_text())\n"
+            "elif a.operation == 'cold-start': print(json.dumps({"
+            "'activity_resumed': True, 'process_alive': True, "
+            "'no_fatal_exception': True, 'fatal_log_tail': ''}))\n"
+            "elif a.operation == 'interact':\n"
+            "    trace=json.loads(Path(a.trace).read_text())\n"
+            "    print(json.dumps({'schema':'icp.visual-interaction.v1','steps':trace['steps']}))\n"
+            "elif a.operation == 'attest': print(json.dumps({"
+            "'visual_state_id':a.state_id,'root_tag':a.root_tag,'state_attested':True,"
+            "'root_attested':True}))\n"
+            "elif a.operation == 'measure':\n"
+            "    contract=json.loads(Path(a.contract).read_text())\n"
+            "    print(json.dumps({'schema':'icp.visual-measurements.v1',"
+            "'visual_state_id':a.state_id,'root_tag':a.root_tag,'measurements':["
+            "{'assertion_id':item['assertion_id'],'probe_tag':item['probe_tag'],"
+            "'kind':item['kind'],'actual':item['expected']} for item in contract['assertions']]}))\n"
             "elif a.operation == 'capture':\n"
             "    if fail_marker.exists(): raise SystemExit(7)\n"
             "    shutil.copyfile(reference_path, a.output)\n",
@@ -953,6 +1546,10 @@ class ImplementationCliTest(unittest.TestCase):
         capture_evidence = read_json(self.project / result["capture_evidence"])
         self.assertEqual(capture_evidence["before"], initial)
         self.assertEqual(capture_evidence["restored"], initial)
+        self.assertTrue(capture_evidence["cold_start"]["process_alive"])
+        self.assertEqual(
+            capture_evidence["visual_state_id"], reference["visual_state_id"]
+        )
         self.assertEqual(
             capture_evidence["applied"]["size"],
             reference["pixel_size"],
@@ -965,6 +1562,152 @@ class ImplementationCliTest(unittest.TestCase):
             hashlib.sha256((self.project / result["actual_screenshot"]).read_bytes()).hexdigest(),
             reference["sha256"],
         )
+
+    def test_capture_visual_uses_the_production_path_and_measures_frozen_source_facts(self) -> None:
+        begun = self.begin()
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        plan = self.valid_plan()
+        visual = plan["visual_capture_cases"][0]
+        page_case = next(
+            case
+            for case in plan["integration_test_cases"]
+            if case["page_key"] == visual["page_key"]
+        )
+        visual["interaction_trace"] = [
+            {
+                "case_id": page_case["case_id"],
+                "action": "click",
+                "target_tag": "feedback-photo-source-trigger",
+            }
+        ]
+        recorded = self.record_plan(plan)
+        self.assertEqual(recorded.returncode, 0, recorded.stdout + recorded.stderr)
+        universe = read_json(self.stage_dir / "coverage-universe.json")
+        reference = next(
+            item
+            for item in universe["visual_references"]
+            if item["design_name"] == visual["design_name"]
+        )
+        initial = {
+            "size": {"width": 1080, "height": 1920},
+            "size_override": False,
+            "density": 420,
+            "density_override": False,
+            "locale": "en-US",
+            "font_scale": "1.0",
+            "navigation_mode": "2",
+        }
+        driver_state = self.project / "production-driver-state.json"
+        driver_state.write_text(json.dumps(initial), encoding="utf-8")
+        operation_log = self.project / "production-driver-operations.jsonl"
+        reference_path = self.project / reference["path"]
+        driver = self.project / "production-visual-driver.py"
+        driver.write_text(
+            "#!/usr/bin/env python3\n"
+            "import argparse, json, shutil, sys\n"
+            "from pathlib import Path\n"
+            f"state_path = Path({str(driver_state)!r})\n"
+            f"log_path = Path({str(operation_log)!r})\n"
+            f"reference_path = Path({str(reference_path)!r})\n"
+            "p=argparse.ArgumentParser(); p.add_argument('operation'); "
+            "p.add_argument('--package'); p.add_argument('--config'); p.add_argument('--output'); "
+            "p.add_argument('--trace'); p.add_argument('--contract'); p.add_argument('--state-id'); "
+            "p.add_argument('--root-tag'); a=p.parse_args()\n"
+            "with log_path.open('a') as f: f.write(json.dumps(vars(a), sort_keys=True)+'\\n')\n"
+            "if a.operation == 'snapshot': print(state_path.read_text())\n"
+            "elif a.operation in {'apply','restore'}: state_path.write_text(Path(a.config).read_text())\n"
+            "elif a.operation == 'cold-start':\n"
+            "    if a.state_id is not None: raise SystemExit(12)\n"
+            "    print(json.dumps({'activity_resumed': True, 'process_alive': True, "
+            "'no_fatal_exception': True, 'fatal_log_tail': ''}))\n"
+            "elif a.operation == 'interact':\n"
+            "    trace=json.loads(Path(a.trace).read_text())\n"
+            "    print(json.dumps({'schema':'icp.visual-interaction.v1','steps':trace['steps']}))\n"
+            "elif a.operation == 'attest': print(json.dumps({"
+            "'visual_state_id':a.state_id,'root_tag':a.root_tag,'state_attested':True,"
+            "'root_attested':True}))\n"
+            "elif a.operation == 'measure':\n"
+            "    contract=json.loads(Path(a.contract).read_text())\n"
+            "    print(json.dumps({'schema':'icp.visual-measurements.v1',"
+            "'visual_state_id':a.state_id,'root_tag':a.root_tag,'measurements':["
+            "{'assertion_id':item['assertion_id'],'probe_tag':item['probe_tag'],"
+            "'kind':item['kind'],'actual':item['expected']} for item in contract['assertions']]}))\n"
+            "elif a.operation == 'capture': shutil.copyfile(reference_path, a.output)\n",
+            encoding="utf-8",
+        )
+        driver.chmod(0o755)
+
+        captured = self.capture_visual(visual["design_name"], driver)
+
+        self.assertEqual(captured.returncode, 0, captured.stdout + captured.stderr)
+        result = json.loads(captured.stdout)
+        capture = read_json(self.project / result["capture_evidence"])
+        operations = [json.loads(line) for line in operation_log.read_text().splitlines()]
+        self.assertEqual(
+            [item["operation"] for item in operations],
+            ["snapshot", "apply", "cold-start", "interact", "attest", "measure", "capture", "restore", "snapshot"],
+        )
+        cold_start = next(item for item in operations if item["operation"] == "cold-start")
+        self.assertIsNone(cold_start["state_id"])
+        self.assertEqual(capture["schema"], "icp.implementation.visual-capture-evidence.v3")
+        self.assertEqual(capture["production_state"]["root_tag"], visual["production_render"]["root_tag"])
+        self.assertEqual(capture["interaction"]["steps"], visual["interaction_trace"])
+        expected_assertions = [
+            item
+            for item in universe["reference_viewport_assertions"]
+            if item["design_name"] == visual["design_name"]
+        ]
+        self.assertEqual(
+            {item["assertion_id"] for item in capture["measurements"]["measurements"]},
+            {item["assertion_id"] for item in expected_assertions},
+        )
+
+    def test_capture_visual_rejects_a_cold_start_that_does_not_keep_the_app_alive(self) -> None:
+        begun = self.begin()
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        plan = self.valid_plan()
+        recorded = self.record_plan(plan)
+        self.assertEqual(recorded.returncode, 0, recorded.stdout + recorded.stderr)
+        initial = {
+            "size": {"width": 1080, "height": 1920},
+            "size_override": False,
+            "density": 420,
+            "density_override": False,
+            "locale": "en-US",
+            "font_scale": "1.0",
+            "navigation_mode": "2",
+        }
+        driver_state = self.project / "cold-start-driver-state.json"
+        driver_state.write_text(json.dumps(initial), encoding="utf-8")
+        capture_marker = self.project / "capture-was-called"
+        driver = self.project / "cold-start-visual-driver.py"
+        driver.write_text(
+            "#!/usr/bin/env python3\n"
+            "import argparse, json\n"
+            "from pathlib import Path\n"
+            f"state_path = Path({str(driver_state)!r})\n"
+            f"capture_marker = Path({str(capture_marker)!r})\n"
+            "p=argparse.ArgumentParser(); p.add_argument('operation'); "
+            "p.add_argument('--package'); p.add_argument('--config'); p.add_argument('--output'); "
+            "p.add_argument('--state-id'); a=p.parse_args()\n"
+            "if a.operation == 'snapshot': print(state_path.read_text())\n"
+            "elif a.operation in {'apply','restore'}: state_path.write_text(Path(a.config).read_text())\n"
+            "elif a.operation == 'cold-start': print(json.dumps({"
+            "'activity_resumed': False, 'process_alive': False, "
+            "'no_fatal_exception': False, 'fatal_log_tail': 'AndroidRuntime crash'}))\n"
+            "elif a.operation == 'capture': capture_marker.write_text('called')\n",
+            encoding="utf-8",
+        )
+        driver.chmod(0o755)
+
+        rejected = self.capture_visual(
+            plan["visual_capture_cases"][0]["design_name"], driver
+        )
+
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("android_cold_start_failed", rejected.stderr)
+        self.assertFalse(capture_marker.exists())
+        self.assertEqual(json.loads(driver_state.read_text()), initial)
 
     def test_verify_requires_code_anchors_commands_two_viewports_and_visual_mae(self) -> None:
         begun = self.begin()
@@ -1014,12 +1757,25 @@ class ImplementationCliTest(unittest.TestCase):
         for mapping in plan["component_mappings"]:
             file_lines.setdefault(mapping["source_file"], []).append(f"fun {mapping['symbol']}() = Unit")
         for mapping in plan["design_element_mappings"]:
-            file_lines.setdefault(mapping["source_file"], []).append("// " + mapping["implementation_anchor"])
+            file_lines.setdefault(mapping["source_file"], []).extend(
+                [
+                    "// " + mapping["implementation_anchor"],
+                    *(
+                        ["// " + mapping["runtime_probe_tag"]]
+                        if mapping["runtime_probe_tag"] is not None
+                        else []
+                    ),
+                ]
+            )
         for mapping in plan["semantic_fact_mappings"]:
             file_lines.setdefault(mapping["source_file"], []).append("// " + mapping["implementation_anchor"])
         for mapping in plan["presentation_mappings"]:
             file_lines.setdefault(mapping["source_file"], []).extend(
                 [f"fun {mapping['symbol']}() = Unit", "// " + mapping["implementation_anchor"]]
+            )
+        for visual in plan["visual_capture_cases"]:
+            file_lines.setdefault(visual["production_render"]["source_file"], []).append(
+                "// " + visual["production_render"]["root_tag"]
             )
         missing_anchor = plan["design_element_mappings"][-1]["implementation_anchor"]
         for relative, lines in file_lines.items():
@@ -1071,12 +1827,7 @@ class ImplementationCliTest(unittest.TestCase):
                 {
                     "design_name": item["design_name"],
                     "actual_screenshot": item["path"],
-                    "reference_fidelity": {
-                        "colors": True,
-                        "component_structure": True,
-                        "spacing": True,
-                        "font_sizes": True,
-                    },
+                    "capture_evidence": "missing.capture.json",
                 }
                 for item in universe["visual_references"]
             ],
@@ -1143,7 +1894,7 @@ class ImplementationCliTest(unittest.TestCase):
             )
             capture_path.parent.mkdir(parents=True, exist_ok=True)
             capture = {
-                "schema": "icp.implementation.visual-capture-evidence.v1",
+                "schema": "icp.implementation.visual-capture-evidence.v3",
                 "evaluation_scope": "reference_viewport_visual_fidelity",
                 "implementation_plan_sha256": evidence["implementation_plan_sha256"],
                 "design_name": visual_run["design_name"],
@@ -1152,6 +1903,50 @@ class ImplementationCliTest(unittest.TestCase):
                 "reference_pixel_size": reference["pixel_size"],
                 "logical_scale": reference["logical_scale"],
                 "capture_strategy": "extended-viewport-full-page",
+                "visual_state_id": reference["visual_state_id"],
+                "cold_start": {
+                    "activity_resumed": True,
+                    "process_alive": True,
+                    "no_fatal_exception": True,
+                    "fatal_log_tail": "",
+                },
+                "interaction": {
+                    "schema": "icp.visual-interaction.v1",
+                    "steps": next(
+                        item["interaction_trace"]
+                        for item in plan["visual_capture_cases"]
+                        if item["design_name"] == visual_run["design_name"]
+                    ),
+                },
+                "production_state": {
+                    "visual_state_id": reference["visual_state_id"],
+                    "root_tag": next(
+                        item["production_render"]["root_tag"]
+                        for item in plan["visual_capture_cases"]
+                        if item["design_name"] == visual_run["design_name"]
+                    ),
+                    "state_attested": True,
+                    "root_attested": True,
+                },
+                "measurements": {
+                    "schema": "icp.visual-measurements.v1",
+                    "visual_state_id": reference["visual_state_id"],
+                    "root_tag": next(
+                        item["production_render"]["root_tag"]
+                        for item in plan["visual_capture_cases"]
+                        if item["design_name"] == visual_run["design_name"]
+                    ),
+                    "measurements": [
+                        {
+                            "assertion_id": item["assertion_id"],
+                            "probe_tag": item["probe_tag"],
+                            "kind": item["kind"],
+                            "actual": item["expected"],
+                        }
+                        for item in universe["reference_viewport_assertions"]
+                        if item["design_name"] == visual_run["design_name"]
+                    ],
+                },
                 "before": config,
                 "applied": applied,
                 "raw_pixel_size": [

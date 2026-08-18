@@ -1787,6 +1787,7 @@ def build_branch_name(plan_path: Path) -> dict[str, object]:
     if (plan.get("kind"), plan.get("schema_version")) not in {
         ("iole.flow-plan.v2", 2),
         ("iole.flow-plan.v3", 3),
+        ("iole.flow-execution-plan.v4", 4),
     }:
         raise ValueError("flow plan contract version is invalid")
     source_id = plan.get("source_id")
@@ -1872,21 +1873,32 @@ def build_review_writeback(
     if mr not in {0, 1, 2}:
         raise ValueError("mr must be 0, 1, or 2")
     plan = load_input_document(plan_path, "flow plan")
+    plan_version = (plan.get("kind"), plan.get("schema_version"))
     if (
         (plan.get("kind"), plan.get("schema_version"))
-        not in {("iole.flow-plan.v2", 2), ("iole.flow-plan.v3", 3)}
+        not in {
+            ("iole.flow-plan.v2", 2),
+            ("iole.flow-plan.v3", 3),
+            ("iole.flow-execution-plan.v4", 4),
+        }
         or plan.get("decision") != "ready"
     ):
         raise ValueError("flow plan is not ready")
     if (
-        (plan.get("kind"), plan.get("schema_version"))
-        == ("iole.flow-plan.v3", 3)
+        plan_version
+        in {
+            ("iole.flow-plan.v3", 3),
+            ("iole.flow-execution-plan.v4", 4),
+        }
         and icp_result_path is None
     ):
         raise ValueError(
             "lossless review writeback requires a verified ICP v2 result"
         )
-    if (plan.get("kind"), plan.get("schema_version")) == ("iole.flow-plan.v3", 3):
+    if plan_version in {
+        ("iole.flow-plan.v3", 3),
+        ("iole.flow-execution-plan.v4", 4),
+    }:
         assert icp_result_path is not None
         if icp_result_path.is_symlink() or not icp_result_path.is_file():
             raise ValueError("ICP result contract is invalid")
@@ -2047,7 +2059,11 @@ def build_error_writeback(
     plan = load_input_document(plan_path, "flow plan")
     if (
         (plan.get("kind"), plan.get("schema_version"))
-        not in {("iole.flow-plan.v2", 2), ("iole.flow-plan.v3", 3)}
+        not in {
+            ("iole.flow-plan.v2", 2),
+            ("iole.flow-plan.v3", 3),
+            ("iole.flow-execution-plan.v4", 4),
+        }
         or plan.get("decision") != "ready"
     ):
         raise ValueError("flow plan is not ready")
@@ -2095,6 +2111,246 @@ def load_input_document(path: Path, label: str) -> dict[str, object]:
     return document
 
 
+def compile_execution_plan(
+    source_bundle_path: Path,
+    component_lock_path: Path,
+    implementation_plan_path: Path,
+) -> dict[str, object]:
+    source_bundle = load_input_document(source_bundle_path, "source bundle")
+    component_lock = load_input_document(component_lock_path, "component lock")
+    implementation_plan = load_input_document(
+        implementation_plan_path, "implementation plan"
+    )
+    if (
+        source_bundle.get("kind") != "iole.flow-source-bundle.v2"
+        or source_bundle.get("schema_version") != 2
+        or source_bundle.get("bundle_digest") != source_bundle_digest(source_bundle)
+    ):
+        raise ValueError("source bundle v2 is invalid")
+    source_id = source_bundle.get("source_id")
+    if not isinstance(source_id, str) or SOURCE_ID.fullmatch(source_id) is None:
+        raise ValueError("source bundle identity is invalid")
+    if source_bundle.get("role") != "client":
+        raise ValueError("source bundle role must be client")
+    members = source_bundle.get("members")
+    if not isinstance(members, list) or not members:
+        raise ValueError("source bundle members are required")
+    bundle_members: dict[str, dict[str, object]] = {}
+    for member_value in members:
+        if not isinstance(member_value, dict):
+            raise ValueError("source bundle member is invalid")
+        title = normalize_title(member_value.get("title"))
+        if title in bundle_members:
+            raise ValueError(f"duplicate source bundle member: {title}")
+        if member_value.get("change_scope") not in {
+            "modify",
+            "context",
+            "navigate-only",
+        }:
+            raise ValueError(f"source bundle member scope is invalid: {title}")
+        bundle_members[title] = member_value
+    root_title = normalize_title(source_bundle.get("root_title"))
+    if root_title not in bundle_members:
+        raise ValueError("source bundle root member is missing")
+
+    if component_lock.get("schema") != "icp.component-design.lock.v6":
+        raise ValueError("component lock v6 is required")
+    source_hashes = component_lock.get("source_hashes")
+    if (
+        not isinstance(source_hashes, dict)
+        or source_hashes.get("iole_source_bundle_sha256")
+        != hashlib.sha256(source_bundle_path.read_bytes()).hexdigest()
+    ):
+        raise ValueError("component lock targets another source bundle")
+    if implementation_plan.get("schema") != "icp.implementation.plan.v1":
+        raise ValueError("implementation plan v1 is required")
+    component_lock_sha = hashlib.sha256(component_lock_path.read_bytes()).hexdigest()
+    if implementation_plan.get("component_lock_sha256") != component_lock_sha:
+        raise ValueError("implementation plan targets another component lock")
+
+    source_context = component_lock.get("source_context")
+    lock_members = source_context.get("members") if isinstance(source_context, dict) else None
+    if not isinstance(lock_members, list):
+        raise ValueError("component lock source context is invalid")
+    lock_members_by_title: dict[str, dict[str, object]] = {}
+    for member_value in lock_members:
+        if not isinstance(member_value, dict):
+            raise ValueError("component lock source member is invalid")
+        title = normalize_title(member_value.get("title"))
+        if title in lock_members_by_title:
+            raise ValueError(f"duplicate component lock source member: {title}")
+        lock_members_by_title[title] = member_value
+    if set(lock_members_by_title) != set(bundle_members):
+        raise ValueError("component lock source members differ from source bundle")
+    for title, bundle_member in bundle_members.items():
+        if lock_members_by_title[title].get("change_scope") != bundle_member.get(
+            "change_scope"
+        ):
+            raise ValueError(f"component lock member scope changed: {title}")
+
+    page_keys = implementation_plan.get("page_keys")
+    pages = implementation_plan.get("pages")
+    if (
+        not isinstance(page_keys, list)
+        or not isinstance(pages, list)
+        or any(not isinstance(key, str) or not key for key in page_keys)
+        or len(page_keys) != len(set(page_keys))
+    ):
+        raise ValueError("implementation pages are invalid")
+    plan_pages: dict[str, dict[str, object]] = {}
+    for page_value in pages:
+        if not isinstance(page_value, dict):
+            raise ValueError("implementation page is invalid")
+        page_key = page_value.get("page_key")
+        member_title = page_value.get("member_title")
+        if not isinstance(page_key, str) or not isinstance(member_title, str):
+            raise ValueError("implementation page identity is invalid")
+        title = normalize_title(member_title)
+        if page_key in plan_pages:
+            raise ValueError(f"duplicate implementation page: {page_key}")
+        lock_member = lock_members_by_title.get(title)
+        if (
+            lock_member is None
+            or lock_member.get("change_scope") != "modify"
+            or lock_member.get("page_key") != page_key
+        ):
+            raise ValueError(f"implementation page does not join source member: {title}")
+        plan_pages[page_key] = page_value
+    if set(plan_pages) != set(page_keys):
+        raise ValueError("implementation page keys do not match pages")
+    modify_titles = [
+        title
+        for title, member in bundle_members.items()
+        if member.get("change_scope") == "modify"
+    ]
+    planned_titles = [
+        normalize_title(plan_pages[page_key]["member_title"]) for page_key in page_keys
+    ]
+    if set(planned_titles) != set(modify_titles):
+        raise ValueError("implementation pages do not cover every modify member")
+
+    raw_nodes = implementation_plan.get("execution_nodes")
+    raw_file_owners = implementation_plan.get("file_owners")
+    if not isinstance(raw_nodes, list) or not raw_nodes:
+        raise ValueError("implementation execution nodes are required")
+    execution_nodes: list[dict[str, object]] = []
+    node_ids: set[str] = set()
+    for node_value in raw_nodes:
+        if not isinstance(node_value, dict) or set(node_value) != {
+            "node_id",
+            "kind",
+            "page_keys",
+            "depends_on",
+            "case_ids",
+        }:
+            raise ValueError("implementation execution node is invalid")
+        node_id = node_value.get("node_id")
+        if not isinstance(node_id, str) or not node_id or node_id in node_ids:
+            raise ValueError("implementation execution node identity is invalid")
+        node_ids.add(node_id)
+        execution_nodes.append(node_value)
+    seen_nodes: set[str] = set()
+    covered_page_keys: set[str] = set()
+    for node in execution_nodes:
+        dependencies = node.get("depends_on")
+        node_pages = node.get("page_keys")
+        if (
+            not isinstance(dependencies, list)
+            or any(dependency not in seen_nodes for dependency in dependencies)
+            or not isinstance(node_pages, list)
+            or any(page_key not in page_keys for page_key in node_pages)
+        ):
+            raise ValueError("implementation execution DAG is invalid")
+        if node.get("kind") == "page":
+            covered_page_keys.update(str(page_key) for page_key in node_pages)
+        seen_nodes.add(str(node["node_id"]))
+    if covered_page_keys != set(page_keys):
+        raise ValueError("implementation execution DAG does not cover every page")
+    if not isinstance(raw_file_owners, dict) or not raw_file_owners:
+        raise ValueError("implementation file owners are required")
+    file_owners: dict[str, str] = {}
+    for path_value, owner_value in raw_file_owners.items():
+        if (
+            not isinstance(path_value, str)
+            or not path_value
+            or Path(path_value).is_absolute()
+            or ".." in Path(path_value).parts
+            or not isinstance(owner_value, str)
+            or owner_value not in node_ids
+        ):
+            raise ValueError("implementation file ownership is invalid")
+        file_owners[path_value] = owner_value
+
+    implementation_plan_sha = hashlib.sha256(
+        implementation_plan_path.read_bytes()
+    ).hexdigest()
+    flow_id = "flow-" + hashlib.sha256(
+        canonical_bytes(
+            {
+                "source_bundle_digest": source_bundle["bundle_digest"],
+                "implementation_plan_sha256": implementation_plan_sha,
+            }
+        )
+    ).hexdigest()[:24]
+    members_by_page_key: dict[str, dict[str, object]] = {}
+    for title in planned_titles:
+        page_key = str(lock_members_by_title[title]["page_key"])
+        members_by_page_key[page_key] = {
+            "page_id": page_key,
+            **bundle_members[title],
+        }
+    member_digests = {
+        page_key: hashlib.sha256(canonical_bytes(member)).hexdigest()
+        for page_key, member in members_by_page_key.items()
+    }
+    root_page_id = lock_members_by_title[root_title].get("page_key")
+    if not isinstance(root_page_id, str) or root_page_id not in page_keys:
+        raise ValueError("source bundle root is not a modify implementation page")
+    relations = source_bundle.get("relations")
+    if not isinstance(relations, list):
+        raise ValueError("source bundle relations are invalid")
+    interaction_edges: list[dict[str, str]] = []
+    for relation_value in relations:
+        if not isinstance(relation_value, dict):
+            raise ValueError("source bundle relation is invalid")
+        source_title = normalize_title(relation_value.get("from_title"))
+        target_title = normalize_title(relation_value.get("to_title"))
+        source_member = lock_members_by_title.get(source_title)
+        target_member = lock_members_by_title.get(target_title)
+        if source_member is None or target_member is None:
+            raise ValueError("source bundle relation member is missing")
+        source_key = source_member.get("page_key")
+        target_key = target_member.get("page_key")
+        if isinstance(source_key, str) and isinstance(target_key, str):
+            interaction_edges.append({"from": source_key, "to": target_key})
+    return {
+        "kind": "iole.flow-execution-plan.v4",
+        "schema_version": 4,
+        "flow_id": flow_id,
+        "source_id": source_id,
+        "role": "client",
+        "decision": "ready",
+        "root_title": root_title,
+        "root_page_id": root_page_id,
+        "source_bundle_digest": source_bundle["bundle_digest"],
+        "source_bundle_sha256": hashlib.sha256(
+            source_bundle_path.read_bytes()
+        ).hexdigest(),
+        "component_lock_sha256": component_lock_sha,
+        "implementation_plan_sha256": implementation_plan_sha,
+        "claim_page_titles": planned_titles,
+        "claim_page_ids": page_keys,
+        "page_keys": page_keys,
+        "members": [members_by_page_key[page_key] for page_key in page_keys],
+        "member_digests": member_digests,
+        "interaction_edges": interaction_edges,
+        "execution_nodes": execution_nodes,
+        "execution_dag": execution_nodes,
+        "execution_order": [str(node["node_id"]) for node in execution_nodes],
+        "file_owners": dict(sorted(file_owners.items())),
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="iole_flow_contract_v2.py")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -2115,6 +2371,10 @@ def main(argv: list[str] | None = None) -> int:
     source_bundle_parser.add_argument("--analysis", required=True, type=Path)
     source_bundle_parser.add_argument("--closure-review", type=Path)
     source_bundle_parser.add_argument("--mapping", type=Path, default=DEFAULT_MAPPING)
+    execution_parser = subparsers.add_parser("compile-execution-plan")
+    execution_parser.add_argument("--source-bundle", required=True, type=Path)
+    execution_parser.add_argument("--component-lock", required=True, type=Path)
+    execution_parser.add_argument("--implementation-plan", required=True, type=Path)
     plan_parser = subparsers.add_parser("build-plan")
     plan_parser.add_argument("--input", required=True, type=Path)
     plan_parser.add_argument("--raw-rows", type=Path)
@@ -2169,6 +2429,12 @@ def main(argv: list[str] | None = None) -> int:
                 arguments.mapping,
                 arguments.title_catalog,
                 arguments.closure_review,
+            )
+        elif arguments.command == "compile-execution-plan":
+            result = compile_execution_plan(
+                arguments.source_bundle,
+                arguments.component_lock,
+                arguments.implementation_plan,
             )
         elif arguments.command == "extract-refs":
             result = extract_references(arguments.row)

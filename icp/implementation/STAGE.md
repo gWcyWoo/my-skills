@@ -14,7 +14,7 @@ The implementation stage is a prompt plus deterministic scripts:
 - `begin` freezes the skill-owned implementation prompt; the model queries the
   current codebase while implementing and reuses suitable public components;
 - scripts freeze the complete obligation universe, validate the plan, enforce
-  RED before implementation and GREEN afterward, check every code anchor, execute
+  case-local RED before its implementation and GREEN afterward, check every code anchor, execute
   lint/build/integration commands, require compact and expanded runtime evidence,
   and calculate diagnostic PNG MAE.
 
@@ -93,7 +93,18 @@ page declare:
 - one mock fixture that maps into the DTO;
 - an API adapter symbol whenever the page has an `api_dependency` fact;
 - constraint-driven responsive strategy;
-- all frozen component instances in order.
+- the complete set of frozen component instance IDs. This list is coverage only;
+  rendering order comes exclusively from the composition's parent, slot, and order.
+
+Also declare a topological execution DAG with exactly one `foundation` node, one
+`page` node per modify page, and one final `flow-integration` node. Assign every
+planned production, test, asset, manifest, and navigation-entry file to exactly one
+node in `file_owners`. Shared components, shared assets, and app-wide configuration
+belong to `foundation`; page-local code and a distinct page-local test file belong
+to that page node; cross-page navigation and final entry wiring belong to
+`flow-integration`. Dependencies may read an owner's files but never write them.
+This is single-writer/multi-reader ownership; do not split one page across workers
+merely because its files have different types.
 
 Map every component instance, Block, design element, semantic fact, interaction
 test, and presentation usage exactly once. Component selection must follow the
@@ -115,9 +126,22 @@ selected source asset ID and SHA-256 must remain exact. Copy the original bytes;
 do not redraw, approximate, or substitute an icon. Final verification requires
 `source asset SHA-256 = target resource SHA-256`.
 
-Declare one `visual_capture_case` per design state: package, locale, and the exact
-no-shell setup commands needed to reach that state. Captured sample values remain
-placeholders; setup commands may only establish the state owned by that design.
+Declare one `visual_capture_case` per design state: package, locale, page key, the
+exact collision-resistant `visual_state_id`, environment/data-only
+`precondition_commands`, a same-page `interaction_trace`, and one
+`production_render` containing the frozen component instance, source file, symbol,
+and unique root tag. Never use a transliterated display title as state identity.
+Never put a terminal state selector such as `icp_state` in preconditions or cold
+start. A non-primary state must be reached by clicking the real production controls
+named in its frozen integration cases. Test-only code may prepare data or navigate;
+it may not render a duplicate terminal UI.
+
+Each design-element mapping also carries its frozen `runtime_probe_tag` when Stage
+1 contains measurable reference facts. Attach it to the actual production element,
+not a preview or debug renderer. The production hierarchy publishes runtime bounds,
+color, font size, and line height for those tags in the app-private
+`files/icp-runtime-probes.json` snapshot consumed through `run-as`. ICP derives the
+expected values from Stage 1; the authored implementation plan cannot choose them.
 
 ```bash
 python3 <icp-skill>/implementation/scripts/implementation.py record-plan \
@@ -134,7 +158,7 @@ visual comparison and correction.
 
 ## 3. Strict interaction TDD
 
-Create every planned integration test before production implementation. The
+Freeze every planned integration obligation before production implementation. The
 obligation set is the exact union of three sources:
 
 1. atomic facts backed by the same page's `IT` description;
@@ -154,16 +178,21 @@ python3 <icp-skill>/implementation/scripts/implementation.py run-case \
   --project-root "<project>" --case-id "<case-id>" --phase red
 ```
 
-Every case must return nonzero. Run all RED cases before changing production
-behavior. Implement the smallest vertical slice, then run the exact same command:
+The current case must return nonzero. Materialize only that case's page-scoped test;
+future page tests remain unmaterialized so the platform build cannot compile or
+block on them. Implement the smallest vertical slice owned by the current page
+node, then run the exact same command:
 
 ```bash
 python3 <icp-skill>/implementation/scripts/implementation.py run-case \
   --project-root "<project>" --case-id "<case-id>" --phase green
 ```
 
-Every frozen integration obligation needs one RED and one GREEN result. A passing
-pre-implementation test or failing post-implementation test stops the stage.
+Observe GREEN before materializing the next case. A passing pre-implementation test
+or failing post-implementation test stops the current slice. There is no global or
+page-wide all-RED prerequisite: one case may complete RED→GREEN before its sibling
+starts. Final verification still requires one RED and one GREEN result for every
+frozen obligation.
 
 ## 4. Code and runtime verification
 
@@ -208,13 +237,7 @@ Create runtime evidence with exactly two boolean-responsive runs per page
     {
       "design_name": "<design>",
       "actual_screenshot": ".icp/implementation/runtime/<design>.png",
-      "capture_evidence": ".icp/implementation/runtime/<design>.capture.json",
-      "reference_fidelity": {
-        "colors": true,
-        "component_structure": true,
-        "spacing": true,
-        "font_sizes": true
-      }
+      "capture_evidence": ".icp/implementation/runtime/<design>.capture.json"
     }
   ]
 }
@@ -232,13 +255,25 @@ python3 <icp-skill>/implementation/scripts/implementation.py capture-visual \
 The driver snapshots effective size/density plus whether each is an override,
 locale, font scale, and navigation mode. In a `finally` path it restores the exact
 snapshot. ICP converts the emulator to the reference pixel size at
-`160 × logical_scale` density, applies the declared locale and state, captures the
+`160 × logical_scale` density and applies the declared locale. It cold-starts the
+normal launcher with no terminal-state extra, proves the Activity/process/runtime
+are healthy, executes the frozen production interaction trace, then attests the
+exact `visual_state_id` and production root tag in the real UI. It reads the
+runtime-probe payload from that same production hierarchy and compares exact-mode
+values with the immutable Stage 1-derived assertion. Intrinsic/container bounds,
+colors, and font metrics are exact at the reference viewport; text and dynamic
+content bounds are measured in adaptive mode so natural wrapping is not forced.
+Missing probes, duplicate identities, invalid adaptive geometry, or exact-value
+mismatches fail before screenshot comparison. Only after those gates does it capture the
 full long artboard through an extended viewport, converts the PNG back to the
 frozen reference dimensions, and records exact restoration evidence. If capture
-or restore fails, the design has no valid visual run.
+or restore fails, or the cold-start gate fails, the design has no valid visual run.
 
 This conversion is only the reference-viewport visual-fidelity run. It checks the
-reference's color, component structure, spacing, font sizes, and visual treatment.
+reference's color, component structure/bounds, spacing, font sizes, and line height
+from deterministic runtime measurements. Runtime evidence contains only the
+screenshot and generated capture-evidence path; human-authored fidelity booleans
+are invalid.
 It is not a runtime geometry template. Responsive runs use their own compact and
 expanded sizes and must prove natural text reflow, no clipping or overlap, no
 horizontal overflow, reachable scroll content, operable controls, correct system
@@ -258,8 +293,9 @@ python3 <icp-skill>/implementation/scripts/implementation.py verify \
 Verification requires all code symbols and anchors, valid DTO mock fixtures,
 exact original-asset hashes at target resources, complete TDD evidence, successful
 planned lint/build/integration commands, both responsive runs, exact device
-conversion/restoration evidence, complete adaptive-component evidence, and passing
-reference-viewport color, component-structure, spacing, and font-size checks.
+conversion/restoration evidence, the production-path interaction/root attestation,
+complete adaptive-component evidence, and passing Stage 1-bound reference-viewport
+measurements.
 
 Reference geometry may fix intrinsically sized visuals and controls, but must not
 be copied into text, card, section, or page heights merely to match one screenshot.
@@ -274,8 +310,8 @@ override them.
 Visual comparison evaluates every design and writes `visual-difference-report.json`
 with diagnostic MAE, exact RGB difference bounds, and complete
 Block/design-element/code joins. Natural wrapping and resulting downstream flow
-are not visual failures. The model fixes code only when a reference-fidelity
-attribute is false. If the report proves Stage 1 data or grouping is wrong, stop code
+are not visual failures. The model fixes code only when a source-bound measurement
+fails. If the report proves Stage 1 data or grouping is wrong, stop code
 changes, return to Stage 1 with the exact design/Block/source-node/field, repair
 the owning data, rerun Stage 2, then resume Stage 3. No separate diagnosis command,
 approval, repair packet, or state lock is required.

@@ -41,10 +41,13 @@ COMMON_RULES_PROJECT_PATH = "common-rules.md"
 
 
 class ContractError(Exception):
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(
+        self, code: str, message: str, *, details: dict[str, Any] | None = None
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
+        self.details = details
 
 
 def json_bytes(value: object) -> bytes:
@@ -159,6 +162,188 @@ def verify_component_design(project_root: Path) -> tuple[Path, dict[str, Any], d
 
 def obligation_id(prefix: str, evidence: object) -> str:
     return prefix + "-" + digest(evidence)[:20]
+
+
+def visual_state_id(page_key: str, design_name: str) -> str:
+    return "state-" + digest(
+        {"page_key": page_key, "design_name": design_name}
+    )[:20]
+
+
+def reference_bounds(source_fact: object) -> dict[str, int | float] | None:
+    fact = source_fact if isinstance(source_fact, dict) else {}
+    payload = fact.get("payload")
+    frame = payload.get("frame") if isinstance(payload, dict) else None
+    if not isinstance(frame, dict):
+        return None
+    values = {
+        "left": frame.get("left", frame.get("x")),
+        "top": frame.get("top", frame.get("y")),
+        "width": frame.get("width"),
+        "height": frame.get("height"),
+    }
+    if any(
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(float(value))
+        for value in values.values()
+    ):
+        return None
+    return values
+
+
+def reference_typography(source_fact: object) -> dict[str, int | float]:
+    fact = source_fact if isinstance(source_fact, dict) else {}
+    payload = fact.get("payload")
+    text = payload.get("text") if isinstance(payload, dict) else None
+    style = text.get("style") if isinstance(text, dict) else None
+    font = style.get("font") if isinstance(style, dict) else None
+    if not isinstance(font, dict):
+        return {}
+    result: dict[str, int | float] = {}
+    size = font.get("size")
+    if (
+        not isinstance(size, bool)
+        and isinstance(size, (int, float))
+        and math.isfinite(float(size))
+        and size > 0
+    ):
+        result["font_size"] = size
+    line_height = font.get("lineHeight")
+    line_height_value = (
+        line_height.get("value") if isinstance(line_height, dict) else None
+    )
+    if (
+        not isinstance(line_height_value, bool)
+        and isinstance(line_height_value, (int, float))
+        and math.isfinite(float(line_height_value))
+        and line_height_value > 0
+    ):
+        result["line_height"] = line_height_value
+    return result
+
+
+def reference_color(source_fact: object) -> dict[str, int | float] | None:
+    fact = source_fact if isinstance(source_fact, dict) else {}
+    payload = fact.get("payload")
+    if not isinstance(payload, dict):
+        return None
+    text = payload.get("text")
+    text_style = text.get("style") if isinstance(text, dict) else None
+    style = payload.get("style")
+    fill_candidates = [
+        payload.get("fills"),
+        style.get("fills") if isinstance(style, dict) else None,
+        text_style.get("fills") if isinstance(text_style, dict) else None,
+    ]
+    for fills in fill_candidates:
+        if not isinstance(fills, list):
+            continue
+        for fill in fills:
+            if not isinstance(fill, dict) or fill.get("enabled") is False:
+                continue
+            color = fill.get("color")
+            if isinstance(color, str):
+                hexadecimal = color.removeprefix("#")
+                if len(hexadecimal) in {6, 8} and all(
+                    character in "0123456789abcdefABCDEF"
+                    for character in hexadecimal
+                ):
+                    if len(hexadecimal) == 6:
+                        hexadecimal += "FF"
+                    return {
+                        field: int(hexadecimal[offset : offset + 2], 16)
+                        for field, offset in zip(("r", "g", "b", "a"), (0, 2, 4, 6))
+                    }
+                continue
+            if not isinstance(color, dict):
+                continue
+            normalized = {
+                field: color.get(field, 1 if field == "a" else None)
+                for field in ("r", "g", "b", "a")
+            }
+            if all(
+                not isinstance(value, bool)
+                and isinstance(value, (int, float))
+                and math.isfinite(float(value))
+                and 0 <= float(value) <= 255
+                for value in normalized.values()
+            ):
+                scale = 255 if all(float(value) <= 1 for value in normalized.values()) else 1
+                return {
+                    field: round(float(value) * scale)
+                    for field, value in normalized.items()
+                }
+    return None
+
+
+def build_reference_viewport_assertions(
+    design_elements: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    assertions: list[dict[str, Any]] = []
+    for element in design_elements:
+        bounds_mode = (
+            "adaptive_at_reference"
+            if element["content_role"] in {"static_copy", "dynamic_content"}
+            else "exact_at_reference"
+        )
+        shared = {
+            "obligation_id": element["obligation_id"],
+            "design_name": element["design_name"],
+            "source_node_id": element["source_node_id"],
+            "component_instance_id": element["component_instance_id"],
+            "probe_tag": "icp-probe-" + element["obligation_id"],
+        }
+        bounds = reference_bounds(element.get("source_fact"))
+        if bounds is not None:
+            assertions.append(
+                {
+                    "assertion_id": obligation_id(
+                        "visual-assertion",
+                        {
+                            "obligation_id": element["obligation_id"],
+                            "kind": "bounds",
+                        },
+                    ),
+                    **shared,
+                    "kind": "bounds",
+                    "mode": bounds_mode,
+                    "expected": bounds,
+                }
+            )
+        if element["content_role"] == "static_copy":
+            typography = reference_typography(element.get("source_fact"))
+            for kind, value in typography.items():
+                assertions.append(
+                    {
+                        "assertion_id": obligation_id(
+                            "visual-assertion",
+                            {"obligation_id": element["obligation_id"], "kind": kind},
+                        ),
+                        **shared,
+                        "kind": kind,
+                        "mode": "exact_at_reference",
+                        "expected": {"sp" if kind == "font_size" else "dp": value},
+                    }
+                )
+        color = reference_color(element.get("source_fact"))
+        if color is not None:
+            assertions.append(
+                {
+                    "assertion_id": obligation_id(
+                        "visual-assertion",
+                        {
+                            "obligation_id": element["obligation_id"],
+                            "kind": "color",
+                        },
+                    ),
+                    **shared,
+                    "kind": "color",
+                    "mode": "exact_at_reference",
+                    "expected": color,
+                }
+            )
+    return assertions
 
 
 def build_visual_references(
@@ -511,6 +696,24 @@ def build_coverage_universe(
         if require_dict(value, "presentation usage").get("source_page_key") in page_key_set
     ]
     design_names = list(dict.fromkeys(item["design_name"] for item in blocks))
+    page_keys_by_design: dict[str, set[str]] = {}
+    for block in blocks:
+        page_keys_by_design.setdefault(block["design_name"], set()).add(block["page_key"])
+    if any(len(keys) != 1 for keys in page_keys_by_design.values()):
+        raise ContractError(
+            "visual_state_identity_mismatch",
+            "every design state must belong to exactly one page",
+        )
+    visual_references = []
+    for reference in build_visual_references(project_root, design_names):
+        page_key = next(iter(page_keys_by_design[reference["design_name"]]))
+        visual_references.append(
+            {
+                **reference,
+                "page_key": page_key,
+                "visual_state_id": visual_state_id(page_key, reference["design_name"]),
+            }
+        )
     return {
         "schema": "icp.implementation.coverage-universe.v1",
         "source_authority": lock["source_authority"],
@@ -526,7 +729,10 @@ def build_coverage_universe(
             pages, component_instances, interaction_obligations
         ),
         "presentation_usages": presentation_usages,
-        "visual_references": build_visual_references(project_root, design_names),
+        "visual_references": visual_references,
+        "reference_viewport_assertions": build_reference_viewport_assertions(
+            design_elements
+        ),
     }
 
 
@@ -567,6 +773,8 @@ def build_plan_input(
         "integration_test_cases": [],
         "presentation_mappings": [],
         "visual_capture_cases": [],
+        "execution_nodes": [],
+        "file_owners": {},
         "verification_commands": {"lint": [], "build": [], "integration": []},
     }
 
@@ -656,6 +864,8 @@ def validate_plan(
             "integration_test_cases",
             "presentation_mappings",
             "visual_capture_cases",
+            "execution_nodes",
+            "file_owners",
             "verification_commands",
         },
         "implementation plan",
@@ -782,10 +992,26 @@ def validate_plan(
             for item in universe["component_instances"]
             if item["page_key"] == page_key
         ]
-        if page_instances != expected_page_instances:
-            raise ContractError("coverage_incomplete", f"page component coverage changed: {page_key}")
-        covered_instances.extend(page_instances)
-        pages.append(page.copy())
+        actual_ids = set(page_instances)
+        expected_ids = set(expected_page_instances)
+        if len(page_instances) != len(actual_ids) or actual_ids != expected_ids:
+            duplicate_ids = sorted(
+                {instance_id for instance_id in page_instances if page_instances.count(instance_id) > 1}
+            )
+            raise ContractError(
+                "component_coverage_mismatch",
+                f"page component coverage changed: {page_key}",
+                details={
+                    "page_key": page_key,
+                    "missing": sorted(expected_ids - actual_ids),
+                    "unexpected": sorted(actual_ids - expected_ids),
+                    "duplicates": duplicate_ids,
+                },
+            )
+        normalized_page = page.copy()
+        normalized_page["component_instance_ids"] = expected_page_instances
+        covered_instances.extend(expected_page_instances)
+        pages.append(normalized_page)
     if [item["page_key"] for item in pages] != universe["page_keys"] or covered_instances != list(expected_instances):
         raise ContractError("coverage_incomplete", "every modify page and component instance is required")
 
@@ -845,7 +1071,7 @@ def validate_plan(
         if include_fact_id:
             expected_keys.add("fact_id")
         if include_assets:
-            expected_keys.add("asset_mappings")
+            expected_keys.update({"asset_mappings", "runtime_probe_tag"})
         for index, value in enumerate(require_list(plan.get(field), field)):
             label = f"{field}[{index}]"
             item = require_dict(value, label)
@@ -862,6 +1088,22 @@ def validate_plan(
             if item.get("implementation_anchor") != "ICP:" + obligation:
                 raise ContractError("invalid_plan", f"implementation anchor changed: {obligation}")
             if include_assets:
+                assertion_tags = {
+                    assertion["probe_tag"]
+                    for assertion in universe["reference_viewport_assertions"]
+                    if assertion["obligation_id"] == obligation
+                }
+                expected_probe_tag = (
+                    next(iter(assertion_tags)) if assertion_tags else None
+                )
+                if (
+                    len(assertion_tags) > 1
+                    or item.get("runtime_probe_tag") != expected_probe_tag
+                ):
+                    raise ContractError(
+                        "visual_render_identity_mismatch",
+                        f"design element runtime probe changed: {obligation}",
+                    )
                 source_assets = {
                     asset["asset_id"]: asset
                     for asset in require_list(source.get("assets"), "design element assets")
@@ -1005,8 +1247,21 @@ def validate_plan(
     references = {
         item["design_name"]: item for item in universe["visual_references"]
     }
+    visual_index_by_design: dict[str, int] = {}
+    visual_count_by_page: dict[str, int] = {}
+    for reference in universe["visual_references"]:
+        page_key = reference["page_key"]
+        visual_index_by_design[reference["design_name"]] = visual_count_by_page.get(
+            page_key, 0
+        )
+        visual_count_by_page[page_key] = visual_count_by_page.get(page_key, 0) + 1
+    components_by_instance = {
+        item["component_instance_id"]: item for item in component_mappings
+    }
+    cases_by_id = {item["case_id"]: item for item in cases}
     visual_capture_cases: list[dict[str, Any]] = []
     seen_visuals: set[str] = set()
+    seen_root_tags: set[str] = set()
     for index, value in enumerate(
         require_list(plan.get("visual_capture_cases"), "visual capture cases")
     ):
@@ -1014,7 +1269,16 @@ def validate_plan(
         item = require_dict(value, label)
         require_exact_keys(
             item,
-            {"design_name", "package_name", "locale", "state_setup_commands"},
+            {
+                "design_name",
+                "visual_state_id",
+                "page_key",
+                "package_name",
+                "locale",
+                "precondition_commands",
+                "interaction_trace",
+                "production_render",
+            },
             label,
         )
         design_name = require_string(item.get("design_name"), f"{label}.design_name")
@@ -1023,16 +1287,112 @@ def validate_plan(
                 "coverage_incomplete", f"invalid visual capture case: {design_name}"
             )
         seen_visuals.add(design_name)
+        reference = references[design_name]
+        page_key = require_string(item.get("page_key"), f"{label}.page_key")
+        if page_key != reference["page_key"]:
+            raise ContractError(
+                "visual_production_path_unproven",
+                f"visual state page changed: {design_name}",
+            )
+        state_id = require_string(
+            item.get("visual_state_id"), f"{label}.visual_state_id"
+        )
+        if state_id != reference["visual_state_id"] or any(
+            existing.get("visual_state_id") == state_id
+            for existing in visual_capture_cases
+        ):
+            raise ContractError(
+                "visual_state_identity_mismatch",
+                f"visual state ID is not the frozen unique identity: {design_name}",
+                details={
+                    "design_name": design_name,
+                    "expected_visual_state_id": references[design_name][
+                        "visual_state_id"
+                    ],
+                    "actual_visual_state_id": state_id,
+                },
+            )
         require_string(item.get("package_name"), f"{label}.package_name")
         require_string(item.get("locale"), f"{label}.locale")
         commands = require_list(
-            item.get("state_setup_commands"), f"{label}.state_setup_commands"
+            item.get("precondition_commands"), f"{label}.precondition_commands"
         )
         for command_index, command in enumerate(commands):
-            validate_command(
-                command, f"{label}.state_setup_commands[{command_index}]"
+            normalized_command = validate_command(
+                command, f"{label}.precondition_commands[{command_index}]"
             )
-        visual_capture_cases.append(item.copy())
+            if any("icp_state" in argument.casefold() for argument in normalized_command):
+                raise ContractError(
+                    "visual_production_path_unproven",
+                    f"visual precondition may not select a terminal debug state: {design_name}",
+                )
+        trace: list[dict[str, str]] = []
+        for trace_index, trace_value in enumerate(
+            require_list(item.get("interaction_trace"), f"{label}.interaction_trace")
+        ):
+            trace_label = f"{label}.interaction_trace[{trace_index}]"
+            step = require_dict(trace_value, trace_label)
+            require_exact_keys(step, {"case_id", "action", "target_tag"}, trace_label)
+            case_id = require_string(step.get("case_id"), f"{trace_label}.case_id")
+            target_tag = require_string(
+                step.get("target_tag"), f"{trace_label}.target_tag"
+            )
+            case = cases_by_id.get(case_id)
+            if step.get("action") != "click" or case is None or case["page_key"] != page_key:
+                raise ContractError(
+                    "visual_production_path_unproven",
+                    f"visual interaction is not a same-page production case: {design_name}",
+                )
+            trace.append(
+                {"case_id": case_id, "action": "click", "target_tag": target_tag}
+            )
+        if visual_index_by_design[design_name] > 0 and not trace:
+            raise ContractError(
+                "visual_production_path_unproven",
+                f"non-primary visual state requires a production interaction trace: {design_name}",
+            )
+        production = require_dict(
+            item.get("production_render"), f"{label}.production_render"
+        )
+        require_exact_keys(
+            production,
+            {"component_instance_id", "source_file", "symbol", "root_tag"},
+            f"{label}.production_render",
+        )
+        component_instance_id = require_string(
+            production.get("component_instance_id"),
+            f"{label}.production_render.component_instance_id",
+        )
+        source_file = require_relative_path(
+            production.get("source_file"), f"{label}.production_render.source_file"
+        )
+        symbol = require_string(
+            production.get("symbol"), f"{label}.production_render.symbol"
+        )
+        root_tag = require_string(
+            production.get("root_tag"), f"{label}.production_render.root_tag"
+        )
+        component = components_by_instance.get(component_instance_id)
+        if (
+            component is None
+            or component["page_key"] != page_key
+            or source_file != component["source_file"]
+            or symbol != component["symbol"]
+            or root_tag in seen_root_tags
+        ):
+            raise ContractError(
+                "visual_render_identity_mismatch",
+                f"visual state does not target one frozen production renderer: {design_name}",
+            )
+        seen_root_tags.add(root_tag)
+        visual_capture_cases.append(
+            {
+                **item,
+                "precondition_commands": commands,
+                "interaction_trace": trace,
+                "production_render": production.copy(),
+            }
+        )
     if seen_visuals != set(references):
         raise ContractError(
             "coverage_incomplete", "every design state needs one visual capture case"
@@ -1046,6 +1406,180 @@ def validate_plan(
             raise ContractError("invalid_plan", f"verification commands {kind} cannot be empty")
         for index, command in enumerate(values):
             validate_command(command, f"verification commands {kind}[{index}]")
+
+    raw_nodes = require_list(plan.get("execution_nodes"), "execution nodes")
+    nodes: list[dict[str, Any]] = []
+    nodes_by_id: dict[str, dict[str, Any]] = {}
+    page_node_by_key: dict[str, str] = {}
+    covered_case_ids: set[str] = set()
+    expected_case_ids = {case["case_id"] for case in cases}
+    for index, value in enumerate(raw_nodes):
+        label = f"execution_nodes[{index}]"
+        node = require_dict(value, label)
+        require_exact_keys(
+            node,
+            {"node_id", "kind", "page_keys", "depends_on", "case_ids"},
+            label,
+        )
+        node_id = require_string(node.get("node_id"), f"{label}.node_id")
+        if node_id in nodes_by_id:
+            raise ContractError("invalid_execution_plan", f"duplicate execution node: {node_id}")
+        node_kind = node.get("kind")
+        if node_kind not in {"foundation", "page", "flow-integration"}:
+            raise ContractError("invalid_execution_plan", f"invalid execution node kind: {node_id}")
+        node_pages = require_string_list(
+            node.get("page_keys"), f"{label}.page_keys", nonempty=False
+        )
+        dependencies = require_string_list(
+            node.get("depends_on"), f"{label}.depends_on", nonempty=False
+        )
+        node_case_ids = require_string_list(
+            node.get("case_ids"), f"{label}.case_ids", nonempty=False
+        )
+        if (
+            len(node_pages) != len(set(node_pages))
+            or len(dependencies) != len(set(dependencies))
+            or len(node_case_ids) != len(set(node_case_ids))
+        ):
+            raise ContractError("invalid_execution_plan", f"duplicate node membership: {node_id}")
+        if node_kind == "page":
+            if len(node_pages) != 1 or node_pages[0] not in universe["page_keys"]:
+                raise ContractError("invalid_execution_plan", f"page node scope is invalid: {node_id}")
+            page_key = node_pages[0]
+            if page_key in page_node_by_key:
+                raise ContractError("invalid_execution_plan", f"page has multiple nodes: {page_key}")
+            page_node_by_key[page_key] = node_id
+            expected_page_cases = [
+                case["case_id"] for case in cases if case["page_key"] == page_key
+            ]
+            if set(node_case_ids) != set(expected_page_cases):
+                raise ContractError(
+                    "invalid_execution_plan", f"page test ownership changed: {page_key}"
+                )
+            node_case_ids = expected_page_cases
+        elif node_case_ids:
+            raise ContractError(
+                "invalid_execution_plan", f"non-page node cannot own page integration cases: {node_id}"
+            )
+        if any(case_id not in expected_case_ids for case_id in node_case_ids):
+            raise ContractError("invalid_execution_plan", f"node owns an unknown case: {node_id}")
+        overlap = covered_case_ids.intersection(node_case_ids)
+        if overlap:
+            raise ContractError(
+                "invalid_execution_plan", f"integration case has multiple owners: {sorted(overlap)[0]}"
+            )
+        covered_case_ids.update(node_case_ids)
+        normalized_node = {
+            **node,
+            "page_keys": node_pages,
+            "depends_on": dependencies,
+            "case_ids": node_case_ids,
+        }
+        nodes.append(normalized_node)
+        nodes_by_id[node_id] = normalized_node
+    if set(page_node_by_key) != set(universe["page_keys"]):
+        raise ContractError("invalid_execution_plan", "every implementation page needs one page node")
+    if covered_case_ids != expected_case_ids:
+        raise ContractError("invalid_execution_plan", "every integration case needs one page-node owner")
+    foundation_ids = [node["node_id"] for node in nodes if node["kind"] == "foundation"]
+    integration_ids = [
+        node["node_id"] for node in nodes if node["kind"] == "flow-integration"
+    ]
+    if len(foundation_ids) != 1 or len(integration_ids) != 1:
+        raise ContractError(
+            "invalid_execution_plan", "one foundation and one flow-integration node are required"
+        )
+    foundation_id = foundation_ids[0]
+    integration_id = integration_ids[0]
+    if nodes_by_id[foundation_id]["page_keys"] or nodes_by_id[foundation_id]["depends_on"]:
+        raise ContractError("invalid_execution_plan", "foundation node must be the DAG root")
+    if set(nodes_by_id[integration_id]["page_keys"]) != set(universe["page_keys"]):
+        raise ContractError("invalid_execution_plan", "flow-integration page scope is incomplete")
+    if not set(page_node_by_key.values()).issubset(
+        set(nodes_by_id[integration_id]["depends_on"])
+    ):
+        raise ContractError("invalid_execution_plan", "flow-integration must depend on every page node")
+    seen_node_ids: set[str] = set()
+    for node in nodes:
+        if any(dependency not in seen_node_ids for dependency in node["depends_on"]):
+            raise ContractError(
+                "invalid_execution_plan",
+                f"execution node dependencies are missing or not topological: {node['node_id']}",
+            )
+        if node["kind"] == "page" and foundation_id not in node["depends_on"]:
+            raise ContractError(
+                "invalid_execution_plan", f"page node does not depend on foundation: {node['node_id']}"
+            )
+        seen_node_ids.add(node["node_id"])
+
+    raw_file_owners = require_dict(plan.get("file_owners"), "file owners")
+    if not raw_file_owners:
+        raise ContractError("invalid_execution_plan", "file owners are required")
+    file_owners: dict[str, str] = {}
+    for path_value, owner_value in raw_file_owners.items():
+        path = require_relative_path(path_value, "owned file path")
+        owner = require_string(owner_value, f"owner for {path}")
+        if owner not in nodes_by_id:
+            raise ContractError("invalid_execution_plan", f"file owner is unknown: {path}")
+        file_owners[path] = owner
+
+    def require_owner(path: str, owner: str, label: str) -> None:
+        actual_owner = file_owners.get(path)
+        if actual_owner != owner:
+            raise ContractError(
+                "file_ownership_mismatch",
+                f"{label} must be owned by {owner}: {path}",
+                details={"path": path, "expected_owner": owner, "actual_owner": actual_owner},
+            )
+
+    for page in pages:
+        owner = page_node_by_key[page["page_key"]]
+        for field in ("source_file", "dto_file", "mock_fixture_path"):
+            require_owner(page[field], owner, f"page {page['page_key']} {field}")
+    for case in cases:
+        require_owner(
+            case["test_file"], page_node_by_key[case["page_key"]], f"test {case['case_id']}"
+        )
+    component_groups: dict[str, list[dict[str, Any]]] = {}
+    for mapping in component_mappings:
+        component_groups.setdefault(mapping["component_id"], []).append(mapping)
+    for component_id, mappings in component_groups.items():
+        component_pages = {mapping["page_key"] for mapping in mappings}
+        if len(component_pages) > 1:
+            if len({mapping["source_file"] for mapping in mappings}) != 1 or len(
+                {mapping["symbol"] for mapping in mappings}
+            ) != 1:
+                raise ContractError(
+                    "file_ownership_mismatch",
+                    f"shared component must have one code implementation: {component_id}",
+                )
+            require_owner(
+                mappings[0]["source_file"], foundation_id, f"shared component {component_id}"
+            )
+        else:
+            mapping = mappings[0]
+            require_owner(
+                mapping["source_file"],
+                page_node_by_key[mapping["page_key"]],
+                f"local component {component_id}",
+            )
+    for field_name, mappings in (
+        ("design element", design_mappings),
+        ("semantic fact", fact_mappings),
+        ("presentation", presentations),
+    ):
+        for mapping in mappings:
+            if mapping["source_file"] not in file_owners:
+                raise ContractError(
+                    "file_ownership_mismatch",
+                    f"{field_name} source has no owner: {mapping['source_file']}",
+                )
+            for asset in mapping.get("asset_mappings", []):
+                if asset["target_resource_path"] not in file_owners:
+                    raise ContractError(
+                        "file_ownership_mismatch",
+                        f"asset target has no owner: {asset['target_resource_path']}",
+                    )
     return {
         **plan,
         "pages": pages,
@@ -1053,6 +1587,8 @@ def validate_plan(
         "design_element_mappings": design_mappings,
         "semantic_fact_mappings": fact_mappings,
         "integration_test_cases": cases,
+        "execution_nodes": nodes,
+        "file_owners": dict(sorted(file_owners.items())),
         "presentation_mappings": presentations,
         "visual_capture_cases": visual_capture_cases,
     }
@@ -1100,6 +1636,11 @@ def build_codegen_packet(
             for item in plan["design_element_mappings"]
             if item["obligation_id"]
             in {value["obligation_id"] for value in universe["design_elements"] if value["component_instance_id"] in instance_ids}
+        ],
+        "reference_viewport_assertions": [
+            item
+            for item in universe["reference_viewport_assertions"]
+            if item["component_instance_id"] in instance_ids
         ],
         "semantic_facts": [item for item in universe["semantic_facts"] if item["fact_id"] in fact_ids],
         "semantic_fact_mappings": [item for item in plan["semantic_fact_mappings"] if item["fact_id"] in fact_ids],
@@ -1152,6 +1693,7 @@ def record_plan(args: argparse.Namespace) -> dict[str, Any]:
                     "fact_id": case["fact_id"],
                     "basis_fact_ids": case["basis_fact_ids"],
                     "component_instance_id": case["component_instance_id"],
+                    "page_key": case["page_key"],
                     "command": case["command"],
                     "red": None,
                     "green": None,
@@ -1203,12 +1745,14 @@ def run_case_locked(
         raise ContractError("unknown_case", f"unknown integration case: {case_id}")
     phase = args.phase
     if phase == "red":
-        if state.get("state") != "awaiting_red" or evidence_case.get("red") is not None:
+        if state.get("state") not in {"awaiting_red", "awaiting_implementation"} or evidence_case.get("red") is not None:
             raise ContractError("invalid_state", f"RED is not pending for {case_id}")
     elif phase == "green":
-        if any(item.get("red") is None for item in evidence["cases"]):
-            raise ContractError("red_required", "all integration cases must observe RED before implementation")
-        if state.get("state") not in {"awaiting_implementation", "awaiting_verification"}:
+        if state.get("state") not in {
+            "awaiting_red",
+            "awaiting_implementation",
+            "awaiting_verification",
+        }:
             raise ContractError("invalid_state", f"GREEN is not pending for {case_id}")
         if evidence_case.get("red") is None or evidence_case.get("green") is not None:
             raise ContractError("red_required", f"a fresh RED is required for {case_id}")
@@ -1240,10 +1784,12 @@ def run_case_locked(
     evidence_case[phase] = result
     atomic_write_json(evidence_path, evidence)
     state["tdd_evidence_sha256"] = file_sha(evidence_path)
-    if phase == "red" and all(item.get("red") is not None for item in evidence["cases"]):
-        state["state"] = "awaiting_implementation"
-    if phase == "green" and all(item.get("green") is not None for item in evidence["cases"]):
+    if all(item.get("green") is not None for item in evidence["cases"]):
         state["state"] = "awaiting_verification"
+    elif all(item.get("red") is not None for item in evidence["cases"]):
+        state["state"] = "awaiting_implementation"
+    else:
+        state["state"] = "awaiting_red"
     atomic_write_json(stage_dir / "state.json", state)
     return {
         "ok": True,
@@ -1515,6 +2061,183 @@ def run_driver(
         ) from exc
 
 
+def validate_cold_start_evidence(value: object) -> dict[str, Any]:
+    evidence = require_dict(value, "Android cold-start evidence")
+    require_exact_keys(
+        evidence,
+        {
+            "activity_resumed",
+            "process_alive",
+            "no_fatal_exception",
+            "fatal_log_tail",
+        },
+        "Android cold-start evidence",
+    )
+    if not isinstance(evidence.get("fatal_log_tail"), str):
+        raise ContractError(
+            "android_cold_start_failed", "Android cold-start fatal log is invalid"
+        )
+    failed_checks = [
+        field
+        for field in (
+            "activity_resumed",
+            "process_alive",
+            "no_fatal_exception",
+        )
+        if evidence.get(field) is not True
+    ]
+    if failed_checks:
+        raise ContractError(
+            "android_cold_start_failed",
+            "Android cold start did not keep the production application alive",
+            details={
+                "failed_checks": failed_checks,
+                "fatal_log_tail": evidence.get("fatal_log_tail"),
+            },
+        )
+    return evidence.copy()
+
+
+def driver_json(result: subprocess.CompletedProcess[str], operation: str) -> object:
+    if result.returncode != 0:
+        raise ContractError(
+            "visual_capture_failed",
+            f"visual driver {operation} failed: " + result.stderr[-2000:],
+        )
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise ContractError(
+            "visual_capture_failed",
+            f"visual driver {operation} returned invalid JSON",
+        ) from exc
+
+
+def validate_interaction_evidence(
+    value: object, expected_steps: list[dict[str, str]]
+) -> dict[str, Any]:
+    evidence = require_dict(value, "visual interaction evidence")
+    require_exact_keys(evidence, {"schema", "steps"}, "visual interaction evidence")
+    steps = require_list(evidence.get("steps"), "visual interaction steps")
+    if evidence.get("schema") != "icp.visual-interaction.v1" or steps != expected_steps:
+        raise ContractError(
+            "visual_production_path_unproven",
+            "visual driver did not execute the frozen production interaction trace",
+        )
+    return {"schema": evidence["schema"], "steps": steps}
+
+
+def validate_production_state_evidence(
+    value: object, expected_visual_state_id: str, expected_root_tag: str
+) -> dict[str, Any]:
+    evidence = require_dict(value, "production visual-state evidence")
+    require_exact_keys(
+        evidence,
+        {"visual_state_id", "root_tag", "state_attested", "root_attested"},
+        "production visual-state evidence",
+    )
+    if (
+        evidence.get("visual_state_id") != expected_visual_state_id
+        or evidence.get("root_tag") != expected_root_tag
+        or evidence.get("state_attested") is not True
+        or evidence.get("root_attested") is not True
+    ):
+        raise ContractError(
+            "visual_production_path_unproven",
+            f"production renderer did not attest visual state {expected_visual_state_id}",
+        )
+    return evidence.copy()
+
+
+def validate_measurement_evidence(
+    value: object,
+    expected_visual_state_id: str,
+    expected_root_tag: str,
+    assertions: list[dict[str, Any]],
+) -> dict[str, Any]:
+    evidence = require_dict(value, "reference viewport measurements")
+    require_exact_keys(
+        evidence,
+        {"schema", "visual_state_id", "root_tag", "measurements"},
+        "reference viewport measurements",
+    )
+    if (
+        evidence.get("schema") != "icp.visual-measurements.v1"
+        or evidence.get("visual_state_id") != expected_visual_state_id
+        or evidence.get("root_tag") != expected_root_tag
+    ):
+        raise ContractError(
+            "reference_viewport_measurement_failed",
+            "measurement evidence targets another renderer or visual state",
+        )
+    expected = {item["assertion_id"]: item for item in assertions}
+    seen: set[str] = set()
+    normalized: list[dict[str, Any]] = []
+    for index, raw in enumerate(
+        require_list(evidence.get("measurements"), "reference viewport measurements")
+    ):
+        label = f"reference viewport measurements[{index}]"
+        measurement = require_dict(raw, label)
+        require_exact_keys(
+            measurement, {"assertion_id", "probe_tag", "kind", "actual"}, label
+        )
+        assertion_id = require_string(
+            measurement.get("assertion_id"), f"{label}.assertion_id"
+        )
+        assertion = expected.get(assertion_id)
+        actual = measurement.get("actual")
+        adaptive_bounds_valid = (
+            assertion is not None
+            and assertion["mode"] == "adaptive_at_reference"
+            and isinstance(actual, dict)
+            and set(actual) == {"left", "top", "width", "height"}
+            and all(
+                not isinstance(value, bool)
+                and isinstance(value, (int, float))
+                and math.isfinite(float(value))
+                for value in actual.values()
+            )
+            and actual["width"] >= 0
+            and actual["height"] >= 0
+        )
+        if (
+            assertion is None
+            or assertion_id in seen
+            or measurement.get("probe_tag") != assertion["probe_tag"]
+            or measurement.get("kind") != assertion["kind"]
+            or (
+                assertion["mode"] == "exact_at_reference"
+                and actual != assertion["expected"]
+            )
+            or (
+                assertion["mode"] == "adaptive_at_reference"
+                and not adaptive_bounds_valid
+            )
+        ):
+            raise ContractError(
+                "reference_viewport_measurement_failed",
+                f"reference viewport assertion failed: {assertion_id}",
+                details={
+                    "expected": assertion,
+                    "actual": measurement,
+                },
+            )
+        seen.add(assertion_id)
+        normalized.append(measurement.copy())
+    if seen != set(expected):
+        raise ContractError(
+            "reference_viewport_measurement_failed",
+            "not every frozen source-fact assertion was measured",
+            details={"missing_assertion_ids": sorted(set(expected) - seen)},
+        )
+    return {
+        "schema": evidence["schema"],
+        "visual_state_id": expected_visual_state_id,
+        "root_tag": expected_root_tag,
+        "measurements": normalized,
+    }
+
+
 def capture_visual(args: argparse.Namespace) -> dict[str, Any]:
     project_root = Path(args.project_root).resolve()
     stage_dir, state, universe = load_live_stage(project_root)
@@ -1581,11 +2304,39 @@ def capture_visual(args: argparse.Namespace) -> dict[str, Any]:
     raw_path = runtime_dir / f"{stem}.raw.png"
     actual_path = runtime_dir / f"{stem}.png"
     evidence_path = runtime_dir / f"{stem}.capture.json"
+    trace_path = runtime_dir / f"{stem}.interaction.json"
+    measurement_contract_path = runtime_dir / f"{stem}.measurements.contract.json"
     atomic_write_json(before_path, before)
     atomic_write_json(applied_path, applied)
+    atomic_write_json(
+        trace_path,
+        {
+            "schema": "icp.visual-interaction-trace.v1",
+            "visual_state_id": capture_case["visual_state_id"],
+            "steps": capture_case["interaction_trace"],
+        },
+    )
+    assertions = [
+        item
+        for item in universe["reference_viewport_assertions"]
+        if item["design_name"] == design_name
+    ]
+    atomic_write_json(
+        measurement_contract_path,
+        {
+            "schema": "icp.visual-measurement-contract.v1",
+            "visual_state_id": capture_case["visual_state_id"],
+            "root_tag": capture_case["production_render"]["root_tag"],
+            "assertions": assertions,
+        },
+    )
     failure: ContractError | None = None
     raw_size: tuple[int, int] | None = None
     restored: dict[str, Any] | None = None
+    cold_start: dict[str, Any] | None = None
+    interaction: dict[str, Any] | None = None
+    production_state: dict[str, Any] | None = None
+    measurements: dict[str, Any] | None = None
     try:
         applied_result = run_driver(
             driver, "apply", package_name, config=applied_path
@@ -1595,7 +2346,7 @@ def capture_visual(args: argparse.Namespace) -> dict[str, Any]:
                 "visual_capture_failed",
                 "visual driver apply failed: " + applied_result.stderr[-2000:],
             )
-        for command in capture_case["state_setup_commands"]:
+        for command in capture_case["precondition_commands"]:
             completed = subprocess.run(
                 command,
                 cwd=project_root,
@@ -1609,6 +2360,53 @@ def capture_visual(args: argparse.Namespace) -> dict[str, Any]:
                     "visual_capture_failed",
                     "visual state setup failed: " + completed.stderr[-2000:],
                 )
+        cold_start_result = run_driver(driver, "cold-start", package_name)
+        try:
+            cold_start = validate_cold_start_evidence(
+                driver_json(cold_start_result, "cold-start")
+            )
+        except ContractError as exc:
+            if exc.code == "visual_capture_failed":
+                raise ContractError("android_cold_start_failed", exc.message) from exc
+            raise
+        interaction = validate_interaction_evidence(
+            driver_json(
+                run_driver(driver, "interact", package_name, trace=trace_path),
+                "interact",
+            ),
+            capture_case["interaction_trace"],
+        )
+        root_tag = capture_case["production_render"]["root_tag"]
+        production_state = validate_production_state_evidence(
+            driver_json(
+                run_driver(
+                    driver,
+                    "attest",
+                    package_name,
+                    state_id=capture_case["visual_state_id"],
+                    root_tag=root_tag,
+                ),
+                "attest",
+            ),
+            capture_case["visual_state_id"],
+            root_tag,
+        )
+        measurements = validate_measurement_evidence(
+            driver_json(
+                run_driver(
+                    driver,
+                    "measure",
+                    package_name,
+                    contract=measurement_contract_path,
+                    state_id=capture_case["visual_state_id"],
+                    root_tag=root_tag,
+                ),
+                "measure",
+            ),
+            capture_case["visual_state_id"],
+            root_tag,
+            assertions,
+        )
         captured = run_driver(driver, "capture", package_name, output=raw_path)
         if captured.returncode != 0:
             raise ContractError(
@@ -1646,7 +2444,7 @@ def capture_visual(args: argparse.Namespace) -> dict[str, Any]:
     if raw_size is None or not actual_path.is_file():
         raise ContractError("visual_capture_failed", "visual capture produced no screenshot")
     evidence = {
-        "schema": "icp.implementation.visual-capture-evidence.v1",
+        "schema": "icp.implementation.visual-capture-evidence.v3",
         "evaluation_scope": "reference_viewport_visual_fidelity",
         "implementation_plan_sha256": state["implementation_plan_sha256"],
         "design_name": design_name,
@@ -1655,6 +2453,11 @@ def capture_visual(args: argparse.Namespace) -> dict[str, Any]:
         "reference_pixel_size": pixel_size,
         "logical_scale": reference["logical_scale"],
         "capture_strategy": "extended-viewport-full-page",
+        "visual_state_id": capture_case["visual_state_id"],
+        "cold_start": cold_start,
+        "interaction": interaction,
+        "production_state": production_state,
+        "measurements": measurements,
         "before": before,
         "applied": applied,
         "raw_pixel_size": list(raw_size),
@@ -1721,6 +2524,78 @@ def verify_code_coverage(
                     "code_coverage_missing",
                     f"code anchor or owner symbol is missing: {mapping['implementation_anchor']}",
                 )
+            if (
+                field == "design_element_mappings"
+                and mapping["runtime_probe_tag"] is not None
+                and mapping["runtime_probe_tag"] not in source
+            ):
+                raise ContractError(
+                    "visual_render_identity_mismatch",
+                    "frozen design element is not wired to its production runtime probe: "
+                    + mapping["obligation_id"],
+                )
+    for capture_case in plan["visual_capture_cases"]:
+        production = capture_case["production_render"]
+        production_path, source = text_for(
+            production["source_file"],
+            f"production visual renderer {capture_case['design_name']}",
+        )
+        if production["symbol"] not in source or production["root_tag"] not in source:
+            raise ContractError(
+                "visual_render_identity_mismatch",
+                "visual capture is not wired to the frozen production renderer: "
+                + capture_case["design_name"],
+            )
+        relative_parts = Path(production["source_file"]).parts
+        search_root = project_root / relative_parts[0]
+        source_suffixes = {
+            ".kt",
+            ".kts",
+            ".java",
+            ".swift",
+            ".dart",
+            ".ts",
+            ".tsx",
+            ".js",
+            ".jsx",
+            ".py",
+        }
+        owners: list[str] = []
+        if search_root.is_dir():
+            for candidate in search_root.rglob("*"):
+                relative_candidate = candidate.relative_to(project_root)
+                parts_casefold = [part.casefold() for part in relative_candidate.parts]
+                test_source = any(
+                    part == "src"
+                    and index + 1 < len(parts_casefold)
+                    and parts_casefold[index + 1] in {"test", "tests", "androidtest"}
+                    for index, part in enumerate(parts_casefold)
+                )
+                if (
+                    not candidate.is_file()
+                    or candidate.suffix not in source_suffixes
+                    or any(
+                        part in {"build", ".gradle", ".git", ".icp"}
+                        for part in relative_candidate.parts
+                    )
+                    or test_source
+                ):
+                    continue
+                try:
+                    if production["root_tag"] in candidate.read_text(
+                        encoding="utf-8"
+                    ):
+                        owners.append(str(relative_candidate))
+                except (OSError, UnicodeError):
+                    continue
+        expected_owner = str(production_path.relative_to(project_root))
+        if owners != [expected_owner]:
+            raise ContractError(
+                "visual_render_identity_mismatch",
+                "production visual root tag must occur in exactly its frozen source file: "
+                + capture_case["design_name"],
+                details={"expected_owner": expected_owner, "actual_owners": owners},
+            )
     design_elements = {
         item["obligation_id"]: item for item in universe["design_elements"]
     }
@@ -1951,7 +2826,6 @@ def validate_runtime_evidence(
                     "design_name",
                     "actual_screenshot",
                     "capture_evidence",
-                    "reference_fidelity",
                 },
                 label,
             )
@@ -1961,25 +2835,6 @@ def validate_runtime_evidence(
                 f"{label} must include deterministic capture evidence",
             ) from exc
         design_name = require_string(item.get("design_name"), f"{label}.design_name")
-        reference_fidelity = require_dict(
-            item.get("reference_fidelity"), f"{label}.reference_fidelity"
-        )
-        try:
-            require_exact_keys(
-                reference_fidelity,
-                {"colors", "component_structure", "spacing", "font_sizes"},
-                f"{label}.reference_fidelity",
-            )
-        except ContractError as exc:
-            raise ContractError(
-                "visual_evidence_invalid",
-                f"reference fidelity evidence is incomplete: {design_name}",
-            ) from exc
-        if any(reference_fidelity.get(field) is not True for field in reference_fidelity):
-            raise ContractError(
-                "visual_evidence_invalid",
-                f"reference fidelity check failed: {design_name}",
-            )
         reference = references.get(design_name)
         if reference is None or design_name in seen_designs:
             raise ContractError("visual_evidence_invalid", f"unexpected visual run: {design_name}")
@@ -1990,6 +2845,11 @@ def validate_runtime_evidence(
         actual_path = project_file(project_root, item.get("actual_screenshot"), "actual screenshot")
         capture_path = project_file(
             project_root, item.get("capture_evidence"), "visual capture evidence"
+        )
+        capture_case = next(
+            value
+            for value in plan["visual_capture_cases"]
+            if value["design_name"] == design_name
         )
         try:
             capture = require_dict(read_json(capture_path), "visual capture evidence")
@@ -2005,6 +2865,11 @@ def validate_runtime_evidence(
                     "reference_pixel_size",
                     "logical_scale",
                     "capture_strategy",
+                    "visual_state_id",
+                    "cold_start",
+                    "interaction",
+                    "production_state",
+                    "measurements",
                     "before",
                     "applied",
                     "raw_pixel_size",
@@ -2020,16 +2885,34 @@ def validate_runtime_evidence(
             restored = validate_device_configuration(
                 capture.get("restored"), "capture restored"
             )
+            cold_start = validate_cold_start_evidence(capture.get("cold_start"))
+            interaction = validate_interaction_evidence(
+                capture.get("interaction"), capture_case["interaction_trace"]
+            )
+            root_tag = capture_case["production_render"]["root_tag"]
+            production_state = validate_production_state_evidence(
+                capture.get("production_state"),
+                capture_case["visual_state_id"],
+                root_tag,
+            )
+            assertions = [
+                assertion
+                for assertion in universe["reference_viewport_assertions"]
+                if assertion["design_name"] == design_name
+            ]
+            measurements = validate_measurement_evidence(
+                capture.get("measurements"),
+                capture_case["visual_state_id"],
+                root_tag,
+                assertions,
+            )
         except ContractError as exc:
+            if exc.code == "reference_viewport_measurement_failed":
+                raise
             raise ContractError(
                 "visual_capture_evidence_missing",
                 f"visual capture evidence is invalid: {design_name}",
             ) from exc
-        capture_case = next(
-            item
-            for item in plan["visual_capture_cases"]
-            if item["design_name"] == design_name
-        )
         expected_applied = {
             "size": reference["pixel_size"],
             "size_override": True,
@@ -2041,7 +2924,7 @@ def validate_runtime_evidence(
         }
         if (
             capture.get("schema")
-            != "icp.implementation.visual-capture-evidence.v1"
+            != "icp.implementation.visual-capture-evidence.v3"
             or capture.get("evaluation_scope")
             != "reference_viewport_visual_fidelity"
             or capture.get("implementation_plan_sha256")
@@ -2053,6 +2936,10 @@ def validate_runtime_evidence(
             or capture.get("reference_pixel_size") != reference["pixel_size"]
             or capture.get("logical_scale") != reference["logical_scale"]
             or capture.get("capture_strategy") != "extended-viewport-full-page"
+            or capture.get("visual_state_id") != capture_case["visual_state_id"]
+            or interaction.get("steps") != capture_case["interaction_trace"]
+            or production_state.get("root_tag")
+            != capture_case["production_render"]["root_tag"]
             or applied != expected_applied
             or restored != before
             or capture.get("restore_exact") is not True
@@ -2080,7 +2967,27 @@ def validate_runtime_evidence(
             "height": height,
             "mae": mae,
             "mae_role": "diagnostic_only",
-            "reference_fidelity": reference_fidelity.copy(),
+            "reference_checks": {
+                "exact_total": len(
+                    [item for item in assertions if item["mode"] == "exact_at_reference"]
+                ),
+                "exact_passed": len(
+                    [item for item in assertions if item["mode"] == "exact_at_reference"]
+                ),
+                "adaptive_measured": len(
+                    [item for item in assertions if item["mode"] == "adaptive_at_reference"]
+                ),
+                "by_kind": {
+                    kind: len(
+                        [
+                            item
+                            for item in measurements["measurements"]
+                            if item["kind"] == kind
+                        ]
+                    )
+                    for kind in ("bounds", "color", "font_size", "line_height")
+                },
+            },
             "status": "pass",
             "difference_bbox": difference_bbox,
         }
@@ -2285,7 +3192,10 @@ def main() -> int:
         args = parser().parse_args()
         result = args.handler(args)
     except ContractError as exc:
-        print(json.dumps({"ok": False, "error": exc.code, "message": exc.message}, ensure_ascii=False), file=sys.stderr)
+        error = {"ok": False, "error": exc.code, "message": exc.message}
+        if exc.details is not None:
+            error["details"] = exc.details
+        print(json.dumps(error, ensure_ascii=False), file=sys.stderr)
         return 2
     print(json.dumps(result, ensure_ascii=False))
     return 0

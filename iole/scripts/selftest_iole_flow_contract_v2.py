@@ -207,6 +207,165 @@ def page_node(title: str) -> str:
 
 
 class FlowPlanContractTests(unittest.TestCase):
+    def test_source_bundle_v2_compiles_directly_to_execution_plan(self) -> None:
+        bundle = {
+            "kind": "iole.flow-source-bundle.v2",
+            "schema_version": 2,
+            "source_id": "google-sheets:" + "a" * 64,
+            "role": "client",
+            "root_title": "登录",
+            "row_data_columns": ["标题"],
+            "members": [
+                {
+                    "title": "登录",
+                    "change_scope": "modify",
+                    "row_data": {"标题": "登录"},
+                }
+            ],
+            "relations": [],
+            "mapping_digest": "b" * 64,
+            "source_closure": {"closure_digest": "c" * 64},
+        }
+        bundle["bundle_digest"] = canonical_digest(bundle)
+        page_key = "page-login"
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            bundle_path = root / "source-bundle.json"
+            bundle_path.write_text(
+                json.dumps(bundle, ensure_ascii=False), encoding="utf-8"
+            )
+            component_lock = {
+                "schema": "icp.component-design.lock.v6",
+                "source_hashes": {
+                    "iole_source_bundle_sha256": hashlib.sha256(
+                        bundle_path.read_bytes()
+                    ).hexdigest()
+                },
+                "source_context": {
+                    "members": [
+                        {
+                            "title": "登录",
+                            "page_key": page_key,
+                            "change_scope": "modify",
+                        }
+                    ]
+                },
+            }
+            lock_path = root / "component-lock.json"
+            lock_path.write_text(
+                json.dumps(component_lock, ensure_ascii=False), encoding="utf-8"
+            )
+            implementation_plan = {
+                "schema": "icp.implementation.plan.v1",
+                "component_lock_sha256": hashlib.sha256(
+                    lock_path.read_bytes()
+                ).hexdigest(),
+                "page_keys": [page_key],
+                "pages": [{"page_key": page_key, "member_title": "登录"}],
+                "execution_nodes": [
+                    {
+                        "node_id": "foundation",
+                        "kind": "foundation",
+                        "page_keys": [],
+                        "depends_on": [],
+                        "case_ids": [],
+                    },
+                    {
+                        "node_id": f"page:{page_key}",
+                        "kind": "page",
+                        "page_keys": [page_key],
+                        "depends_on": ["foundation"],
+                        "case_ids": ["case-login"],
+                    },
+                    {
+                        "node_id": "flow-integration",
+                        "kind": "flow-integration",
+                        "page_keys": [page_key],
+                        "depends_on": [f"page:{page_key}"],
+                        "case_ids": [],
+                    },
+                ],
+                "file_owners": {
+                    "app/src/main/AndroidManifest.xml": "foundation",
+                    "app/src/main/LoginScreen.kt": f"page:{page_key}",
+                    "app/src/main/MainActivity.kt": "flow-integration",
+                },
+            }
+            implementation_path = root / "implementation-plan.json"
+            implementation_path.write_text(
+                json.dumps(implementation_plan, ensure_ascii=False), encoding="utf-8"
+            )
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "compile-execution-plan",
+                    "--source-bundle",
+                    str(bundle_path),
+                    "--component-lock",
+                    str(lock_path),
+                    "--implementation-plan",
+                    str(implementation_path),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            execution_path = root / "execution-plan.json"
+            execution_path.write_text(completed.stdout, encoding="utf-8")
+            branch = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "branch-name",
+                    "--plan",
+                    str(execution_path),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            error_writeback = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "build-error-writeback",
+                    "--plan",
+                    str(execution_path),
+                    "--lease-token",
+                    "lease-1",
+                    "--error-code",
+                    "node-failed",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["kind"], "iole.flow-execution-plan.v4")
+        self.assertEqual(result["claim_page_titles"], ["登录"])
+        self.assertEqual(result["page_keys"], [page_key])
+        self.assertEqual(result["source_bundle_digest"], bundle["bundle_digest"])
+        self.assertEqual(
+            [node["node_id"] for node in result["execution_nodes"]],
+            ["foundation", f"page:{page_key}", "flow-integration"],
+        )
+        self.assertEqual(
+            result["file_owners"]["app/src/main/AndroidManifest.xml"], "foundation"
+        )
+        self.assertEqual(result["decision"], "ready")
+        self.assertEqual(result["root_page_id"], page_key)
+        self.assertEqual(set(result["member_digests"]), {page_key})
+        self.assertEqual(branch.returncode, 0, branch.stdout + branch.stderr)
+        self.assertEqual(
+            error_writeback.returncode,
+            0,
+            error_writeback.stdout + error_writeback.stderr,
+        )
+
     def test_source_bundle_rejects_legacy_analysis_without_closure_evidence(self) -> None:
         raw_rows = {
             "登录": {
@@ -960,7 +1119,36 @@ class FlowPlanContractTests(unittest.TestCase):
                 capture_output=True,
                 text=True,
             )
+            plan["kind"] = "iole.flow-execution-plan.v4"
+            plan["schema_version"] = 4
+            execution_plan_path = root / "flow-execution-plan-v4.json"
+            execution_plan_path.write_text(json.dumps(plan), encoding="utf-8")
+            execution_intent_process = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "build-review-writeback",
+                    "--plan",
+                    str(execution_plan_path),
+                    "--lease-token",
+                    "flow-lease-1",
+                    "--mr",
+                    "2",
+                    "--pr-url",
+                    "https://git.example/team/app/pull/9",
+                    "--icp-result",
+                    str(result_path),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
         self.assertEqual(intent_process.returncode, 0, intent_process.stdout + intent_process.stderr)
+        self.assertEqual(
+            execution_intent_process.returncode,
+            0,
+            execution_intent_process.stdout + execution_intent_process.stderr,
+        )
         self.assertEqual(
             json.loads(intent_process.stdout)["connector_operation"],
             "complete_flow_rows",

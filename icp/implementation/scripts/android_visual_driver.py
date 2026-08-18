@@ -9,6 +9,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 
@@ -42,6 +43,16 @@ def run_adb(*args: str, binary: bool = False) -> subprocess.CompletedProcess:
 
 def shell_text(*args: str) -> str:
     return run_adb("shell", *args).stdout.strip()
+
+
+def probe_adb(*args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [*adb_prefix(), *args],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
 
 
 def parse_dimension(output: str, label: str) -> tuple[dict[str, int], bool]:
@@ -120,12 +131,195 @@ def capture(path: str | None) -> None:
     output.write_bytes(raw)
 
 
+def cold_start(package: str) -> dict:
+    run_adb("logcat", "-c")
+    run_adb("shell", "am", "force-stop", package)
+    started = run_adb(
+        "shell",
+        "am",
+        "start",
+        "-W",
+        "-a",
+        "android.intent.action.MAIN",
+        "-c",
+        "android.intent.category.LAUNCHER",
+        "-p",
+        package,
+    )
+    activity_resumed = False
+    process_alive = False
+    for _ in range(40):
+        pid = probe_adb("shell", "pidof", package)
+        process_alive = pid.returncode == 0 and bool(pid.stdout.strip())
+        activities = probe_adb("shell", "dumpsys", "activity", "activities")
+        activity_resumed = (
+            activities.returncode == 0
+            and package in activities.stdout
+            and (
+                "mResumedActivity" in activities.stdout
+                or "topResumedActivity" in activities.stdout
+            )
+        )
+        if process_alive and activity_resumed:
+            break
+        time.sleep(0.25)
+
+    logs = probe_adb("logcat", "-d", "-v", "brief")
+    log_text = logs.stdout if logs.returncode == 0 else logs.stderr
+    fatal_lines = [
+        line
+        for line in log_text.splitlines()
+        if "FATAL EXCEPTION" in line
+        or "ANR in " + package in line
+        or (package in line and "has died" in line)
+    ]
+    return {
+        "activity_resumed": activity_resumed and "Status: ok" in started.stdout,
+        "process_alive": process_alive,
+        "no_fatal_exception": not fatal_lines,
+        "fatal_log_tail": "\n".join(fatal_lines)[-2000:],
+    }
+
+
+def load_json(path: str | None, label: str) -> dict:
+    if path is None:
+        raise DriverError(f"--{label} is required")
+    try:
+        value = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise DriverError(f"cannot read {label}: {exc}") from exc
+    if not isinstance(value, dict):
+        raise DriverError(f"{label} must be a JSON object")
+    return value
+
+
+def window_hierarchy() -> str:
+    run_adb("shell", "uiautomator", "dump", "/sdcard/icp-window.xml")
+    return shell_text("cat", "/sdcard/icp-window.xml")
+
+
+def tagged_bounds(hierarchy: str, tag: str) -> tuple[int, int, int, int]:
+    escaped = re.escape(tag)
+    node = re.search(
+        rf'<node\b(?=[^>]*(?:resource-id|content-desc)="[^"]*{escaped}[^"]*")[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
+        hierarchy,
+    )
+    if node is None:
+        raise DriverError(f"production interaction target is not visible: {tag}")
+    return tuple(int(node.group(index)) for index in range(1, 5))
+
+
+def interact(trace_path: str | None) -> dict:
+    trace = load_json(trace_path, "trace")
+    if trace.get("schema") != "icp.visual-interaction-trace.v1" or not isinstance(
+        trace.get("steps"), list
+    ):
+        raise DriverError("interaction trace schema is invalid")
+    observed: list[dict] = []
+    for step in trace["steps"]:
+        if not isinstance(step, dict) or step.get("action") != "click":
+            raise DriverError("interaction trace contains an unsupported action")
+        tag = step.get("target_tag")
+        if not isinstance(tag, str) or not tag:
+            raise DriverError("interaction target tag is invalid")
+        left, top, right, bottom = tagged_bounds(window_hierarchy(), tag)
+        shell_text("input", "tap", str((left + right) // 2), str((top + bottom) // 2))
+        observed.append(step.copy())
+    return {"schema": "icp.visual-interaction.v1", "steps": observed}
+
+
+def attest(state_id: str | None, root_tag: str | None) -> dict:
+    if not state_id or not root_tag:
+        raise DriverError("--state-id and --root-tag are required")
+    hierarchy = window_hierarchy()
+    return {
+        "visual_state_id": state_id,
+        "root_tag": root_tag,
+        "state_attested": state_id in hierarchy,
+        "root_attested": root_tag in hierarchy,
+    }
+
+
+def measure_payload(contract: dict, payload: dict) -> dict:
+    if (
+        contract.get("schema") != "icp.visual-measurement-contract.v1"
+        or payload.get("schema") != "icp.runtime-probes.v1"
+        or payload.get("visual_state_id") != contract.get("visual_state_id")
+        or payload.get("root_tag") != contract.get("root_tag")
+        or not isinstance(contract.get("assertions"), list)
+        or not isinstance(payload.get("probes"), list)
+    ):
+        raise DriverError("runtime probes target another visual state or renderer")
+    probes: dict[str, dict] = {}
+    for probe in payload["probes"]:
+        if not isinstance(probe, dict) or not isinstance(probe.get("probe_tag"), str):
+            raise DriverError("runtime probe is invalid")
+        if probe["probe_tag"] in probes:
+            raise DriverError("runtime probe tag is duplicated")
+        probes[probe["probe_tag"]] = probe
+    measurements: list[dict] = []
+    for assertion in contract["assertions"]:
+        if not isinstance(assertion, dict):
+            raise DriverError("measurement assertion is invalid")
+        probe = probes.get(assertion.get("probe_tag"))
+        kind = assertion.get("kind")
+        actual = probe.get(kind) if probe is not None else None
+        if actual is None:
+            raise DriverError(
+                f"runtime probe does not expose {kind}: {assertion.get('probe_tag')}"
+            )
+        measurements.append(
+            {
+                "assertion_id": assertion.get("assertion_id"),
+                "probe_tag": assertion.get("probe_tag"),
+                "kind": kind,
+                "actual": actual,
+            }
+        )
+    return {
+        "schema": "icp.visual-measurements.v1",
+        "visual_state_id": contract["visual_state_id"],
+        "root_tag": contract["root_tag"],
+        "measurements": measurements,
+    }
+
+
+def measure(package: str, contract_path: str | None) -> dict:
+    contract = load_json(contract_path, "contract")
+    raw = shell_text(
+        "run-as", package, "cat", "files/icp-runtime-probes.json"
+    )
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise DriverError("production runtime probe payload is invalid") from exc
+    if not isinstance(payload, dict):
+        raise DriverError("production runtime probe payload must be an object")
+    return measure_payload(contract, payload)
+
+
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser()
-    root.add_argument("operation", choices=("snapshot", "apply", "capture", "restore"))
+    root.add_argument(
+        "operation",
+        choices=(
+            "snapshot",
+            "apply",
+            "cold-start",
+            "interact",
+            "attest",
+            "measure",
+            "capture",
+            "restore",
+        ),
+    )
     root.add_argument("--package", required=True)
     root.add_argument("--config")
     root.add_argument("--output")
+    root.add_argument("--state-id")
+    root.add_argument("--root-tag")
+    root.add_argument("--trace")
+    root.add_argument("--contract")
     return root
 
 
@@ -136,6 +330,14 @@ def main() -> int:
             print(json.dumps(snapshot(), ensure_ascii=False))
         elif args.operation in {"apply", "restore"}:
             apply_config(load_config(args.config))
+        elif args.operation == "cold-start":
+            print(json.dumps(cold_start(args.package), ensure_ascii=False))
+        elif args.operation == "interact":
+            print(json.dumps(interact(args.trace), ensure_ascii=False))
+        elif args.operation == "attest":
+            print(json.dumps(attest(args.state_id, args.root_tag), ensure_ascii=False))
+        elif args.operation == "measure":
+            print(json.dumps(measure(args.package, args.contract), ensure_ascii=False))
         else:
             capture(args.output)
     except (DriverError, KeyError, TypeError) as exc:

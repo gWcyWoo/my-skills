@@ -226,11 +226,19 @@ implementing model reuse a suitable public component or create the required one.
 Stage 3 does only implementation and implementation verification: create every
 integration test from three preserved sources—same-page `IT`, same-page
 `交互描述`, and model inference over each frozen component's complete semantic
-contract—obtain RED, implement all frozen component
-behavior and every Stage 1 design element/asset, obtain GREEN, audit the complete
-obligation set, and compare every design state with its reference at the exact
-frozen reference viewport. At that viewport check colors, component structure,
-spacing, and font sizes; whole-image MAE is diagnostic only. Compact, expanded,
+contract. Freeze the complete obligation universe first, then execute one strict
+vertical case at a time: materialize that case's page-scoped test, observe RED,
+implement its smallest production slice, and observe GREEN before starting the
+next case. Do not require every page's tests to compile or become RED before the
+first page can reach GREEN. Final verification still requires RED and GREEN for
+every frozen obligation. Audit every Stage 1 design element/asset and compare every
+design state with its reference at the exact frozen reference viewport. Derive
+immutable bounds, color, font-size, and line-height assertions from Stage 1 and
+bind them to production elements through `runtime_probe_tag`; authored pass/fail
+booleans are not evidence. Intrinsic/container bounds and visual tokens are exact;
+text and dynamic-content bounds are measured but adaptive so natural wrapping is
+not forced. At that viewport check those runtime values;
+whole-image MAE is diagnostic only. Compact, expanded,
 and other sizes instead check
 natural text reflow, clipping, overlap, horizontal overflow, scroll reachability,
 control operation, system bars, and safe insets. Every component must be
@@ -239,7 +247,7 @@ The reference artboard is not a fixed runtime geometry template: do not hard-cod
 text/card/section/page heights or use locale/copy-specific line breaks, font
 metrics, spacing, offsets, or geometry merely to reduce diagnostic MAE. Interaction
 tests own behavior-driven visual state even when the static artboard differs. On
-reference-fidelity failure,
+source-bound measurement failure,
 collect all failed designs in one
 regional difference report and trace each affected obligation back through its
 code mapping and frozen Stage 1 source node. Repair code when the frozen data is
@@ -300,6 +308,11 @@ instances have no fabricated Block. Stage 3 must consume this projection instead
 of reconstructing visual groups or reading a component definition without its
 Block evidence.
 
+Component coverage is an identity set, not a rendering-order contract. Stage 3
+accepts the same complete `component_instance_ids` in any order, rejects duplicate,
+missing, and unexpected IDs with an exact diff, and derives rendering order only
+from the frozen composition's parent, slot, and order fields.
+
 Stage 3 must also prove that it consumed exact exported assets. For every rendered
 design element with source assets, its plan selects at least one frozen asset ID and
 SHA-256 plus one project-relative target resource. Verification requires identical
@@ -307,12 +320,21 @@ source and target bytes by SHA-256; code anchors alone do not prove the asset wa
 used, and redrawing or approximating an exported icon is forbidden.
 
 Visual evidence must be produced by ICP's reversible device-capture process. For
-each design state, freeze package, locale, and exact state-setup commands; snapshot
+each design state, derive one collision-resistant `visual_state_id` from its exact
+page key and design identity; never derive it from a transliterated display title.
+Freeze package, locale, environment/data preconditions, the same-page production
+interaction trace, and one production renderer identity; snapshot
 the emulator's size/density override modes, locale, font scale, and navigation
-mode; convert it to the reference pixel size and logical scale; capture the full
+mode; convert it to the reference pixel size and logical scale; perform a normal
+cold start without a terminal debug-state extra; prove the target activity is
+resumed and its process remains alive; execute the production interaction trace;
+attest the exact state ID plus unique production root; and prove no fatal exception
+or ANR occurred. A debug/preview duplicate renderer is forbidden. Only then measure
+the production element probes and capture the full
 long artboard; normalize the PNG to the reference dimensions; and restore the exact
 snapshot in a `finally` path. Verification rejects missing conversion/restoration
-evidence before recording diagnostic MAE and applying reference-fidelity checks.
+or production-path evidence before recording diagnostic MAE and applying
+source-bound runtime checks.
 
 Every IOLE `modal|component` reference must also terminate in one Stage 2
 `presentation_usage`: exact source page/facts/host instance to exact referenced
@@ -350,8 +372,9 @@ python3 <icp-skill>/implementation/scripts/implementation.py verify \
 This requires exact code coverage and asset hashes, strict interaction RED/GREEN
 evidence, successful lint/build/integration commands, adaptive evidence for every
 component, compact and expanded runtime checks, exact visual device
-conversion/restoration evidence, and passing reference-viewport color,
-component-structure, spacing, and font-size checks. PNG MAE is diagnostic only.
+conversion/restoration evidence, production-path and renderer identity, and
+passing Stage 1-derived runtime measurements for reference-viewport bounds, color,
+and font metrics. PNG MAE is diagnostic only.
 
 ICP currently has exactly three active stages. A zero exit from the Stage-3
 implementation verifier is the final ICP completion condition. The reserved Stage

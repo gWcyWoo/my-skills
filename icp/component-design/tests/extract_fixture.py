@@ -59,13 +59,34 @@ def source_for(name: str, suffix: str, url: str) -> dict:
                 "type": "artboard",
                 "name": name,
                 "frame": {"x": 0, "y": 0, "width": 1, "height": 1},
+                "fills": [{"enabled": True, "color": "#5B5CE2"}],
                 "layers": [
                     {
                         "id": f"text:{suffix}",
                         "type": "textLayer",
                         "name": f"{name} content",
                         "frame": {"x": 0, "y": 0, "width": 1, "height": 1},
-                        "text": {"value": name, "style": {"content": name}},
+                        "text": {
+                            "value": name,
+                            "style": {
+                                "content": name,
+                                "fills": [
+                                    {
+                                        "enabled": True,
+                                        "color": {
+                                            "r": 0.125,
+                                            "g": 0.25,
+                                            "b": 0.5,
+                                            "a": 1,
+                                        },
+                                    }
+                                ],
+                                "font": {
+                                    "size": 14,
+                                    "lineHeight": {"unit": "PIXELS", "value": 22},
+                                },
+                            },
+                        },
                         "hasExportImage": True,
                         "image": {"imageUrl": EXPORTED_ASSET_URL},
                     }

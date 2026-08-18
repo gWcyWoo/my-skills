@@ -142,9 +142,13 @@ Run one new client flow in this order:
    but must not author them. Run ICP implementation `begin`, author and record its
    exact implementation plan, and derive `claim_page_titles` only from the frozen
    `modify` page keys/source-context joins. The plan must close every design node,
-   semantic fact, interaction test, and presentation usage before claim. IOLE then
-   orchestrates Steps 6–11 against that hash-bound plan; it never falls back to an
-   IOLE-authored component or code plan.
+   semantic fact, interaction test, and presentation usage before claim. Compile
+   the unchanged source bundle, verified component lock, and recorded
+   implementation plan with `compile-execution-plan` and require
+   `iole.flow-execution-plan.v4`. This is the only new-flow execution contract and
+   the source of `claim_page_titles`, execution nodes, order, and exact file owners.
+   IOLE then orchestrates Steps 6–11 against that hash-bound plan; it never falls
+   back to an IOLE-authored component/code plan or legacy analysis-input envelope.
 6. Pass one raw guard snapshot for every `claim_page_titles` member to
    `claim_flow_rows`. Require one shared lease and one all-or-none batch. Persist
    the raw rows, plan, claim result, and terminal intent outside the repository.
@@ -159,22 +163,23 @@ Run one new client flow in this order:
    create one isolated worktree. If the common existing PR is not both open and
    backed by a present source branch, run v2 `pr-recovery-plan` against the exact
    fetched revision. All flow members share that branch and MR.
-8. Let `build-plan` derive opaque internal page keys from normalized titles and
-   require `iole.flow-plan.v3`. Run `build-job` to publish
-   `icp.external-flow-job.v5`, then load ICP. ICP first returns
-   `contract-compilation-required`; the main ICP session freezes the exact
-   source/design implementation contract before any production edit. ICP then
-   persists the execution DAG and returns one worker prompt at a time. Spawn exactly
-   one child agent for each `ready` node, wait for its result, record it, and only
-   then request the next node. The returned prompt requires every child to invoke
-   and follow `$icp`; a page child is not complete without its page-level design,
-   real-runtime, and visual evidence. Child agents never access Sheet state or
-   Git/PR.
+8. Execute the frozen v4 DAG in order: `foundation`, then one page node at a time,
+   then `flow-integration`. Every project-relative file has exactly one owner;
+   dependent nodes may read but never modify another node's files. Shared
+   components/assets and app-wide configuration belong to `foundation`, all files
+   needed to close a page belong to its page node, and cross-page entry/navigation
+   wiring belongs to `flow-integration`. For each page node, keep the complete
+   obligation universe frozen but materialize one page-local test case at a time,
+   observe RED, implement the smallest slice, and observe GREEN before the next
+   case. Tests for future pages must not enter the source set early. A page node is
+   not complete without its page-level design, cold-started real-runtime, and
+   visual evidence. Execution workers never access Sheet state or Git/PR.
    Page children own ICP's complete measured visual repair loop. An intermediate
    mismatch never reaches IOLE. If `record-node` rejects a terminal result or
    returns `node-failed` after ICP's blocker/no-progress boundary, do not dispatch
    or repair another node; treat it as the controlled failure handled in step 11.
-   Every node receives the unchanged `iole.sheet-member-contract.v1`; it is
+   Every node receives the unchanged `iole.sheet-member-contract.v2` from the
+   source bundle; it is
    authoritative over derived prose. Missing, changed, summarized, or inconsistent
    mapping-declared Sheet job content must fail before node dispatch. Queue, lease,
    PR, error, ignored, and other-role cells remain outside ICP.

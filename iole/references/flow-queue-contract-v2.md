@@ -100,10 +100,42 @@ props, slots, variants, states, or events. Empty mapped business cells are valid
 ICP may infer visible semantics from verified designs or omit unsupported behavior,
 but neither stage may invent an API or invisible interaction.
 
+## New v2 execution compilation
+
+After ICP verifies `icp.component-design.lock.v6`, run Stage 3 `begin`, author the
+generated implementation plan, and pass it to `record-plan`. Compile the execution
+boundary directly from the unchanged source bundle and the two verified ICP
+artifacts:
+
+```sh
+python3 ~/.agents/skills/iole/scripts/iole_flow_contract_v2.py \
+  compile-execution-plan --source-bundle /absolute/source-bundle.json \
+  --component-lock /absolute/.icp/component-design/component-lock.json \
+  --implementation-plan /absolute/.icp/implementation/implementation-plan.json \
+  > /absolute/flow-execution-plan.json
+```
+
+Require `iole.flow-execution-plan.v4`. The compiler verifies the exact source
+bundle hash in the component lock, the component-lock hash in the implementation
+plan, every modify-member/page join, the execution DAG, and exact file ownership.
+It derives `claim_page_titles`; IOLE does not independently reconstruct them.
+
+The DAG has one `foundation` node, one node per modify page, and one final
+`flow-integration` node. Every project-relative production, test, asset, manifest,
+and entry/navigation file has exactly one owner. Dependencies are read-only. A
+page's complete obligation set is frozen globally, but execution is one strict
+case-local RED→GREEN slice at a time; future-page tests are not materialized until
+their node starts. Component instance membership is order-insensitive coverage;
+only the frozen composition parent/slot/order controls rendering order.
+
+Use this v4 contract for branch naming, atomic claim guards, controlled-error
+writeback, verified review writeback, and execution. New source-bundle v2 work must
+not call `build-input`, `build-plan`, or `build-job`.
+
 ## Legacy execution input envelopes
 
 The following `flow-analysis-input.v1`/`flow-plan-input.v3` envelope remains only
-for existing execution/recovery paths. A new ICP component-design handoff uses the
+for pre-existing execution/recovery paths. A new ICP component-design handoff uses the
 source bundle above. Component decisions and ownership paths for a future new
 execution path must come from ICP's verified component/implementation contracts,
 not from IOLE source analysis.
@@ -221,7 +253,11 @@ python3 ~/.agents/skills/iole/scripts/iole_flow_contract_v2.py \
 
 ## Claim and expansion
 
-Before `build-plan`, pass the exact raw inspected member rows and a separate
+For a new source-bundle v2 flow, claim only the exact `claim_page_titles` emitted by
+the verified v4 execution plan. The following `build-input`/`build-plan` process is
+legacy recovery behavior only.
+
+Before legacy `build-plan`, pass the exact raw inspected member rows and a separate
 analysis document to `build-input` with the fixed role mapping. The analysis may
 contain only page identity, normalized reference prose, change scope, allowed
 paths, and component decisions; it must not author `requirement`, acceptance copy,
