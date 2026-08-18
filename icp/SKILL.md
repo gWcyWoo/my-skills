@@ -18,6 +18,10 @@ Turn rendered designs and their machine-readable sources into reviewable contrac
 - For target-platform planning, DTOs/mocks/adapters, code generation, interaction
   TDD, responsive runtime evidence, or visual fidelity, read
   [implementation/STAGE.md](implementation/STAGE.md) completely before acting.
+- Stage 4 is reserved but inactive. Read
+  [references/reserved-stage-4.md](references/reserved-stage-4.md) only when the
+  user asks to discuss or activate it. Do not create Stage-4 runtime artifacts,
+  run a fourth gate, or delay completion on its behalf.
 
 Run `component-design` only after the same project's complete extract batch passes
 live verification and with IOLE's exact `iole.flow-source-bundle.v2`. The bundle
@@ -348,3 +352,8 @@ evidence, successful lint/build/integration commands, adaptive evidence for ever
 component, compact and expanded runtime checks, exact visual device
 conversion/restoration evidence, and passing reference-viewport color,
 component-structure, spacing, and font-size checks. PNG MAE is diagnostic only.
+
+ICP currently has exactly three active stages. A zero exit from the Stage-3
+implementation verifier is the final ICP completion condition. The reserved Stage
+4 is future work only: it is not an implicit follow-up, completion gate, directory,
+script, or IOLE delivery requirement.
