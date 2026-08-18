@@ -1,4 +1,0 @@
-interface:
-  display_name: "GLM Executor"
-  short_description: "Run bounded code tasks directly with GLM"
-  default_prompt: "Use $glm code to execute an approved implementation task."

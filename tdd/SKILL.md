@@ -1,94 +1,82 @@
 ---
 name: tdd
-description: Test-driven development with red-green-refactor loop. Use when user wants to build features or fix bugs using TDD, mentions "red-green-refactor", wants integration tests, or asks for test-first development.
+description: Integration-contract-first test-driven development with strict red-green-refactor vertical slices. Use when the user asks to build or fix behavior with TDD, strict TDD, integration tests, executable acceptance contracts, red-green-refactor, or test-first development.
 ---
 
-# Test-Driven Development
+# Integration-Contract-First TDD
 
-## Philosophy
+## Required Outcome
 
-**Core principle**: Tests should verify behavior through public interfaces, not implementation details. Code can change entirely; tests shouldn't.
+Treat the implementation as a replaceable black box. Required integration tests are the executable acceptance contract and the primary proof that the feature is correct.
 
-**Good tests** are integration-style: they exercise real code paths through public APIs. They describe _what_ the system does, not _how_ it does it. A good test reads like a specification - "user can checkout with valid cart" tells you exactly what capability exists. These tests survive refactors because they don't care about internal structure.
+For every required behavior, define and verify:
 
-**Bad tests** are coupled to implementation. They mock internal collaborators, test private methods, or verify through external means (like querying a database directly instead of using the interface). The warning sign: your test breaks when you refactor, but behavior hasn't changed. If you rename an internal function and tests fail, those tests were testing implementation, not behavior.
+- preconditions and starting state
+- input through a public interface
+- observable output or error
+- observable state change or outbound interaction
+- forbidden output or side effect when relevant
 
-See [tests.md](tests.md) for examples and [mocking.md](mocking.md) for mocking guidelines.
+Assert exact contract-significant values. Do not couple tests to incidental values, private methods, internal collaborators, or internal data layout.
 
-## Anti-Pattern: Horizontal Slices
+Exercise the real owned code path. Replace only dependencies outside the system's ownership boundary. Prefer an isolated real test database when persistence is owned, and verify persisted behavior through a public interface.
 
-**DO NOT write all tests first, then all implementation.** This is "horizontal slicing" - treating RED as "write all tests" and GREEN as "write all code."
+See [tests.md](tests.md) for contract examples and [mocking.md](mocking.md) for boundary-substitute rules.
 
-This produces **crap tests**:
+## Test-Layer Policy
 
-- Tests written in bulk test _imagined_ behavior, not _actual_ behavior
-- You end up testing the _shape_ of things (data structures, function signatures) rather than user-facing behavior
-- Tests become insensitive to real changes - they pass when behavior breaks, fail when behavior is fine
-- You outrun your headlights, committing to test structure before understanding the implementation
+- **Integration tests are required.** They define acceptance and determine completion.
+- **Unit tests are optional.** Do not require or create them by default. Add them only when complex pure logic, many combinatorial cases, or faster fault localization provides value not supplied by the integration contract.
+- Unit tests never replace, relax, or count as completion of a required integration contract.
+- Browser, device, or deployed E2E tests are optional unless their runtime wiring or user interaction is itself part of the approved contract. They complement rather than replace integration tests.
 
-**Correct approach**: Vertical slices via tracer bullets. One test → one implementation → repeat. Each test responds to what you learned from the previous cycle. Because you just wrote the code, you know exactly what behavior matters and how to verify it.
+## Contract Gate
 
-```
-WRONG (horizontal):
-  RED:   test1, test2, test3, test4, test5
-  GREEN: impl1, impl2, impl3, impl4, impl5
+Before changing production code:
 
-RIGHT (vertical):
-  RED→GREEN: test1→impl1
-  RED→GREEN: test2→impl2
-  RED→GREEN: test3→impl3
-  ...
-```
+1. Use the project's domain glossary and applicable ADRs.
+2. Identify the public entry point and the system ownership boundary. When the interface must change, keep it small and testable; see [interface-design.md](interface-design.md) and [deep-modules.md](deep-modules.md).
+3. List the prioritized behavior cases as a compact contract:
+   - case name
+   - preconditions
+   - exact public input
+   - expected output or error
+   - observable state or outbound effects
+   - forbidden effects
+4. Confirm the contract with the user. Treat an exact contract already supplied by the user as approval.
+5. Do not write all executable tests at once. Encode the approved cases one vertical slice at a time.
 
-## Workflow
+Ask only for missing contract decisions: "For this public input and starting state, what exact observable result should define success?"
 
-### 1. Planning
+## Strict Vertical Workflow
 
-When exploring the codebase, use the project's domain glossary so that test names and interface vocabulary match the project's language, and respect ADRs in the area you're touching.
+### 1. RED: Encode One Integration Case
 
-Before writing any code:
+Write one integration test for the highest-priority unimplemented behavior.
 
-- [ ] Confirm with user what interface changes are needed
-- [ ] Confirm with user which behaviors to test (prioritize)
-- [ ] Identify opportunities for [deep modules](deep-modules.md) (small interface, deep implementation)
-- [ ] Design interfaces for [testability](interface-design.md)
-- [ ] List the behaviors to test (not implementation steps)
-- [ ] Get user approval on the plan
+Run it and verify that it fails because the required behavior is absent or wrong. A syntax error, broken fixture, unavailable environment, or unrelated failure is not valid RED evidence. If the test already passes, prove the behavior already exists or correct the test before implementation.
 
-Ask: "What should the public interface look like? Which behaviors are most important to test?"
+### 2. GREEN: Implement Only That Case
 
-**You can't test everything.** Confirm with the user exactly which behaviors matter most. Focus testing effort on critical paths and complex logic, not every possible edge case.
+Write the minimum production code needed to satisfy the approved contract. Do not weaken or rewrite the contract assertion to accommodate the implementation.
 
-### 2. Tracer Bullet
+Run the new integration test and all previously passing integration cases affected by the change. They must be GREEN before continuing.
 
-Write ONE test that confirms ONE thing about the system:
+### 3. Repeat
 
-```
-RED:   Write test for first behavior → test fails
-GREEN: Write minimal code to pass → test passes
-```
-
-This is your tracer bullet - proves the path works end-to-end.
-
-### 3. Incremental Loop
-
-For each remaining behavior:
+Select the next approved behavior and repeat RED → GREEN:
 
 ```
-RED:   Write next test → fails
-GREEN: Minimal code to pass → passes
+contract case 1 → integration RED → minimal GREEN
+contract case 2 → integration RED → minimal GREEN
+contract case 3 → integration RED → minimal GREEN
 ```
 
-Rules:
+Use discoveries from each slice to improve later test design, but never silently change an approved observable contract. Surface contradictions and request a contract decision.
 
-- One test at a time
-- Only enough code to pass current test
-- Don't anticipate future tests
-- Keep tests focused on observable behavior
+### 4. Refactor While GREEN
 
-### 4. Refactor
-
-After all tests pass, look for [refactor candidates](refactoring.md):
+After the required integration cases pass, look for [refactor candidates](refactoring.md):
 
 - [ ] Extract duplication
 - [ ] Deepen modules (move complexity behind simple interfaces)
@@ -96,14 +84,26 @@ After all tests pass, look for [refactor candidates](refactoring.md):
 - [ ] Consider what new code reveals about existing code
 - [ ] Run tests after each refactor step
 
-**Never refactor while RED.** Get to GREEN first.
+Never refactor while RED.
 
-## Checklist Per Cycle
+## Prohibited Shortcuts
 
-```
-[ ] Test describes behavior, not implementation
-[ ] Test uses public interface only
-[ ] Test would survive internal refactor
-[ ] Code is minimal for this test
-[ ] No speculative features added
-```
+- Writing all tests first and then all implementation
+- Treating a unit test as acceptance evidence
+- Mocking owned internal collaborators
+- Testing private methods or internal call counts
+- Loosening assertions or changing expected output only to make GREEN
+- Implementing future cases before their integration test is RED
+- Claiming RED when the failure comes from test setup or environment
+
+## Definition of Done
+
+- Every approved required behavior is represented by a passing integration test.
+- Tests enter through public interfaces and exercise the real owned code path.
+- Exact contract-significant outputs, errors, state changes, and outbound interactions are asserted.
+- Each new behavior produced valid RED evidence before its implementation.
+- All relevant integration tests pass after implementation and refactoring.
+- No required test is skipped, weakened, or replaced by a unit test.
+- Unit tests may be absent.
+
+Report the contract cases, the valid RED failure summary, the GREEN command and result, and any explicitly untested boundary.
