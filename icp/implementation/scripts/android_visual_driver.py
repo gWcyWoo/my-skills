@@ -317,7 +317,16 @@ def measure(package: str, contract_path: str | None) -> dict:
         raise DriverError("production runtime probe payload is invalid") from exc
     if not isinstance(payload, dict):
         raise DriverError("production runtime probe payload must be an object")
-    return measure_payload(contract, payload)
+    measurements = measure_payload(contract, payload)
+    hierarchy = window_hierarchy()
+    for probe_tag in dict.fromkeys(
+        item["probe_tag"] for item in measurements["measurements"]
+    ):
+        try:
+            tagged_bounds(hierarchy, probe_tag)
+        except DriverError as exc:
+            raise DriverError(f"runtime probe is not visible: {probe_tag}") from exc
+    return measurements
 
 
 def parser() -> argparse.ArgumentParser:

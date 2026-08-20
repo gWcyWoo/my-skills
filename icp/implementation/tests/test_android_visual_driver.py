@@ -132,6 +132,96 @@ class AndroidVisualDriverTest(unittest.TestCase):
             },
         )
 
+    def test_measure_rejects_a_probe_payload_not_present_in_the_live_hierarchy(self) -> None:
+        contract = {
+            "schema": "icp.visual-measurement-contract.v1",
+            "visual_state_id": "state-a",
+            "root_tag": "root-state-a",
+            "assertions": [
+                {
+                    "assertion_id": "assertion-a",
+                    "probe_tag": "target-permission-icon",
+                    "kind": "bounds",
+                    "expected": {"left": 4, "top": 8, "width": 52, "height": 52},
+                }
+            ],
+        }
+        payload = {
+            "schema": "icp.runtime-probes.v1",
+            "visual_state_id": "state-a",
+            "root_tag": "root-state-a",
+            "probes": [
+                {
+                    "probe_tag": "target-permission-icon",
+                    "bounds": {"left": 4, "top": 8, "width": 52, "height": 52},
+                }
+            ],
+        }
+
+        with patch.object(
+            driver,
+            "load_json",
+            return_value=contract,
+        ), patch.object(
+            driver,
+            "shell_text",
+            return_value=json.dumps(payload),
+        ), patch.object(
+            driver,
+            "window_hierarchy",
+            return_value=(
+                '<hierarchy><node content-desc="root-state-a" '
+                'bounds="[0,0][1080,1920]" /></hierarchy>'
+            ),
+        ):
+            with self.assertRaisesRegex(
+                driver.DriverError,
+                "runtime probe is not visible: target-permission-icon",
+            ):
+                driver.measure("test.app", "contract.json")
+
+    def test_measure_keeps_accepting_a_probe_present_in_the_live_hierarchy(self) -> None:
+        contract = {
+            "schema": "icp.visual-measurement-contract.v1",
+            "visual_state_id": "state-a",
+            "root_tag": "root-state-a",
+            "assertions": [
+                {
+                    "assertion_id": "assertion-a",
+                    "probe_tag": "target-permission-icon",
+                    "kind": "bounds",
+                    "expected": {"left": 4, "top": 8, "width": 52, "height": 52},
+                }
+            ],
+        }
+        payload = {
+            "schema": "icp.runtime-probes.v1",
+            "visual_state_id": "state-a",
+            "root_tag": "root-state-a",
+            "probes": [
+                {
+                    "probe_tag": "target-permission-icon",
+                    "bounds": {"left": 4, "top": 8, "width": 52, "height": 52},
+                }
+            ],
+        }
+
+        with patch.object(driver, "load_json", return_value=contract), patch.object(
+            driver,
+            "shell_text",
+            return_value=json.dumps(payload),
+        ), patch.object(
+            driver,
+            "window_hierarchy",
+            return_value=(
+                '<hierarchy><node content-desc="target-permission-icon" '
+                'bounds="[4,8][56,60]" /></hierarchy>'
+            ),
+        ):
+            measured = driver.measure("test.app", "contract.json")
+
+        self.assertEqual(measured, driver.measure_payload(contract, payload))
+
 
 if __name__ == "__main__":
     unittest.main()
