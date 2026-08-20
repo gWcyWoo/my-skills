@@ -131,7 +131,33 @@ def capture(path: str | None) -> None:
     output.write_bytes(raw)
 
 
+def resolve_launcher_component(package: str) -> str:
+    resolved = run_adb(
+        "shell",
+        "cmd",
+        "package",
+        "resolve-activity",
+        "--brief",
+        "-a",
+        "android.intent.action.MAIN",
+        "-c",
+        "android.intent.category.LAUNCHER",
+        "-p",
+        package,
+    )
+    component_pattern = re.compile(r"^[A-Za-z0-9_.]+/[A-Za-z0-9_.$]+$")
+    components = [
+        line.strip()
+        for line in resolved.stdout.splitlines()
+        if component_pattern.fullmatch(line.strip())
+    ]
+    if len(components) != 1 or components[0].split("/", 1)[0] != package:
+        raise DriverError(f"cannot resolve a unique launcher activity for {package}")
+    return components[0]
+
+
 def cold_start(package: str) -> dict:
+    launcher_component = resolve_launcher_component(package)
     run_adb("logcat", "-c")
     run_adb("shell", "am", "force-stop", package)
     started = run_adb(
@@ -139,12 +165,8 @@ def cold_start(package: str) -> dict:
         "am",
         "start",
         "-W",
-        "-a",
-        "android.intent.action.MAIN",
-        "-c",
-        "android.intent.category.LAUNCHER",
-        "-p",
-        package,
+        "-n",
+        launcher_component,
     )
     activity_resumed = False
     process_alive = False

@@ -9,11 +9,60 @@ from icp.implementation.scripts import android_visual_driver as driver
 
 
 class AndroidVisualDriverTest(unittest.TestCase):
+    def test_cold_start_resolves_launcher_before_force_stop_and_starts_it_explicitly(self) -> None:
+        commands: list[tuple[str, ...]] = []
+
+        def fake_run_adb(*args: str, binary: bool = False) -> subprocess.CompletedProcess:
+            commands.append(args)
+            if args[:4] == ("shell", "cmd", "package", "resolve-activity"):
+                return subprocess.CompletedProcess(
+                    args,
+                    0,
+                    stdout="test.app/.MainActivity\n",
+                    stderr="",
+                )
+            return subprocess.CompletedProcess(args, 0, stdout="Status: ok\n", stderr="")
+
+        def fake_probe(*args: str) -> subprocess.CompletedProcess[str]:
+            if args[:2] == ("shell", "pidof"):
+                return subprocess.CompletedProcess(args, 0, stdout="123\n", stderr="")
+            if args[:3] == ("shell", "dumpsys", "activity"):
+                return subprocess.CompletedProcess(
+                    args, 0, stdout="mResumedActivity test.app/.MainActivity\n", stderr=""
+                )
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+        with patch.object(driver, "run_adb", side_effect=fake_run_adb), patch.object(
+            driver, "probe_adb", side_effect=fake_probe
+        ):
+            driver.cold_start("test.app")
+
+        resolve = next(
+            command
+            for command in commands
+            if command[:4] == ("shell", "cmd", "package", "resolve-activity")
+        )
+        force_stop = ("shell", "am", "force-stop", "test.app")
+        start = next(command for command in commands if command[:3] == ("shell", "am", "start"))
+        self.assertLess(commands.index(resolve), commands.index(force_stop))
+        self.assertLess(commands.index(force_stop), commands.index(start))
+        self.assertEqual(
+            start,
+            ("shell", "am", "start", "-W", "-n", "test.app/.MainActivity"),
+        )
+
     def test_cold_start_does_not_inject_a_terminal_visual_state(self) -> None:
         commands: list[tuple[str, ...]] = []
 
         def fake_run_adb(*args: str, binary: bool = False) -> subprocess.CompletedProcess:
             commands.append(args)
+            if args[:4] == ("shell", "cmd", "package", "resolve-activity"):
+                return subprocess.CompletedProcess(
+                    args,
+                    0,
+                    stdout="test.app/.MainActivity\n",
+                    stderr="",
+                )
             return subprocess.CompletedProcess(args, 0, stdout="Status: ok\n", stderr="")
 
         def fake_probe(*args: str) -> subprocess.CompletedProcess[str]:

@@ -24,7 +24,9 @@ Turn rendered designs and their machine-readable sources into reviewable contrac
   run a fourth gate, or delay completion on its behalf.
 
 Run `component-design` only after the same project's complete extract batch passes
-live verification and with IOLE's exact `iole.flow-source-bundle.v2`. The bundle
+live verification. IOLE's exact `iole.flow-source-bundle.v2` must be passed once
+to Stage 1, which freezes it at `.icp/source/source-bundle.json`; Stage 2 reads
+that single project artifact and accepts no second source-bundle input. The bundle
 declares `row_data_columns`, derived only from the selected role mapping's ICP
 source fields. Every member must carry exactly those columns in `row_data`: every
 non-empty value remains exact and every empty value is JSON `null`. Reject a
@@ -39,12 +41,42 @@ One source member may own multiple ordered design states. Do not create
 placeholder directories or pretend to run later stages. Start implementation only
 from a live-verified component lock and its deterministic implementation universe.
 
+## Non-negotiable stage data flow
+
+1. IOLE reads the complete related-row closure once. Every mapping-owned column
+   is present; a present value is exact and an empty value is JSON `null`.
+2. Stage 1 authors visual-semantic Blocks first, using same-row `UI补充描述` only
+   to assist grouping. It then binds every design JSON fact, relation, asset, and
+   source node into those Blocks and runs exhaustive JSON-semantic reverse review
+   until the frozen Blocks reconstruct the design data completely.
+3. Stage 2 is the only business-semantic interpretation stage. It binds every
+   Block to exactly one component instance, may bind several Blocks to one
+   component, closes every atomic interaction as
+   `condition -> state -> trigger -> behavior -> result`, binds every interaction,
+   API call/result, and documented acceptance obligation to components, and emits
+   one self-contained `implementation_contract`.
+4. Stage 3 reads only Stage 2's component-bound Stage 1 projection and closed
+   `implementation_contract`. It must not rejoin extract data or read or receive the IOLE bundle, raw
+   rows, raw UI/interaction/API/UT/IT/E2E prose, quotes, or source spans, and must
+   not invoke Stage 2 verification or perform a second semantic interpretation.
+   It verifies Stage 2 only through the sealed result/artifact hashes, chooses codebase reuse and
+   platform primitives, writes code/tests, and verifies runtime/visual results.
+5. IOLE remains orchestration authority for claim, execution, Git/MR, and Sheet
+   writeback. It joins artifacts by stable `source_id`, `page_key`, member
+   `contract_digest`, component-lock hash, and canonical `bundle_digest`; byte
+   equality between duplicate JSON serializations is never a business contract.
+
+If Stage 3 finds incorrect design data, return to Stage 1. If it finds an
+incorrect component, interaction, API, or acceptance contract, return to Stage 2.
+Stage 3 must never compensate by rereading original prose.
+
 ## Project-owned artifacts
 
 Write process artifacts under the target project:
 
 ```text
 <project>/.icp/extract/<design-name>/
+<project>/.icp/source/source-bundle.json
 <project>/.icp/component-design/
 <project>/.icp/implementation/
 ```
@@ -54,6 +86,20 @@ Component design owns one cross-design contract in `.icp/component-design/`.
 Implementation owns plans, page codegen packets, TDD evidence, runtime evidence,
 and its final result in `.icp/implementation/`. Preserve all three directories on
 failure because their hashes, revisions, and repair packets are evidence.
+
+Every stage owns one deterministic `checklist.json`. Its ordered node definition
+is derived by the stage script from that run's frozen input before model work
+starts; the model never authors or marks it. This is an execution control for the
+ICP model and its commands, not protection against a person editing files. It
+prevents the model from omitting work, running work out of order, reporting an
+unexecuted step as complete, or retaining stale downstream results. Each
+successful CLI transaction records its exact node and evidence hash. A changed
+upstream evidence hash resets that node and every transitive dependent node to
+`pending` while preserving the execution history. A stage verifier reports the
+earliest unfinished node as `resume_from_node` plus the complete
+`revalidate_nodes` suffix; the model must execute that node and then revalidate
+its dependents in dependency order. Only after every node is `completed` may the
+final verify node complete or the next stage begin.
 
 ## Self-contained boundary
 
@@ -78,6 +124,11 @@ whether it needs its own semantic group, and whether source containment survives
 in the Block hierarchy. A present node swallowed by the wrong Block is an
 omission. Any failed node must return to the model as a reverse repair packet;
 no design may enter component design until every JSON-node review passes.
+For every JSON node with children, also reconcile the source grouping explicitly
+against the already-frozen visual Block hypothesis as `matches_block`,
+`contains_blocks`, `part_of_block`, or `technical_group`. Cite separate rendered
+and JSON evidence. JSON hierarchy is meaningful counter-evidence, but it never
+authors the first visual grouping or mechanically overrides it.
 Treat this as a fixed-point loop, not a one-time audit:
 `semantic draft -> complete bindings -> full JSON reverse review -> repair`.
 Each review round is read-only and exhaustive: freeze the current draft and
@@ -189,19 +240,53 @@ semantic pass or failure. A short authoritative sentence may already be the best
 atomic meaning; a paraphrased compound fact may still be wrong.
 
 After the initial page component model exists, split the same page's complete
-`交互描述` into a closed four-field audit ledger: `condition`, `state`, `trigger`,
-and `behavior`. Every atomic item contains all four keys, at most one non-null
+`交互描述` into a closed five-field audit ledger: `condition`, `state`, `trigger`,
+`behavior`, and `result`. Every atomic item contains all five keys, at most one non-null
 value, and the exact same-page source span. A non-null value names the matching
-source-backed fact; a segment with no meaning in these four types remains all-null. An
+source-backed fact; a segment with no meaning in these five types remains all-null. An
 empty interaction description is represented by one all-null item; null is valid
 absence and never requires a fabricated fact or binding. Review all items in one
 full pass, batch every omission into one revision, then rerun the full review.
+
+Then assemble those atomic facts into an interaction graph owned by that page.
+Every graph interaction keeps the same five nullable fields—`condition`, `state`,
+`trigger`, `behavior`, and `result`—and binds every non-null field to its owning
+page candidate. `result` records the observable consequence of the behavior; it
+is not inferred later from a missing edge. A trigger, its behavior, and its result
+stay in the same causal interaction. An edge resolves one named result either to
+a next same-page interaction or, when backed by an exact IOLE `navigation|modal`
+reference, to the referenced page/design state. The edge remains owned by the
+source page and never imports its facts into the target page. A click that calls
+an API is one interaction whose trigger is the click and whose behavior is
+`api_call`; both `success` and `failure` must resolve to separate render,
+navigation, error, retry, or state results. A truly terminal result is declared
+in graph-level `terminal_outcomes` with a non-empty inference basis; an absent
+edge never silently means terminal. Every frozen
+interaction fact appears exactly once, and the final lock projects candidate
+bindings to exact component instance IDs.
+
+Every exact IOLE `navigation|modal` reference is transition evidence and must be
+consumed exactly once by an external result edge. Its reference span must be
+contained by a source-backed `result` fact on the emitting interaction. Freeze
+those exact requirements with the locked graph; an omitted, duplicated, uncited,
+or wrong-result relation is incomplete even when its target title matches.
+
+Stage 2 also projects every non-empty same-page `接口描述` and every exact
+technical `API:xxxx`/`API：xxxx` directive in `交互描述` as an API requirement.
+Accepted locators are an uppercase HTTP method plus path/URL, a path/URL, an
+endpoint ID, or `project_id/endpoint_id`; prose after `API:` is not a directive.
+Resolve each requirement read-only through Apifox, use `record-api-contract` to
+seal the acquisition artifact before page authoring, freeze the raw endpoint contract and hash,
+normalize its transport shape, and bind it to an `api_call` interaction. The
+description owns business meaning; Apifox owns the technical transport shape.
+Empty sources create no API contract. An unresolved, duplicated, unused, or
+component-unbound API contract fails Stage 2; Stage 3 never guesses it.
 
 Every non-relation business-source fact owned by a local component must enter that
 component's semantic contract as a capability, data role, or action role. A generic
 `instance_fact` is not a valid terminal sink for local source semantics. Shared
 definitions may keep page-specific differences on their own instances so that one
-page's conditions, states, triggers, and behavior never constrain another page.
+page's conditions, states, triggers, behavior, and results never constrain another page.
 
 ## Source authority
 
@@ -224,8 +309,8 @@ per Stage 2 component definition using the complete semantic contract, and let t
 implementing model reuse a suitable public component or create the required one.
 
 Stage 3 does only implementation and implementation verification: create every
-integration test from three preserved sources—same-page `IT`, same-page
-`交互描述`, and model inference over each frozen component's complete semantic
+integration test from three preserved sources—same-page `IT`, the same-page
+interaction graph derived from `交互描述`, and model inference over each frozen component's complete semantic
 contract. Freeze the complete obligation universe first, then execute one strict
 vertical case at a time: materialize that case's page-scoped test, observe RED,
 implement its smallest production slice, and observe GREEN before starting the
@@ -255,6 +340,15 @@ correct and the repair preserves the responsive contract. If Stage 1 data/groupi
 with the exact design/Block/source-node/field, repair the owning data, rerun Stage
 2, and then resume implementation. The model handles this correction loop itself;
 Stage 3 adds no diagnosis protocol or state lock.
+
+Implement one connected interaction slice as one production unit: bound component
+UI, state, trigger handling, behavior, observable result, API adapter call when
+present, response-to-page-DTO mapping, render/navigation/error continuation, and
+its integration test.
+Every interaction needs one production mapping. Every API contract needs one
+adapter file and method mapping, and an `api_call` interaction must execute that
+method; a declaration, comment, string, or unused adapter is incomplete. Its
+integration case must observe the exact outbound request and continuation.
 
 Treat every IOLE member/physical row as an independent page scope. Multiple
 designs may be states of that page, but a rule from page A cannot constrain page
@@ -289,10 +383,10 @@ and rebuild the registry; never weaken the shared-evidence gate.
 
 This rule does not discard exact visual evidence. Dimensions, positions, colors,
 spacing, hierarchy, and asset bindings remain source-bound design facts unless the
-description explicitly requires a different result. Component design must preserve
-the generated `source_authority` object exactly. Its source-coverage spine maps
-every exact description segment to page semantic facts without compiling prose
-into an executable rule AST. The final lock freezes page facts, component
+description explicitly requires a different result. Component design's internal
+source-coverage spine maps every exact description segment to page semantic facts
+without compiling prose into an executable rule AST. That audit material remains
+inside Stage 2; Stage 3 receives only the sanitized closed contract. The final lock freezes page facts, component
 definitions and instances, abstraction decisions, final design compositions,
 append-only cache events, candidate replacements, and the exact source member
 scope/relation topology needed by the next stage.
@@ -311,7 +405,13 @@ Block evidence.
 Component coverage is an identity set, not a rendering-order contract. Stage 3
 accepts the same complete `component_instance_ids` in any order, rejects duplicate,
 missing, and unexpected IDs with an exact diff, and derives rendering order only
-from the frozen composition's parent, slot, and order fields.
+from the frozen composition's parent, slot, and order fields. The same
+identity-vs-order rule governs the other coverage collections: global
+`component_instances` storage order in the component lock, per-component
+`block_obligation_ids`, per-interaction `component_instance_ids`, and integration
+`basis_fact_ids` are each compared as an exact identity set (duplicates rejected,
+sorted missing/unexpected diffs reported) and normalized to the authoritative
+expected order when the plan is frozen.
 
 Stage 3 must also prove that it consumed exact exported assets. For every rendered
 design element with source assets, its plan selects at least one frozen asset ID and
@@ -322,12 +422,14 @@ used, and redrawing or approximating an exported icon is forbidden.
 Visual evidence must be produced by ICP's reversible device-capture process. For
 each design state, derive one collision-resistant `visual_state_id` from its exact
 page key and design identity; never derive it from a transliterated display title.
-Freeze package, locale, environment/data preconditions, the same-page production
-interaction trace, and one production renderer identity; snapshot
+Freeze the production runtime entry, package, locale, environment/data
+preconditions, an entry-rooted production interaction trace, and one production
+renderer identity; snapshot
 the emulator's size/density override modes, locale, font scale, and navigation
 mode; convert it to the reference pixel size and logical scale; perform a normal
 cold start without a terminal debug-state extra; prove the target activity is
-resumed and its process remains alive; execute the production interaction trace;
+resumed and its process remains alive; execute the frozen trace by following the
+exact Stage 2 result edges, including cross-page navigation and presentation;
 attest the exact state ID plus unique production root; and prove no fatal exception
 or ANR occurred. A debug/preview duplicate renderer is forbidden. Only then measure
 the production element probes and capture the full
@@ -335,6 +437,11 @@ long artboard; normalize the PNG to the reference dimensions; and restore the ex
 snapshot in a `finally` path. Verification rejects missing conversion/restoration
 or production-path evidence before recording diagnostic MAE and applying
 source-bound runtime checks.
+
+The runtime entry file/symbol identifies the real launcher, deep-link handler, or
+navigation coordinator found in the codebase. Its initial page/design identity is
+separate. Do not replace the application entry with a page renderer merely to make
+a capture route validate; they may share a file/symbol only when the codebase does.
 
 Every IOLE `modal|component` reference must also terminate in one Stage 2
 `presentation_usage`: exact source page/facts/host instance to exact referenced
@@ -380,3 +487,23 @@ ICP currently has exactly three active stages. A zero exit from the Stage-3
 implementation verifier is the final ICP completion condition. The reserved Stage
 4 is future work only: it is not an implicit follow-up, completion gate, directory,
 script, or IOLE delivery requirement.
+
+## Run-local incident recovery
+
+An unexpected ICP/IOLE script, schema, validator, or orchestration failure is not
+an instruction to abandon the user's business task. Expected RED, a normal
+semantic revision, a documented stage gate, or failing application behavior stays
+inside its owning stage and is not an incident. Use
+[references/incident-recovery.md](references/incident-recovery.md) only when the
+normal stage transition cannot continue because the ICP/IOLE tooling or contract
+itself rejected otherwise equivalent run data.
+
+The main session stops the failed command, records the incident under the target
+project's `.icp/incidents/`, and dispatches one recovery subagent. That subagent
+records facts and prepares only an append-only run-local recovery; it does not
+analyze root cause, change Skills, edit production code, mutate Sheet/Git/PR, alter
+frozen evidence, or declare the incident fixed. After recovery verification it
+returns the exact resume command to the main session. The main session reloads
+the live ICP instructions and resumes from the last successful checkpoint. Before
+the final user report, always list pending incidents and disclose every temporary
+recovery plus the still-unresolved ICP defect.

@@ -14,6 +14,17 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+ICP_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ICP_ROOT / "scripts"))
+from stage_checklist import (  # noqa: E402
+    ChecklistError,
+    complete as complete_checklist_node,
+    create as create_checklist,
+    node as checklist_node,
+    require_complete as require_checklist_complete,
+    require_ready as require_checklist_node_ready,
+)
+
 from lanhu import (
     LanhuError,
     artboard_size,
@@ -163,6 +174,128 @@ def parsed_design_identity(url: str) -> dict[str, str]:
         raise ContractError(exc.code, exc.message) from exc
 
 
+def canonical_digest(value: object) -> str:
+    return sha256_bytes(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    )
+
+
+def designs_from_source_bundle(
+    source_bundle: object,
+) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    bundle = source_bundle
+    if not isinstance(bundle, dict):
+        raise ContractError("invalid_source_bundle", "IOLE source bundle must be an object")
+    if (
+        bundle.get("kind") != "iole.flow-source-bundle.v2"
+        or bundle.get("schema_version") != 2
+        or bundle.get("role") != "client"
+    ):
+        raise ContractError(
+            "invalid_source_bundle",
+            "extract requires an IOLE client source bundle",
+        )
+    expected_digest = canonical_digest(
+        {key: value for key, value in bundle.items() if key != "bundle_digest"}
+    )
+    if bundle.get("bundle_digest") != expected_digest:
+        raise ContractError("invalid_source_bundle", "IOLE source bundle digest mismatch")
+    source_id = bundle.get("source_id")
+    root_title = bundle.get("root_title")
+    if not isinstance(source_id, str) or not source_id:
+        raise ContractError("invalid_source_bundle", "IOLE source bundle source_id is missing")
+    if not isinstance(root_title, str) or not root_title:
+        raise ContractError("invalid_source_bundle", "IOLE source bundle root_title is missing")
+    members = bundle.get("members")
+    if not isinstance(members, list) or not members:
+        raise ContractError("invalid_source_bundle", "IOLE source bundle members are missing")
+    requested_designs: list[dict[str, Any]] = []
+    seen_urls: set[str] = set()
+    seen_titles: set[str] = set()
+    for member_index, member_value in enumerate(members):
+        if not isinstance(member_value, dict):
+            raise ContractError(
+                "invalid_source_bundle",
+                f"IOLE member {member_index} must be an object",
+            )
+        title = member_value.get("title")
+        if not isinstance(title, str) or not title or title in seen_titles:
+            raise ContractError(
+                "invalid_source_bundle",
+                f"IOLE member {member_index} has an invalid or duplicate title",
+            )
+        seen_titles.add(title)
+        row_data = member_value.get("row_data")
+        if not isinstance(row_data, dict) or "UI补充描述" not in row_data:
+            raise ContractError(
+                "invalid_source_bundle",
+                f"IOLE member {title} is missing UI补充描述",
+            )
+        ui_supplement = row_data.get("UI补充描述")
+        if ui_supplement is not None and not isinstance(ui_supplement, str):
+            raise ContractError(
+                "invalid_source_bundle",
+                f"IOLE member {title} UI补充描述 must be a string or null",
+            )
+        source_contract = member_value.get("source_contract")
+        contract_digest = (
+            source_contract.get("contract_digest")
+            if isinstance(source_contract, dict)
+            else None
+        )
+        if not isinstance(contract_digest, str) or not contract_digest:
+            raise ContractError(
+                "invalid_source_bundle",
+                f"IOLE member {title} contract_digest is missing",
+            )
+        design_refs = member_value.get("design_refs")
+        if not isinstance(design_refs, list):
+            raise ContractError(
+                "invalid_source_bundle",
+                f"IOLE member {title} design_refs must be an array",
+            )
+        for ordinal, design_ref_value in enumerate(design_refs, start=1):
+            if not isinstance(design_ref_value, dict):
+                raise ContractError(
+                    "invalid_source_bundle",
+                    f"IOLE member {title} design ref {ordinal} is invalid",
+                )
+            design_url = design_ref_value.get("url")
+            if (
+                design_ref_value.get("ordinal") != ordinal
+                or not isinstance(design_url, str)
+                or not design_url
+                or design_url in seen_urls
+            ):
+                raise ContractError(
+                    "invalid_source_bundle",
+                    f"IOLE member {title} design ref {ordinal} is invalid or duplicated",
+                )
+            seen_urls.add(design_url)
+            requested_designs.append(
+                {
+                    "design_url": design_url,
+                    "ui_supplement": ui_supplement,
+                    "member_title": title,
+                    "contract_digest": contract_digest,
+                    "change_scope": member_value.get("change_scope"),
+                }
+            )
+    if not requested_designs:
+        raise ContractError("invalid_source_bundle", "IOLE source bundle has no designs")
+    return requested_designs, {
+        "source_id": source_id,
+        "root_title": root_title,
+        "bundle_digest": expected_digest,
+    }
+
+
 def initial_batch_index(manifest: dict[str, Any]) -> dict[str, Any]:
     manifest_sha = sha256_bytes(json_bytes(manifest))
     return {
@@ -184,14 +317,137 @@ def initial_batch_index(manifest: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def extract_checklist_specs(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    specs = [checklist_node("run.freeze", "Freeze the complete Stage 1 input batch.")]
+    verified_nodes: list[str] = []
+    for design in manifest["designs"]:
+        design_key = design["image_id"]
+        prepare_node = f"design:{design_key}.prepare"
+        draft_node = f"design:{design_key}.semantic-draft"
+        bindings_node = f"design:{design_key}.bindings"
+        review_node = f"design:{design_key}.semantic-review"
+        verify_node = f"design:{design_key}.verify"
+        specs.extend(
+            [
+                checklist_node(prepare_node, f"Acquire and prepare {design_key}.", ["run.freeze"]),
+                checklist_node(draft_node, f"Record the semantic draft for {design_key}.", [prepare_node]),
+                checklist_node(bindings_node, f"Bind every source node for {design_key}.", [draft_node]),
+                checklist_node(review_node, f"Pass the complete semantic review for {design_key}.", [bindings_node]),
+                checklist_node(verify_node, f"Verify the frozen extract for {design_key}.", [review_node]),
+            ]
+        )
+        verified_nodes.append(verify_node)
+    specs.append(
+        checklist_node(
+            "run.verify",
+            "Verify every frozen design and finish the Stage 1 batch.",
+            verified_nodes,
+        )
+    )
+    return specs
+
+
+def extract_checklist_context(project_root: Path) -> tuple[Path, dict[str, Any], str] | None:
+    extract_root = project_root / ".icp" / "extract"
+    manifest_path = extract_root / "run-manifest.json"
+    if not manifest_path.is_file():
+        return None
+    manifest = read_json(manifest_path)
+    if not isinstance(manifest, dict):
+        raise ContractError("invalid_stage", "extract run manifest is invalid")
+    return extract_root / "checklist.json", manifest, sha256_bytes(json_bytes(manifest))
+
+
+def checklist_design_node(project_root: Path, design_url: str, suffix: str) -> str | None:
+    context = extract_checklist_context(project_root)
+    if context is None:
+        return None
+    _path, manifest, _input_sha = context
+    design = next(
+        (item for item in manifest["designs"] if item["design_url"] == design_url),
+        None,
+    )
+    if design is None:
+        raise ContractError("batch_drift", "design URL is absent from the Stage 1 checklist")
+    return f"design:{design['image_id']}.{suffix}"
+
+
+def mark_extract_checklist(project_root: Path, node_id: str | None, evidence_sha256: str) -> None:
+    if node_id is None:
+        return
+    context = extract_checklist_context(project_root)
+    if context is None:
+        return
+    path, manifest, input_sha = context
+    try:
+        complete_checklist_node(
+            path,
+            stage="extract",
+            input_sha256=input_sha,
+            nodes=extract_checklist_specs(manifest),
+            node_id=node_id,
+            evidence_sha256=evidence_sha256,
+        )
+    except ChecklistError as exc:
+        raise ContractError(exc.code, exc.message) from exc
+
+
+def require_extract_checklist_node(project_root: Path, node_id: str | None) -> None:
+    if node_id is None:
+        return
+    context = extract_checklist_context(project_root)
+    if context is None:
+        return
+    path, manifest, input_sha = context
+    try:
+        require_checklist_node_ready(
+            path,
+            stage="extract",
+            input_sha256=input_sha,
+            nodes=extract_checklist_specs(manifest),
+            node_id=node_id,
+        )
+    except ChecklistError as exc:
+        raise ContractError(exc.code, exc.message) from exc
+
+
+def require_extract_checklist(project_root: Path, *, exclude: tuple[str, ...] = ()) -> None:
+    context = extract_checklist_context(project_root)
+    if context is None:
+        raise ContractError("checklist_missing", "Stage 1 run checklist is missing")
+    path, manifest, input_sha = context
+    try:
+        require_checklist_complete(
+            path,
+            stage="extract",
+            input_sha256=input_sha,
+            nodes=extract_checklist_specs(manifest),
+            exclude=exclude,
+        )
+    except ChecklistError as exc:
+        message = (
+            "batch_incomplete; " + exc.message
+            if exc.code == "checklist_incomplete"
+            else exc.message
+        )
+        raise ContractError(exc.code, message) from exc
+
+
 def begin_run(args: argparse.Namespace) -> dict[str, Any]:
     project_root = Path(args.project_root).resolve()
     if not project_root.is_dir():
         raise ContractError("missing_project", f"project root is not a directory: {project_root}")
-    run_input = read_json(Path(args.urls_file).resolve())
+    source_bundle_info: dict[str, str] | None = None
+    if args.source_bundle is not None:
+        run_input = read_json(Path(args.source_bundle).resolve())
+        requested_designs, source_bundle_info = designs_from_source_bundle(run_input)
+    else:
+        run_input = read_json(Path(args.urls_file).resolve())
     if not isinstance(run_input, dict):
         raise ContractError("invalid_run_input", "run input must be an object")
-    if run_input.get("schema") == "icp.extract.run-input.v1":
+    if source_bundle_info is not None:
+        urls = [item["design_url"] for item in requested_designs]
+    elif run_input.get("schema") == "icp.extract.run-input.v1":
         if set(run_input) != {"schema", "design_urls"}:
             raise ContractError("invalid_run_input", "v1 run input requires schema and design_urls")
         urls = run_input.get("design_urls")
@@ -248,9 +504,28 @@ def begin_run(args: argparse.Namespace) -> dict[str, Any]:
         {**item, **parsed_design_identity(item["design_url"])}
         for item in requested_designs
     ]
+    source_artifact: dict[str, str] | None = None
+    if source_bundle_info is not None:
+        source_path = project_root / ".icp" / "source" / "source-bundle.json"
+        frozen_bytes = json_bytes(run_input)
+        if source_path.exists() and source_path.read_bytes() != frozen_bytes:
+            existing = read_json(source_path)
+            if existing != run_input:
+                raise ContractError(
+                    "source_bundle_drift",
+                    "the project already contains another frozen IOLE source bundle",
+                )
+        else:
+            atomic_write_json(source_path, run_input)
+        source_artifact = {
+            "path": ".icp/source/source-bundle.json",
+            "sha256": sha256_bytes(source_path.read_bytes()),
+            **source_bundle_info,
+        }
     manifest = {
         "schema": "icp.extract.run-manifest.v1",
         "run_input_sha256": sha256_bytes(json_bytes(run_input)),
+        "source_bundle": source_artifact,
         "design_count": len(designs),
         "designs": designs,
     }
@@ -277,6 +552,16 @@ def begin_run(args: argparse.Namespace) -> dict[str, Any]:
             "run_manifest_sha256"
         ]:
             raise ContractError("batch_drift", "index does not match run manifest")
+    try:
+        create_checklist(
+            extract_root / "checklist.json",
+            stage="extract",
+            input_sha256=sha256_bytes(json_bytes(manifest)),
+            nodes=extract_checklist_specs(manifest),
+            initially_completed=["run.freeze"],
+        )
+    except ChecklistError as exc:
+        raise ContractError(exc.code, exc.message) from exc
     return {
         "ok": True,
         "resumed": resumed,
@@ -598,6 +883,10 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
     project_root = Path(args.project_root).resolve()
     if not project_root.is_dir():
         raise ContractError("missing_project", f"project root is not a directory: {project_root}")
+    require_extract_checklist_node(
+        project_root,
+        checklist_design_node(project_root, args.design_url, "prepare"),
+    )
     acquisition_provenance: dict[str, Any] | None = None
     acquisition_evidence: dict[str, Any] | None = None
     if args.acquisition_dir:
@@ -760,6 +1049,11 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
                 "stage_result_sha256": state.get("stage_result_sha256"),
             },
         )
+        mark_extract_checklist(
+            project_root,
+            checklist_design_node(project_root, args.design_url, "prepare"),
+            state["source_manifest_sha256"],
+        )
         return {
             "ok": True,
             "resumed": True,
@@ -858,6 +1152,11 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
             "source_manifest_sha256": state["source_manifest_sha256"],
             "stage_result_sha256": None,
         },
+    )
+    mark_extract_checklist(
+        project_root,
+        checklist_design_node(project_root, args.design_url, "prepare"),
+        state["source_manifest_sha256"],
     )
 
     return {
@@ -1252,6 +1551,12 @@ def sync_stage_index(
 
 def record_draft(args: argparse.Namespace) -> dict[str, Any]:
     stage_dir, state = load_stage(args.project_root, args.design_name)
+    source_manifest = read_json(stage_dir / "source-manifest.json")
+    project_root = Path(args.project_root).resolve()
+    require_extract_checklist_node(
+        project_root,
+        checklist_design_node(project_root, source_manifest["design_url"], "semantic-draft"),
+    )
     draft = validate_semantic_draft(
         read_json(Path(args.draft).resolve()), state.get("source_manifest_sha256", "")
     )
@@ -1310,6 +1615,13 @@ def record_draft(args: argparse.Namespace) -> dict[str, Any]:
     atomic_write_json(stage_dir / "bindings.input.json", bindings_input)
     atomic_write_json(stage_dir / "state.json", next_state)
     sync_stage_index(args.project_root, stage_dir, next_state)
+    source_manifest = read_json(stage_dir / "source-manifest.json")
+    project_root = Path(args.project_root).resolve()
+    mark_extract_checklist(
+        project_root,
+        checklist_design_node(project_root, source_manifest["design_url"], "semantic-draft"),
+        draft_sha,
+    )
     return {
         "ok": True,
         "resumed": False,
@@ -1704,6 +2016,20 @@ def build_reverse_binding_evidence(
     nodes = facts["nodes"]
     blocks = {block["block_id"]: block for block in semantic_draft["blocks"]}
     evidence_nodes: list[dict[str, Any]] = []
+
+    def subtree_block_ids(root_id: str) -> list[str]:
+        ordered: list[str] = []
+
+        def walk(current_id: str) -> None:
+            block_id = assignments[current_id].get("block_id")
+            if isinstance(block_id, str) and block_id not in ordered:
+                ordered.append(block_id)
+            for child_id in nodes[current_id].get("child_ids", []):
+                walk(child_id)
+
+        walk(root_id)
+        return ordered
+
     for node_id in node_order:
         node = nodes[node_id]
         parent_id = node.get("parent_id")
@@ -1725,6 +2051,7 @@ def build_reverse_binding_evidence(
                     if isinstance(block_id, str)
                     else None
                 ),
+                "subtree_assigned_block_ids": subtree_block_ids(node_id),
             }
         )
     return {
@@ -1962,6 +2289,12 @@ def repair_packet(
 
 def record_bindings(args: argparse.Namespace) -> dict[str, Any]:
     stage_dir, state = load_stage(args.project_root, args.design_name)
+    source_manifest = read_json(stage_dir / "source-manifest.json")
+    project_root = Path(args.project_root).resolve()
+    require_extract_checklist_node(
+        project_root,
+        checklist_design_node(project_root, source_manifest["design_url"], "bindings"),
+    )
     if state.get("state") not in {"awaiting_bindings", "repair_required"}:
         raise ContractError(
             "invalid_transition", f"cannot record bindings while state={state.get('state')}"
@@ -2115,6 +2448,27 @@ def record_bindings(args: argparse.Namespace) -> dict[str, Any]:
                 }
                 for item in reverse_binding_evidence["nodes"]
             ],
+            "source_group_reviews": [
+                {
+                    "source_node_id": item["source_node"]["id"],
+                    "subtree_block_ids": item["subtree_assigned_block_ids"],
+                    "semantic_relation": "unreviewed",
+                    "visual_semantics_correct": False,
+                    "json_grouping_reconciled": False,
+                    "visual_evidence": [
+                        "TODO: inspect the rendered group boundary without treating JSON hierarchy as authority."
+                    ],
+                    "json_evidence": [
+                        "TODO: inspect this complete JSON group, its parent, children, names, types, and subtree Block projection."
+                    ],
+                    "rationale": [
+                        "TODO: reconcile the visual Block hypothesis with the JSON grouping evidence."
+                    ],
+                    "issues": ["TODO: decide whether the visual semantic grouping remains correct."],
+                }
+                for item in reverse_binding_evidence["nodes"]
+                if item["child_source_nodes"]
+            ],
             "cross_block_review": {
                 "relations_correct": False,
                 "reading_order_correct": False,
@@ -2139,6 +2493,13 @@ def record_bindings(args: argparse.Namespace) -> dict[str, Any]:
         atomic_write_json(stage_dir / "semantic-review.input.json", semantic_review_input)
     atomic_write_json(stage_dir / "state.json", next_state)
     sync_stage_index(args.project_root, stage_dir, next_state)
+    source_manifest = read_json(stage_dir / "source-manifest.json")
+    project_root = Path(args.project_root).resolve()
+    mark_extract_checklist(
+        project_root,
+        checklist_design_node(project_root, source_manifest["design_url"], "bindings"),
+        bindings_sha,
+    )
     return {
         "ok": True,
         "stage_dir": str(stage_dir),
@@ -2244,6 +2605,23 @@ SOURCE_NODE_REVIEW_FIELDS = {
     "evidence",
     "issues",
 }
+SOURCE_GROUP_REVIEW_FIELDS = {
+    "source_node_id",
+    "subtree_block_ids",
+    "semantic_relation",
+    "visual_semantics_correct",
+    "json_grouping_reconciled",
+    "visual_evidence",
+    "json_evidence",
+    "rationale",
+    "issues",
+}
+SOURCE_GROUP_RELATIONS = {
+    "matches_block",
+    "contains_blocks",
+    "part_of_block",
+    "technical_group",
+}
 CROSS_REVIEW_FIELDS = {
     "relations_correct",
     "reading_order_correct",
@@ -2289,6 +2667,7 @@ def validate_semantic_review(
         "decision",
         "block_reviews",
         "source_node_reviews",
+        "source_group_reviews",
         "cross_block_review",
     }
     if not isinstance(review, dict) or set(review) != expected_fields:
@@ -2435,6 +2814,91 @@ def validate_semantic_review(
             "every JSON source node must be reverse-reviewed exactly once in source order",
         )
 
+    expected_group_evidence = [
+        item for item in evidence_nodes if item.get("child_source_nodes")
+    ]
+    source_group_reviews = review.get("source_group_reviews")
+    if not isinstance(source_group_reviews, list):
+        raise ContractError(
+            "invalid_semantic_review", "source_group_reviews must be an array"
+        )
+    reviewed_group_ids: list[str] = []
+    for index, group_review in enumerate(source_group_reviews):
+        location = f"source_group_reviews[{index}]"
+        if (
+            not isinstance(group_review, dict)
+            or set(group_review) != SOURCE_GROUP_REVIEW_FIELDS
+        ):
+            raise ContractError(
+                "invalid_semantic_review",
+                f"{location} must contain exactly {sorted(SOURCE_GROUP_REVIEW_FIELDS)}",
+            )
+        source_node_id = require_non_empty_string(
+            group_review["source_node_id"], f"{location}.source_node_id"
+        )
+        if source_node_id in reviewed_group_ids:
+            raise ContractError(
+                "invalid_semantic_review", f"source group reviewed twice: {source_node_id}"
+            )
+        reviewed_group_ids.append(source_node_id)
+        expected_item = expected_group_evidence[index] if index < len(expected_group_evidence) else None
+        if (
+            expected_item is None
+            or expected_item["source_node"]["id"] != source_node_id
+            or group_review["subtree_block_ids"]
+            != expected_item["subtree_assigned_block_ids"]
+        ):
+            raise ContractError(
+                "invalid_semantic_review",
+                "every JSON source group must be reconciled exactly once in source order",
+            )
+        relation = group_review["semantic_relation"]
+        if relation not in SOURCE_GROUP_RELATIONS:
+            raise ContractError(
+                "invalid_semantic_review",
+                f"{location}.semantic_relation must be one of {sorted(SOURCE_GROUP_RELATIONS)}",
+            )
+        subtree_ids = group_review["subtree_block_ids"]
+        if not isinstance(subtree_ids, list) or any(
+            not isinstance(block_id, str) or not block_id for block_id in subtree_ids
+        ):
+            raise ContractError(
+                "invalid_semantic_review", f"{location}.subtree_block_ids is invalid"
+            )
+        if relation == "contains_blocks" and len(subtree_ids) < 2:
+            raise ContractError(
+                "invalid_semantic_review",
+                f"{location}.contains_blocks requires at least two subtree Blocks",
+            )
+        if relation in {"matches_block", "part_of_block"} and len(subtree_ids) != 1:
+            raise ContractError(
+                "invalid_semantic_review",
+                f"{location}.{relation} requires exactly one subtree Block",
+            )
+        for field in ("visual_semantics_correct", "json_grouping_reconciled"):
+            if not isinstance(group_review[field], bool):
+                raise ContractError(
+                    "invalid_semantic_review", f"{location}.{field} must be boolean"
+                )
+            flags.append(group_review[field])
+        for field in ("visual_evidence", "json_evidence", "rationale"):
+            values = validate_string_array(
+                group_review[field], f"{location}.{field}", True
+            )
+            reject_review_placeholders(values, f"{location}.{field}")
+        group_issues = validate_string_array(
+            group_review["issues"], f"{location}.issues", False
+        )
+        reject_review_placeholders(group_issues, f"{location}.issues")
+        issues.extend(group_issues)
+    if reviewed_group_ids != [
+        item["source_node"]["id"] for item in expected_group_evidence
+    ]:
+        raise ContractError(
+            "invalid_semantic_review",
+            "every JSON source group must be reconciled exactly once in source order",
+        )
+
     cross = review.get("cross_block_review")
     if not isinstance(cross, dict) or set(cross) != CROSS_REVIEW_FIELDS:
         raise ContractError(
@@ -2500,6 +2964,7 @@ def build_stage_result(
             "no_synthetic_source_ids": True,
             "semantic_blocks_reconstruct_complete_design_json": True,
             "reverse_json_semantic_audit": True,
+            "visual_json_group_reconciliation": True,
             "semantic_review_passed": True,
         },
         "artifacts": {
@@ -2533,6 +2998,12 @@ def build_stage_result(
 
 def record_review(args: argparse.Namespace) -> dict[str, Any]:
     stage_dir, state = load_stage(args.project_root, args.design_name)
+    source_manifest = read_json(stage_dir / "source-manifest.json")
+    project_root = Path(args.project_root).resolve()
+    require_extract_checklist_node(
+        project_root,
+        checklist_design_node(project_root, source_manifest["design_url"], "semantic-review"),
+    )
     if state.get("state") != "awaiting_semantic_review":
         raise ContractError(
             "invalid_transition", f"cannot record semantic review while state={state.get('state')}"
@@ -2576,6 +3047,13 @@ def record_review(args: argparse.Namespace) -> dict[str, Any]:
                 )
             )
         }
+        failed_source_group_reviews = {
+            item["source_node_id"]: item
+            for item in review["source_group_reviews"]
+            if item["issues"]
+            or not item["visual_semantics_correct"]
+            or not item["json_grouping_reconciled"]
+        }
         repair = {
             "schema": "icp.extract.semantic-repair.v1",
             "semantic_review_sha256": review_sha,
@@ -2598,6 +3076,26 @@ def record_review(args: argparse.Namespace) -> dict[str, Any]:
                 source_node_id: item["issues"]
                 for source_node_id, item in failed_source_node_reviews.items()
             },
+            "source_group_issues": {
+                source_node_id: item["issues"]
+                for source_node_id, item in failed_source_group_reviews.items()
+            },
+            "source_group_repair_packets": {
+                source_node_id: {
+                    "review": copy.deepcopy(item),
+                    "source_and_current_block": copy.deepcopy(
+                        reverse_evidence_by_id[source_node_id]
+                    ),
+                    "allowed_repairs": [
+                        "bind_to_existing_block",
+                        "split_semantic_block",
+                        "merge_semantic_blocks",
+                        "create_semantic_block",
+                        "fix_parent_child_relation",
+                    ],
+                }
+                for source_node_id, item in failed_source_group_reviews.items()
+            },
             "reverse_repair_packets": {
                 source_node_id: {
                     "review": copy.deepcopy(item),
@@ -2617,7 +3115,7 @@ def record_review(args: argparse.Namespace) -> dict[str, Any]:
                 for source_node_id, item in failed_source_node_reviews.items()
             },
             "cross_block_issues": review["cross_block_review"]["issues"],
-            "next_action": "give every reverse repair packet to the semantic model, revise semantic-draft.json, then record the complete bindings again",
+            "next_action": "give every node and source-group repair packet to the semantic model, revise semantic-draft.json, then record the complete bindings again",
         }
         atomic_write_json(stage_dir / "semantic-repair.json", repair)
         atomic_write_json(stage_dir / "state.json", next_state)
@@ -2650,6 +3148,12 @@ def record_review(args: argparse.Namespace) -> dict[str, Any]:
     atomic_write_json(stage_dir / "stage-result.json", stage_result)
     atomic_write_json(stage_dir / "state.json", next_state)
     sync_stage_index(args.project_root, stage_dir, next_state)
+    project_root = Path(args.project_root).resolve()
+    mark_extract_checklist(
+        project_root,
+        checklist_design_node(project_root, manifest["design_url"], "semantic-review"),
+        review_sha,
+    )
     return {
         "ok": True,
         "stage_dir": str(stage_dir),
@@ -2662,6 +3166,12 @@ def record_review(args: argparse.Namespace) -> dict[str, Any]:
 
 def verify_complete(args: argparse.Namespace) -> dict[str, Any]:
     stage_dir, state = load_stage(args.project_root, args.design_name)
+    source_manifest = read_json(stage_dir / "source-manifest.json")
+    project_root = Path(args.project_root).resolve()
+    require_extract_checklist_node(
+        project_root,
+        checklist_design_node(project_root, source_manifest["design_url"], "verify"),
+    )
     if state.get("state") != "complete":
         raise ContractError("stage_incomplete", f"extract state is {state.get('state')}")
     manifest, facts = verify_frozen_sources(stage_dir, state)
@@ -2702,6 +3212,12 @@ def verify_complete(args: argparse.Namespace) -> dict[str, Any]:
         raise ContractError("stage_drift", "stage result does not match live extract evidence")
     if state.get("stage_result_sha256") != expected_sha:
         raise ContractError("stage_drift", "state does not bind the current stage result")
+    project_root = Path(args.project_root).resolve()
+    mark_extract_checklist(
+        project_root,
+        checklist_design_node(project_root, manifest["design_url"], "verify"),
+        expected_sha,
+    )
     return {
         "ok": True,
         "complete": True,
@@ -2715,6 +3231,7 @@ def verify_complete(args: argparse.Namespace) -> dict[str, Any]:
 
 def verify_run(args: argparse.Namespace) -> dict[str, Any]:
     project_root = Path(args.project_root).resolve()
+    require_extract_checklist(project_root, exclude=("run.verify",))
     loaded = load_batch(project_root)
     if loaded is None:
         raise ContractError("batch_not_started", "extract batch has not been started")
@@ -2787,6 +3304,12 @@ def verify_run(args: argparse.Namespace) -> dict[str, Any]:
     }
     result_path = extract_root / "run-result.json"
     atomic_write_json(result_path, result)
+    mark_extract_checklist(
+        project_root,
+        "run.verify",
+        sha256_bytes(json_bytes(result)),
+    )
+    require_extract_checklist(project_root)
     return {
         "ok": True,
         "complete": True,
@@ -2802,7 +3325,9 @@ def build_parser() -> argparse.ArgumentParser:
         "begin-run", help="freeze the exact ordered Lanhu design URL batch"
     )
     begin_parser.add_argument("--project-root", required=True)
-    begin_parser.add_argument("--urls-file", required=True)
+    begin_input = begin_parser.add_mutually_exclusive_group(required=True)
+    begin_input.add_argument("--urls-file")
+    begin_input.add_argument("--source-bundle")
     begin_parser.set_defaults(handler=begin_run)
     prepare_parser = subparsers.add_parser("prepare", help="freeze extract inputs and facts")
     prepare_parser.add_argument("--project-root", required=True)

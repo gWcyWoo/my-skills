@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import json
 import fcntl
+import re
 import shutil
 import subprocess
 import sys
@@ -52,6 +53,21 @@ def canonical_digest(value: object) -> str:
             separators=(",", ":"),
         ).encode("utf-8")
     ).hexdigest()
+
+
+def refresh_iole_digests(bundle: dict) -> dict:
+    """Recompute the closure/bundle digest chain after legitimate fixture edits."""
+
+    closure = bundle["source_closure"]
+    analysis_sha = canonical_digest(closure["analysis"])
+    closure["review"]["analysis_sha256"] = analysis_sha
+    closure["analysis_sha256"] = analysis_sha
+    closure["review_sha256"] = canonical_digest(closure["review"])
+    closure.pop("closure_digest", None)
+    closure["closure_digest"] = canonical_digest(closure)
+    bundle.pop("bundle_digest", None)
+    bundle["bundle_digest"] = canonical_digest(bundle)
+    return bundle
 
 
 def run_command(script: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -120,12 +136,19 @@ class ComponentDesignV4CliTest(unittest.TestCase):
         design_b_scope: str = "modify",
         empty_interaction_for_design_b: bool = False,
         design_a_relation_kind: str = "navigation",
+        design_a_interaction_override: str | None = None,
+        design_a_api_override: str | None = None,
+        design_a_it_override: str | None = None,
+        design_a_e2e_override: str | None = None,
+        acceptance_order: tuple[str, ...] | None = None,
     ) -> Path:
         design_a_interaction = (
             "Help opens Design B as a modal."
             if design_a_relation_kind == "modal"
             else "Selecting the offer navigates to Design B."
         )
+        if design_a_interaction_override is not None:
+            design_a_interaction = design_a_interaction_override
         raw_rows = {
             "Design A": member_row(
                 "Design A",
@@ -133,7 +156,11 @@ class ComponentDesignV4CliTest(unittest.TestCase):
                 URL_A,
                 "Show the available withdrawal offer.",
                 design_a_interaction,
-                "Read the amount from the loan detail response.",
+                (
+                    "Read the amount from the loan detail response."
+                    if design_a_api_override is None
+                    else design_a_api_override
+                ),
             ),
             "Design B": member_row(
                 "Design B",
@@ -152,6 +179,10 @@ class ComponentDesignV4CliTest(unittest.TestCase):
             raw_rows["Design A"]["接口描述"] = " "
         if empty_interaction_for_design_b:
             raw_rows["Design B"]["交互描述"] = ""
+        if design_a_it_override is not None:
+            raw_rows["Design A"]["IT"] = design_a_it_override
+        if design_a_e2e_override is not None:
+            raw_rows["Design A"]["E2E"] = design_a_e2e_override
         if include_designless_context:
             raw_rows["Design A"]["交互描述"] = (
                 "Selecting the offer navigates to Design B. "
@@ -276,11 +307,23 @@ class ComponentDesignV4CliTest(unittest.TestCase):
         analysis_path = self.root / "source-analysis.json"
         catalog_path = self.root / "title-catalog.json"
         review_path = self.root / "source-closure-review.json"
-        bundle_path = self.root / "source-bundle.json"
+        bundle_path = self.project / ".icp" / "source" / "source-bundle.json"
         write_json(raw_path, raw_rows)
         write_json(analysis_path, analysis)
         write_json(catalog_path, title_catalog)
         write_json(review_path, closure_review)
+        mapping_path = IOLE_MAPPING
+        if acceptance_order is not None:
+            mapping = read_json(IOLE_MAPPING)
+            sections = {
+                section["prefix"]: section
+                for section in mapping["job"]["acceptance_sections"]
+            }
+            mapping["job"]["acceptance_sections"] = [
+                sections[prefix] for prefix in acceptance_order
+            ]
+            mapping_path = self.root / "role-mapping-v2.reordered.json"
+            write_json(mapping_path, mapping)
         result = run_command(
             IOLE_SCRIPT,
             "build-source-bundle",
@@ -293,10 +336,11 @@ class ComponentDesignV4CliTest(unittest.TestCase):
             "--closure-review",
             str(review_path),
             "--mapping",
-            str(IOLE_MAPPING),
+            str(mapping_path),
         )
         if result.returncode != 0:
             raise AssertionError(result.stdout + result.stderr)
+        bundle_path.parent.mkdir(parents=True, exist_ok=True)
         bundle_path.write_text(result.stdout, encoding="utf-8")
         return bundle_path
 
@@ -305,14 +349,144 @@ class ComponentDesignV4CliTest(unittest.TestCase):
             "begin",
             "--project-root",
             str(self.project),
-            "--source-bundle",
-            str(self.bundle_path),
         ]
         if project_catalog is not None:
             catalog_path = self.root / "project-component-catalog.json"
             write_json(catalog_path, project_catalog)
             args.extend(["--project-catalog", str(catalog_path)])
         return run_command(SCRIPT, *args)
+
+    def test_begin_reads_the_single_stage1_frozen_source_without_external_bundle(self) -> None:
+        frozen_path = self.project / ".icp" / "source" / "source-bundle.json"
+        write_json(frozen_path, read_json(self.bundle_path))
+
+        begun = run_command(
+            SCRIPT,
+            "begin",
+            "--project-root",
+            str(self.project),
+        )
+
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        state = read_json(self.stage_dir / "state.json")
+        self.assertEqual(
+            state["source_bundle_digest"],
+            read_json(frozen_path)["bundle_digest"],
+        )
+
+    def test_begin_requires_the_stage1_frozen_source(self) -> None:
+        (self.project / ".icp" / "source" / "source-bundle.json").unlink()
+
+        begun = run_command(
+            SCRIPT,
+            "begin",
+            "--project-root",
+            str(self.project),
+        )
+
+        self.assertEqual(begun.returncode, 2, begun.stdout + begun.stderr)
+        self.assertIn("missing_frozen_source", begun.stderr)
+
+    def test_begin_rejects_a_second_external_source_bundle(self) -> None:
+        external = self.root / "second-source-bundle.json"
+        write_json(external, read_json(self.bundle_path))
+
+        begun = run_command(
+            SCRIPT,
+            "begin",
+            "--project-root",
+            str(self.project),
+            "--source-bundle",
+            str(external),
+        )
+
+        self.assertNotEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        self.assertIn("unrecognized arguments: --source-bundle", begun.stderr)
+
+    def test_component_lock_exposes_a_closed_implementation_contract_without_raw_source(self) -> None:
+        begun = self.begin()
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        self.seal_all_pages()
+        recorded = self.record_abstraction(self.valid_abstraction_plan())
+        self.assertEqual(recorded.returncode, 0, recorded.stdout + recorded.stderr)
+        verified = self.verify()
+        self.assertEqual(verified.returncode, 0, verified.stdout + verified.stderr)
+
+        lock = read_json(self.stage_dir / "component-lock.json")
+        contract = lock["implementation_contract"]
+        forbidden_keys = {
+            "source_coverage",
+            "source_refs",
+            "source_ref",
+            "source_text",
+            "quote",
+            "row_data",
+            "source_contract",
+        }
+
+        def collect_keys(value: object) -> set[str]:
+            if isinstance(value, dict):
+                return set(value) | set().union(*(collect_keys(item) for item in value.values()))
+            if isinstance(value, list):
+                return set().union(*(collect_keys(item) for item in value)) if value else set()
+            return set()
+
+        self.assertFalse(forbidden_keys & collect_keys(contract))
+        self.assertEqual(
+            contract["source_identity"]["bundle_digest"],
+            read_json(self.bundle_path)["bundle_digest"],
+        )
+        self.assertTrue(contract["semantic_facts"])
+        self.assertIn("documented_integration_obligations", contract)
+
+    def test_it_obligations_follow_the_it_header_not_acceptance_position(self) -> None:
+        self.bundle_path = self.build_source_bundle(
+            design_a_it_override="IT verifies the selected offer is submitted.",
+            design_a_e2e_override="E2E verifies the whole application flow.",
+            acceptance_order=("E2E", "UT", "IT"),
+        )
+        begun = self.begin()
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        self.seal_all_pages()
+        recorded = self.record_abstraction(self.valid_abstraction_plan())
+        self.assertEqual(recorded.returncode, 0, recorded.stdout + recorded.stderr)
+        verified = self.verify()
+        self.assertEqual(verified.returncode, 0, verified.stdout + verified.stderr)
+
+        context = read_json(self.stage_dir / "business-context.json")
+        member = next(
+            item for item in context["members"] if item["title"] == "Design A"
+        )
+        it_clause_id = next(
+            clause["clause_id"]
+            for clause in member["clauses"]
+            if clause["label"] == "IT"
+        )
+        self.assertEqual(it_clause_id, "acceptance:2")
+        page_key = COMPONENT_DESIGN.page_key_for("Design A")
+        facts = read_json(
+            self.stage_dir / "page-component-facts" / f"{page_key}.json"
+        )
+        expected_it_fact_ids = {
+            fact["fact_id"]
+            for candidate in facts["candidates"]
+            for fact in candidate["facts"]
+            if any(
+                ref["clause_id"] == it_clause_id for ref in fact["source_refs"]
+            )
+        }
+        self.assertTrue(expected_it_fact_ids)
+
+        contract = read_json(self.stage_dir / "component-lock.json")[
+            "implementation_contract"
+        ]
+        actual_it_fact_ids = {
+            obligation["fact_id"]
+            for obligation in contract["documented_integration_obligations"]
+            if obligation["source_kind"] == "it_description"
+            and obligation["page_key"] == page_key
+        }
+        self.assertEqual(actual_it_fact_ids, expected_it_fact_ids)
 
     def historical_catalog(
         self,
@@ -377,6 +551,7 @@ class ComponentDesignV4CliTest(unittest.TestCase):
         )
         if not interaction_coverage["source_text"]:
             return facts
+        self.add_transition_result_facts(facts)
         facts_by_id = {
             fact["fact_id"]: fact
             for candidate in facts["candidates"]
@@ -397,7 +572,13 @@ class ComponentDesignV4CliTest(unittest.TestCase):
             }
             for fact_index, fact_id in enumerate(segment["fact_ids"], start=1):
                 fact = facts_by_id[fact_id]
-                if fact["kind"] not in {"condition", "state", "trigger", "behavior"}:
+                if fact["kind"] not in {
+                    "condition",
+                    "state",
+                    "trigger",
+                    "behavior",
+                    "result",
+                }:
                     continue
                 item = {
                     "item_id": (
@@ -408,6 +589,7 @@ class ComponentDesignV4CliTest(unittest.TestCase):
                     "state": None,
                     "trigger": None,
                     "behavior": None,
+                    "result": None,
                 }
                 item[fact["kind"]] = {
                     "fact_id": fact_id,
@@ -425,10 +607,506 @@ class ComponentDesignV4CliTest(unittest.TestCase):
                         "state": None,
                         "trigger": None,
                         "behavior": None,
+                        "result": None,
                     }
                 )
         facts["interaction_items"] = items
+        candidate_by_fact_id = {
+            fact["fact_id"]: candidate["candidate_id"]
+            for candidate in facts["candidates"]
+            for fact in candidate["facts"]
+        }
+        parts_by_field = {
+            field: [item[field] for item in items if item[field] is not None]
+            for field in ("condition", "state", "trigger", "behavior", "result")
+        }
+        graph_parts: dict[str, dict | None] = {}
+        graph_bindings: dict[str, list[str]] = {}
+        for field, parts in parts_by_field.items():
+            graph_parts[field] = (
+                None
+                if not parts
+                else {
+                    "fact_ids": [part["fact_id"] for part in parts],
+                    "inference_basis": [],
+                    **(
+                        {"kind": "local", "api_contract_id": None}
+                        if field == "behavior"
+                        else {}
+                    ),
+                    **({"outcomes": ["done"]} if field == "result" else {}),
+                }
+            )
+            graph_bindings[f"{field}_candidate_ids"] = list(
+                dict.fromkeys(
+                    candidate_by_fact_id[part["fact_id"]] for part in parts
+                )
+            )
+        graph_interactions = []
+        if any(graph_parts.values()):
+            if graph_parts["behavior"] is not None and graph_parts["trigger"] is None:
+                graph_parts["trigger"] = {
+                    "fact_ids": [],
+                    "inference_basis": [f"{facts['page_key']}:implicit-trigger"],
+                }
+                graph_bindings["trigger_candidate_ids"] = list(
+                    graph_bindings["behavior_candidate_ids"]
+                )
+            if graph_parts["trigger"] is not None and graph_parts["behavior"] is None:
+                graph_parts["behavior"] = {
+                    "fact_ids": [],
+                    "inference_basis": [f"{facts['page_key']}:implicit-behavior"],
+                    "kind": "local",
+                    "api_contract_id": None,
+                }
+                graph_bindings["behavior_candidate_ids"] = list(
+                    graph_bindings["trigger_candidate_ids"]
+                )
+            graph_interactions.append(
+                {
+                    "interaction_id": f"{facts['page_key']}-interaction",
+                    **graph_parts,
+                    "component_bindings": graph_bindings,
+                }
+            )
+        facts["interaction_graph"] = {
+            "schema": "icp.component-design.interaction-graph.v2",
+            "interactions": graph_interactions,
+            "edges": [],
+            "terminal_outcomes": [],
+        }
+        if facts.get("api_contracts") and graph_interactions:
+            behavior_interaction = next(
+                (
+                    interaction
+                    for interaction in graph_interactions
+                    if interaction["behavior"] is not None
+                ),
+                None,
+            )
+            if behavior_interaction is not None:
+                behavior_interaction["behavior"]["kind"] = "api_call"
+                behavior_interaction["behavior"]["api_contract_id"] = facts[
+                    "api_contracts"
+                ][0]["api_contract_id"]
+        if facts.get("api_contracts"):
+            return self.bind_first_api_contract(facts)
+        return self.close_result_outcomes(facts)
+
+    def transition_requirements_of(self, facts: dict) -> list[tuple[str, dict, str]]:
+        requirements: list[tuple[str, dict, str]] = []
+        for requirement in facts.get("navigation_requirements", []):
+            requirements.append(
+                (
+                    "navigation",
+                    requirement,
+                    requirement["navigation_requirement_id"],
+                )
+            )
+        for requirement in facts.get("presentation_requirements", []):
+            if requirement["relation_kind"] == "modal":
+                requirements.append(
+                    (
+                        "modal",
+                        requirement,
+                        requirement["presentation_requirement_id"],
+                    )
+                )
+        return requirements
+
+    def add_transition_result_facts(self, facts: dict) -> dict:
+        """Give every declared cross-page transition a source-backed result fact."""
+
+        requirements = self.transition_requirements_of(facts)
+        if not requirements:
+            return facts
+        interaction_coverage = next(
+            item
+            for item in facts["source_coverage"]
+            if item["clause_id"] == "page:interaction"
+        )
+        if not interaction_coverage["source_text"]:
+            return facts
+        segment = next(
+            (
+                segment
+                for segment in interaction_coverage["segments"]
+                if segment["disposition"] == "fact"
+            ),
+            None,
+        )
+        if segment is None:
+            return facts
+        content = facts["candidates"][-1]
+        block_refs = (
+            [{"design_name": facts["design_names"][0], "block_id": "content"}]
+            if facts.get("design_names")
+            else []
+        )
+        for index, (_kind, requirement, _requirement_id) in enumerate(
+            requirements, start=1
+        ):
+            fact_id = f"{facts['page_key']}-result-{index}"
+            if any(fact["fact_id"] == fact_id for fact in content["facts"]):
+                continue
+            content["facts"].append(
+                {
+                    "fact_id": fact_id,
+                    "evidence_class": "business_source",
+                    "kind": "result",
+                    "meaning": (
+                        f"Open {requirement['target_member_title']} from this page."
+                    ),
+                    "source_refs": [
+                        {
+                            "member_title": facts["member_title"],
+                            "clause_id": interaction_coverage["clause_id"],
+                            "source_sha256": interaction_coverage["source_sha256"],
+                            "start": segment["start"],
+                            "end": segment["end"],
+                            "quote": segment["quote"],
+                        }
+                    ],
+                    "block_refs": json.loads(json.dumps(block_refs)),
+                }
+            )
+            segment["fact_ids"].append(fact_id)
         return facts
+
+    def close_transition_edges(self, facts: dict) -> dict:
+        """Consume every declared navigation/modal requirement with one edge."""
+
+        requirements = self.transition_requirements_of(facts)
+        if not requirements:
+            return facts
+        self.add_transition_result_facts(facts)
+        graph = facts["interaction_graph"]
+        consumed = {
+            requirement_id
+            for edge in graph["edges"]
+            if edge["target"]["kind"] in {"navigation", "modal"}
+            for requirement_id in edge["target"]["requirement_ids"]
+        }
+        source = next(
+            (
+                item
+                for item in graph["interactions"]
+                if item.get("behavior") is not None
+            ),
+            None,
+        )
+        if source is None:
+            return facts
+        for index, (kind, requirement, requirement_id) in enumerate(
+            requirements, start=1
+        ):
+            if requirement_id in consumed:
+                continue
+            if source.get("result") is None:
+                source["result"] = {
+                    "fact_ids": [],
+                    "inference_basis": [
+                        f"{facts['page_key']}:{source['interaction_id']}:implicit-result"
+                    ],
+                    "outcomes": (
+                        ["success", "failure"]
+                        if source["behavior"].get("kind") == "api_call"
+                        else []
+                    ),
+                }
+                source["component_bindings"]["result_candidate_ids"] = list(
+                    source["component_bindings"].get("behavior_candidate_ids", [])
+                )
+            covering_fact_id = f"{facts['page_key']}-result-{index}"
+            if covering_fact_id not in source["result"]["fact_ids"]:
+                source["result"]["fact_ids"] = list(source["result"]["fact_ids"]) + [
+                    covering_fact_id
+                ]
+                owner = next(
+                    (
+                        candidate["candidate_id"]
+                        for candidate in facts["candidates"]
+                        for fact in candidate["facts"]
+                        if fact["fact_id"] == covering_fact_id
+                    ),
+                    None,
+                )
+                if (
+                    owner is not None
+                    and owner
+                    not in source["component_bindings"]["result_candidate_ids"]
+                ):
+                    source["component_bindings"]["result_candidate_ids"].append(owner)
+            outcome = "opened" if index == 1 else f"opened-{index}"
+            if outcome not in source["result"]["outcomes"]:
+                source["result"]["outcomes"] = list(source["result"]["outcomes"]) + [
+                    outcome
+                ]
+            graph["edges"].append(
+                {
+                    "from_interaction_id": source["interaction_id"],
+                    "outcome": outcome,
+                    "target": {
+                        "kind": kind,
+                        "page_key": requirement["target_page_key"],
+                        "design_name": requirement["target_member_title"],
+                        "requirement_ids": [requirement_id],
+                    },
+                }
+            )
+        return facts
+
+    def close_result_outcomes(self, facts: dict) -> dict:
+        """Every behavior gets a result whose declared outcomes resolve once."""
+
+        self.close_transition_edges(facts)
+        graph = facts["interaction_graph"]
+        resolved: dict[str, set[str]] = {}
+        for edge in graph["edges"]:
+            resolved.setdefault(edge["from_interaction_id"], set()).add(
+                edge["outcome"]
+            )
+        terminal_keys = {
+            (terminal["interaction_id"], terminal["outcome"])
+            for terminal in graph["terminal_outcomes"]
+        }
+        for interaction in graph["interactions"]:
+            behavior = interaction.get("behavior")
+            if behavior is None:
+                continue
+            if interaction.get("result") is None:
+                api = behavior.get("kind") == "api_call"
+                interaction["result"] = {
+                    "fact_ids": [],
+                    "inference_basis": [
+                        f"{facts['page_key']}:{interaction['interaction_id']}:implicit-result"
+                    ],
+                    "outcomes": ["success", "failure"] if api else ["done"],
+                }
+                interaction["component_bindings"]["result_candidate_ids"] = list(
+                    interaction["component_bindings"].get(
+                        "behavior_candidate_ids",
+                        interaction["component_bindings"].get(
+                            "trigger_candidate_ids", []
+                        ),
+                    )
+                )
+            for outcome in interaction["result"]["outcomes"]:
+                if outcome in resolved.get(interaction["interaction_id"], set()):
+                    continue
+                if (interaction["interaction_id"], outcome) in terminal_keys:
+                    continue
+                graph["terminal_outcomes"].append(
+                    {
+                        "interaction_id": interaction["interaction_id"],
+                        "outcome": outcome,
+                        "inference_basis": [
+                            f"{facts['page_key']}:{interaction['interaction_id']}:terminal-result"
+                        ],
+                    }
+                )
+                terminal_keys.add((interaction["interaction_id"], outcome))
+        return facts
+
+    def add_api_continuations(self, facts: dict, interaction: dict) -> None:
+        contract_id = interaction["behavior"]["api_contract_id"]
+        candidate_ids = list(
+            dict.fromkeys(
+                interaction["component_bindings"]["behavior_candidate_ids"]
+                + interaction["component_bindings"]["trigger_candidate_ids"]
+            )
+        )
+        for outcome, behavior_kind in (("success", "render"), ("failure", "present")):
+            continuation_id = f"{interaction['interaction_id']}-{outcome}"
+            if any(
+                item["interaction_id"] == continuation_id
+                for item in facts["interaction_graph"]["interactions"]
+            ):
+                continue
+            facts["interaction_graph"]["interactions"].append(
+                {
+                    "interaction_id": continuation_id,
+                    "condition": None,
+                    "state": None,
+                    "trigger": {
+                        "fact_ids": [],
+                        "inference_basis": [f"{contract_id}:{outcome}"],
+                    },
+                    "behavior": {
+                        "fact_ids": [],
+                        "inference_basis": [f"{contract_id}:{outcome}"],
+                        "kind": behavior_kind,
+                        "api_contract_id": None,
+                    },
+                    "result": {
+                        "fact_ids": [],
+                        "inference_basis": [f"{contract_id}:{outcome}"],
+                        "outcomes": ["done"],
+                    },
+                    "component_bindings": {
+                        "condition_candidate_ids": [],
+                        "state_candidate_ids": [],
+                        "trigger_candidate_ids": candidate_ids,
+                        "behavior_candidate_ids": candidate_ids,
+                        "result_candidate_ids": candidate_ids,
+                    },
+                }
+            )
+            facts["interaction_graph"]["terminal_outcomes"].append(
+                {
+                    "interaction_id": continuation_id,
+                    "outcome": "done",
+                    "inference_basis": [f"{contract_id}:{outcome}:terminal-result"],
+                }
+            )
+            facts["interaction_graph"]["edges"].append(
+                {
+                    "from_interaction_id": interaction["interaction_id"],
+                    "outcome": outcome,
+                    "target": {
+                        "kind": "interaction",
+                        "to_interaction_id": continuation_id,
+                    },
+                }
+            )
+
+    def bind_first_api_contract(self, facts: dict) -> dict:
+        if not facts["api_requirements"]:
+            return facts
+        requirement = facts["api_requirements"][0]
+        contract_id = f"{facts['page_key']}-api"
+        locator = requirement["locator"] or f"GET /{facts['page_key']}"
+        locator_match = re.fullmatch(
+            r"(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(.+)", locator
+        )
+        method = locator_match.group(1) if locator_match else "GET"
+        path = (
+            locator_match.group(2)
+            if locator_match and locator_match.group(2).startswith("/")
+            else f"/{facts['page_key']}"
+        )
+        numeric_locator = locator.split("/")
+        project_id = (
+            int(numeric_locator[0])
+            if len(numeric_locator) == 2 and all(part.isdigit() for part in numeric_locator)
+            else 101
+        )
+        endpoint_id = (
+            int(numeric_locator[-1])
+            if all(part.isdigit() for part in numeric_locator)
+            else 201
+        )
+        raw_contract = {
+            "openapi": "3.0.0",
+            "paths": {
+                path: {
+                    method.lower(): {"responses": {"200": {"description": "OK"}}}
+                }
+            },
+        }
+        facts["api_contracts"] = [
+            {
+                "api_contract_id": contract_id,
+                "requirement_ids": [requirement["requirement_id"]],
+                "locator": locator,
+                "apifox": {
+                    "project_id": project_id,
+                    "endpoint_id": endpoint_id,
+                    "acquired_by": "readEntityDetails",
+                    "raw_contract": raw_contract,
+                    "raw_sha256": canonical_digest(raw_contract),
+                },
+                "normalized": {
+                    "method": method,
+                    "path": path,
+                    "auth": None,
+                    "parameters": [],
+                    "request_body": None,
+                    "responses": [{"status": "200", "schema": {"type": "object"}}],
+                    "errors": [],
+                },
+            }
+        ]
+        interaction = next(
+            (
+                item
+                for item in facts["interaction_graph"]["interactions"]
+                if item["behavior"] is not None
+            ),
+            None,
+        )
+        if interaction is None:
+            candidate_id = facts["candidates"][-1]["candidate_id"]
+            interaction = {
+                "interaction_id": f"{facts['page_key']}-api-call",
+                "condition": None,
+                "state": None,
+                "trigger": {
+                    "fact_ids": [],
+                    "inference_basis": [requirement["requirement_id"]],
+                },
+                "behavior": {
+                    "fact_ids": [],
+                    "inference_basis": [requirement["requirement_id"]],
+                    "kind": "api_call",
+                    "api_contract_id": contract_id,
+                },
+                "result": None,
+                "component_bindings": {
+                    "condition_candidate_ids": [],
+                    "state_candidate_ids": [],
+                    "trigger_candidate_ids": [candidate_id],
+                    "behavior_candidate_ids": [candidate_id],
+                    "result_candidate_ids": [],
+                },
+            }
+            facts["interaction_graph"]["interactions"].append(interaction)
+        if interaction["trigger"] is None:
+            trigger_interaction = next(
+                (
+                    item
+                    for item in facts["interaction_graph"]["interactions"]
+                    if item is not interaction and item["trigger"] is not None
+                ),
+                None,
+            )
+            if trigger_interaction is None:
+                interaction["trigger"] = {
+                    "fact_ids": [],
+                    "inference_basis": [requirement["requirement_id"]],
+                }
+                interaction["component_bindings"]["trigger_candidate_ids"] = list(
+                    interaction["component_bindings"]["behavior_candidate_ids"]
+                )
+            else:
+                interaction["trigger"] = trigger_interaction["trigger"]
+                interaction["component_bindings"]["trigger_candidate_ids"] = (
+                    trigger_interaction["component_bindings"][
+                        "trigger_candidate_ids"
+                    ]
+                )
+                facts["interaction_graph"]["interactions"].remove(
+                    trigger_interaction
+                )
+        interaction["behavior"]["kind"] = "api_call"
+        interaction["behavior"]["api_contract_id"] = contract_id
+        stale_result = interaction.get("result")
+        if stale_result is not None and not stale_result.get("fact_ids"):
+            interaction["result"] = None
+            interaction["component_bindings"]["result_candidate_ids"] = []
+            facts["interaction_graph"]["terminal_outcomes"] = [
+                terminal
+                for terminal in facts["interaction_graph"]["terminal_outcomes"]
+                if terminal["interaction_id"] != interaction["interaction_id"]
+            ]
+        if interaction.get("result") is not None:
+            for api_outcome in ("success", "failure"):
+                if api_outcome not in interaction["result"]["outcomes"]:
+                    interaction["result"]["outcomes"] = list(
+                        interaction["result"]["outcomes"]
+                    ) + [api_outcome]
+        self.add_api_continuations(facts, interaction)
+        return self.close_result_outcomes(facts)
 
     def valid_page_facts(self, page: dict[str, str]) -> dict:
         template = read_json(Path(page["input_path"]))
@@ -479,7 +1157,7 @@ class ComponentDesignV4CliTest(unittest.TestCase):
                 else:
                     segments = []
                 coverage.append({**clause, "segments": segments})
-            return self.with_interaction_items({
+            return self.bind_first_api_contract(self.with_interaction_items({
                 **template,
                 "source_coverage": coverage,
                 "candidates": [
@@ -495,7 +1173,7 @@ class ComponentDesignV4CliTest(unittest.TestCase):
                     }
                 ],
                 "design_compositions": [],
-            })
+            }))
         design_name = template["design_names"][0]
         page_key = template["page_key"]
         shell_id = f"{page_key}-shell"
@@ -560,7 +1238,7 @@ class ComponentDesignV4CliTest(unittest.TestCase):
                     }
                 )
             coverage.append({**clause, "segments": segments})
-        return self.with_interaction_items({
+        return self.bind_first_api_contract(self.with_interaction_items({
             **template,
             "source_coverage": coverage,
             "candidates": [
@@ -611,10 +1289,10 @@ class ComponentDesignV4CliTest(unittest.TestCase):
                     ],
                 }
             ],
-        })
+        }))
 
-    def page_facts_v2(self, facts: dict) -> dict:
-        facts["schema"] = "icp.component-design.page-facts.v2"
+    def page_facts_v4(self, facts: dict) -> dict:
+        facts["schema"] = "icp.component-design.page-facts.v4"
         for candidate in facts["candidates"]:
             for fact in candidate["facts"]:
                 fact["evidence_class"] = "business_source"
@@ -643,6 +1321,237 @@ class ComponentDesignV4CliTest(unittest.TestCase):
         shell["facts"].append(fact)
         return fact
 
+    def api_contract_entry(self, facts: dict, requirement: dict, contract_id: str) -> dict:
+        locator = requirement["locator"] or f"GET /{facts['page_key']}"
+        locator_match = re.fullmatch(
+            r"(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(.+)", locator
+        )
+        method = locator_match.group(1) if locator_match else "GET"
+        path = (
+            locator_match.group(2)
+            if locator_match and locator_match.group(2).startswith("/")
+            else f"/{facts['page_key']}"
+        )
+        numeric_locator = locator.split("/")
+        project_id = (
+            int(numeric_locator[0])
+            if len(numeric_locator) == 2 and all(part.isdigit() for part in numeric_locator)
+            else 101
+        )
+        endpoint_id = (
+            int(numeric_locator[-1])
+            if all(part.isdigit() for part in numeric_locator)
+            else 201
+        )
+        raw_contract = {
+            "openapi": "3.0.0",
+            "paths": {
+                path: {
+                    method.lower(): {"responses": {"200": {"description": "OK"}}}
+                }
+            },
+        }
+        return {
+            "api_contract_id": contract_id,
+            "requirement_ids": [requirement["requirement_id"]],
+            "locator": locator,
+            "apifox": {
+                "project_id": project_id,
+                "endpoint_id": endpoint_id,
+                "acquired_by": "readEntityDetails",
+                "raw_contract": raw_contract,
+                "raw_sha256": canonical_digest(raw_contract),
+            },
+            "normalized": {
+                "method": method,
+                "path": path,
+                "auth": None,
+                "parameters": [],
+                "request_body": None,
+                "responses": [{"status": "200", "schema": {"type": "object"}}],
+                "errors": [],
+            },
+        }
+
+    def bind_two_api_contracts(self, facts: dict) -> dict:
+        if len(facts["api_requirements"]) < 2:
+            raise AssertionError("fixture needs two same-page API requirements")
+        facts = self.bind_first_api_contract(facts)
+        requirement = facts["api_requirements"][1]
+        second = self.api_contract_entry(
+            facts, requirement, f"{facts['page_key']}-api-2"
+        )
+        facts["api_contracts"].append(second)
+        candidate_id = facts["candidates"][-1]["candidate_id"]
+        interaction = {
+            "interaction_id": f"{facts['page_key']}-api-call-2",
+            "condition": None,
+            "state": None,
+            "trigger": {
+                "fact_ids": [],
+                "inference_basis": [requirement["requirement_id"]],
+            },
+            "behavior": {
+                "fact_ids": [],
+                "inference_basis": [requirement["requirement_id"]],
+                "kind": "api_call",
+                "api_contract_id": second["api_contract_id"],
+            },
+            "result": None,
+            "component_bindings": {
+                "condition_candidate_ids": [],
+                "state_candidate_ids": [],
+                "trigger_candidate_ids": [candidate_id],
+                "behavior_candidate_ids": [candidate_id],
+                "result_candidate_ids": [],
+            },
+        }
+        facts["interaction_graph"]["interactions"].append(interaction)
+        self.add_api_continuations(facts, interaction)
+        return self.close_result_outcomes(facts)
+
+    def record_design_a_with_two_contracts(
+        self, mutate
+    ) -> tuple[
+        subprocess.CompletedProcess[str],
+        "ComponentDesignV4CliTest",
+        dict,
+        list[dict],
+    ]:
+        nested = ComponentDesignV4CliTest(
+            methodName="test_begin_creates_page_fact_work_items_before_group_abstraction"
+        )
+        nested.setUp()
+        try:
+            nested.bundle_path = nested.build_source_bundle(
+                design_a_interaction_override=(
+                    "Selecting the offer navigates to Design B. API: GET /offers"
+                )
+            )
+            begun = nested.begin()
+            assert begun.returncode == 0, begun.stdout + begun.stderr
+            pages = json.loads(begun.stdout)["pages"]
+            design_a = next(
+                page for page in pages if page["member_title"] == "Design A"
+            )
+            facts = nested.bind_two_api_contracts(nested.valid_page_facts(design_a))
+            sealed = nested.acquire_page_contracts(design_a, facts)
+            assert sealed is None, sealed.stdout + sealed.stderr
+            mutate(facts)
+            return (
+                nested.record_page_draft(design_a, facts, acquire_contracts=False),
+                nested,
+                design_a,
+                pages,
+            )
+        except BaseException:
+            nested.tearDown()
+            raise
+
+    def test_page_api_contract_order_is_normalized_to_sealed_artifacts(self) -> None:
+        def reverse_declared(facts: dict) -> None:
+            facts["api_contracts"].reverse()
+
+        drafted, nested, design_a, pages = self.record_design_a_with_two_contracts(
+            reverse_declared
+        )
+        try:
+            self.assertEqual(drafted.returncode, 0, drafted.stdout + drafted.stderr)
+            page_key = design_a["page_key"]
+            for facts_name in (f"{page_key}.draft.json",):
+                frozen = read_json(
+                    nested.stage_dir / "page-component-facts" / facts_name
+                )
+                self.assertEqual(
+                    [item["api_contract_id"] for item in frozen["api_contracts"]],
+                    [f"{page_key}-api", f"{page_key}-api-2"],
+                )
+            reviewed = nested.record_page_review(design_a, nested.page_review(design_a))
+            self.assertEqual(reviewed.returncode, 0, reviewed.stdout + reviewed.stderr)
+            frozen = read_json(
+                nested.stage_dir / "page-component-facts" / f"{page_key}.json"
+            )
+            self.assertEqual(
+                [item["api_contract_id"] for item in frozen["api_contracts"]],
+                [f"{page_key}-api", f"{page_key}-api-2"],
+            )
+            for page in pages:
+                if page["member_title"] == "Design A":
+                    continue
+                recorded = nested.record_page(page, nested.valid_page_facts(page))
+                self.assertEqual(
+                    recorded.returncode, 0, recorded.stdout + recorded.stderr
+                )
+            recorded = nested.record_abstraction(nested.valid_abstraction_plan())
+            self.assertEqual(
+                recorded.returncode, 0, recorded.stdout + recorded.stderr
+            )
+            verified = nested.verify()
+            self.assertEqual(verified.returncode, 0, verified.stdout + verified.stderr)
+            lock = read_json(nested.stage_dir / "component-lock.json")
+            self.assertEqual(
+                [
+                    contract["api_contract_id"]
+                    for contract in lock["api_contracts"]
+                    if contract["page_key"] == page_key
+                ],
+                [f"{page_key}-api", f"{page_key}-api-2"],
+            )
+        finally:
+            nested.tearDown()
+
+    def test_page_api_contract_identity_rejects_duplicate_missing_and_changed(self) -> None:
+        def declare_duplicate(facts: dict) -> None:
+            first = facts["api_contracts"][0]
+            facts["api_contracts"] = [first, json.loads(json.dumps(first))]
+
+        drafted, nested, _design_a, _pages = self.record_design_a_with_two_contracts(
+            declare_duplicate
+        )
+        nested.tearDown()
+        self.assertNotEqual(drafted.returncode, 0)
+        self.assertIn(
+            "page API contracts must exactly equal the separately sealed Apifox artifacts",
+            drafted.stderr,
+        )
+        self.assertIn("duplicates=[", drafted.stderr)
+
+        def declare_missing(facts: dict) -> None:
+            facts["api_contracts"].pop()
+
+        drafted, nested, _design_a, _pages = self.record_design_a_with_two_contracts(
+            declare_missing
+        )
+        nested.tearDown()
+        self.assertNotEqual(drafted.returncode, 0)
+        self.assertIn(
+            "page API contracts must exactly equal the separately sealed Apifox artifacts",
+            drafted.stderr,
+        )
+        self.assertIn("missing=[", drafted.stderr)
+
+        def declare_unexpected(facts: dict) -> None:
+            clone = json.loads(json.dumps(facts["api_contracts"][0]))
+            clone["api_contract_id"] = "unknown-api-contract"
+            facts["api_contracts"].append(clone)
+
+        drafted, nested, _design_a, _pages = self.record_design_a_with_two_contracts(
+            declare_unexpected
+        )
+        nested.tearDown()
+        self.assertNotEqual(drafted.returncode, 0)
+        self.assertIn("unexpected=['unknown-api-contract']", drafted.stderr)
+
+        def change_payload(facts: dict) -> None:
+            facts["api_contracts"][1]["normalized"]["method"] = "POST"
+
+        drafted, nested, _design_a, _pages = self.record_design_a_with_two_contracts(
+            change_payload
+        )
+        nested.tearDown()
+        self.assertNotEqual(drafted.returncode, 0)
+        self.assertIn("page API contract payload changed", drafted.stderr)
+
     def record_page(
         self, page: dict[str, str], facts: dict
     ) -> subprocess.CompletedProcess[str]:
@@ -652,8 +1561,16 @@ class ComponentDesignV4CliTest(unittest.TestCase):
         return self.record_page_review(page, self.page_review(page))
 
     def record_page_draft(
-        self, page: dict[str, str], facts: dict
+        self,
+        page: dict[str, str],
+        facts: dict,
+        *,
+        acquire_contracts: bool = True,
     ) -> subprocess.CompletedProcess[str]:
+        if acquire_contracts:
+            acquired = self.acquire_page_contracts(page, facts)
+            if acquired is not None:
+                return acquired
         facts_path = self.root / f"{page['page_key']}.draft-input.json"
         write_json(facts_path, facts)
         return run_command(
@@ -666,6 +1583,28 @@ class ComponentDesignV4CliTest(unittest.TestCase):
             "--facts",
             str(facts_path),
         )
+
+    def acquire_page_contracts(
+        self, page: dict[str, str], facts: dict
+    ) -> subprocess.CompletedProcess[str] | None:
+        for index, contract in enumerate(facts["api_contracts"]):
+            contract_path = (
+                self.root / f"{page['page_key']}.api-contract-{index + 1}.json"
+            )
+            write_json(contract_path, contract)
+            acquired = run_command(
+                SCRIPT,
+                "record-api-contract",
+                "--project-root",
+                str(self.project),
+                "--page-key",
+                page["page_key"],
+                "--contract",
+                str(contract_path),
+            )
+            if acquired.returncode != 0:
+                return acquired
+        return None
 
     def page_review(self, page: dict[str, str], *, decision: str = "pass") -> dict:
         review = read_json(
@@ -690,6 +1629,9 @@ class ComponentDesignV4CliTest(unittest.TestCase):
         cross["all_visible_variation_roles_extracted"] = True
         cross["no_cross_page_semantic_leak"] = True
         cross["no_implementation_content"] = True
+        cross["interaction_graph_complete"] = True
+        cross["interaction_component_bindings_correct"] = True
+        cross["api_contracts_correct"] = True
         cross["evidence"] = [
             "All candidates and facts remain page-local semantic data without implementation content."
         ]
@@ -999,6 +1941,68 @@ class ComponentDesignV4CliTest(unittest.TestCase):
                     }
                 )
 
+    def add_presentation_usages(self, plan: dict) -> dict:
+        """Resolve every frozen modal requirement to final component usage."""
+
+        registry = read_json(self.stage_dir / "group-candidate-registry.json")
+        instance_by_candidate = {
+            candidate_id: instance
+            for instance in plan["component_instances"]
+            for candidate_id in instance["candidate_ids"]
+        }
+        for page in registry["pages"]:
+            for requirement in page["presentation_requirements"]:
+                source_ref = requirement["source_ref"]
+                matching_fact_ids: list[str] = []
+                matching_candidates: list[str] = []
+                for item in registry["candidates"]:
+                    if item["page_key"] != page["page_key"]:
+                        continue
+                    candidate_matches = [
+                        fact["fact_id"]
+                        for fact in item["candidate"]["facts"]
+                        if any(
+                            ref["clause_id"] == source_ref["clause_id"]
+                            and ref["source_sha256"] == source_ref["source_sha256"]
+                            and ref["start"] <= source_ref["start"]
+                            and ref["end"] >= source_ref["end"]
+                            for ref in fact["source_refs"]
+                        )
+                    ]
+                    if candidate_matches:
+                        matching_candidates.append(item["candidate_id"])
+                        matching_fact_ids.extend(candidate_matches)
+                source_instance = instance_by_candidate[matching_candidates[0]]
+                target_page = next(
+                    item
+                    for item in registry["pages"]
+                    if item["page_key"] == requirement["target_page_key"]
+                )
+                target_instance = instance_by_candidate[
+                    target_page["root_candidate_ids"][0]
+                ]
+                evidence = {
+                    "presentation_requirement_id": requirement[
+                        "presentation_requirement_id"
+                    ],
+                    "source_page_key": page["page_key"],
+                    "source_member_title": page["member_title"],
+                    "host_instance_id": source_instance["instance_id"],
+                    "source_fact_ids": matching_fact_ids,
+                    "target_page_key": requirement["target_page_key"],
+                    "target_member_title": requirement["target_member_title"],
+                    "target_instance_id": target_instance["instance_id"],
+                    "target_component_id": target_instance["component_id"],
+                    "presentation_mode": requirement["relation_kind"],
+                }
+                plan["presentation_usages"].append(
+                    {
+                        "usage_id": "usage-" + canonical_digest(evidence)[:20],
+                        **evidence,
+                    }
+                )
+        return plan
+
     def record_abstraction(self, plan: dict) -> subprocess.CompletedProcess[str]:
         plan_path = self.root / "abstraction-plan.json"
         write_json(plan_path, plan)
@@ -1098,7 +2102,7 @@ class ComponentDesignV4CliTest(unittest.TestCase):
         self.assertEqual(snapshot["components"], [])
         for page in payload["pages"]:
             template = read_json(Path(page["input_path"]))
-            self.assertEqual(template["schema"], "icp.component-design.page-facts.v2")
+            self.assertEqual(template["schema"], "icp.component-design.page-facts.v4")
             self.assertEqual(template["page_key"], page["page_key"])
             self.assertEqual(template["member_title"], page["member_title"])
             self.assertTrue(template["source_coverage"])
@@ -1107,6 +2111,34 @@ class ComponentDesignV4CliTest(unittest.TestCase):
             for clause in template["source_coverage"]:
                 self.assertEqual(clause["segments"], [])
         self.assertFalse((self.stage_dir / "business-rules.input.json").exists())
+
+    def test_begin_freezes_a_complete_input_derived_component_stage_checklist(self) -> None:
+        result = self.begin()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        pages = json.loads(result.stdout)["pages"]
+
+        checklist = read_json(self.stage_dir / "checklist.json")
+        node_ids = [item["node_id"] for item in checklist["nodes"]]
+        expected = ["stage.begin"]
+        for page in pages:
+            page_key = page["page_key"]
+            page_input = read_json(Path(page["input_path"]))
+            if page_input["api_requirements"]:
+                expected.append(f"page:{page_key}.api-contracts")
+            expected.extend(
+                [
+                    f"page:{page_key}.facts",
+                    f"page:{page_key}.review",
+                ]
+            )
+        expected.extend(["group.abstraction", "stage.verify"])
+
+        self.assertEqual(checklist["stage"], "component-design")
+        self.assertEqual(node_ids, expected)
+        self.assertEqual(checklist["nodes"][0]["status"], "completed")
+        self.assertTrue(
+            all(item["status"] == "pending" for item in checklist["nodes"][1:])
+        )
 
     def test_iole_handoff_preserves_declared_columns_and_ignores_unowned_columns(self) -> None:
         raw_path = self.root / "raw-rows.json"
@@ -1232,7 +2264,7 @@ class ComponentDesignV4CliTest(unittest.TestCase):
 
         begun = self.begin()
         self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
-        frozen_bundle = read_json(self.stage_dir / "iole-source-bundle.json")
+        frozen_bundle = read_json(self.project / ".icp" / "source" / "source-bundle.json")
         frozen_by_title = {
             member["title"]: member for member in frozen_bundle["members"]
         }
@@ -1245,6 +2277,457 @@ class ComponentDesignV4CliTest(unittest.TestCase):
                     if column in expected_columns
                 },
             )
+
+    def begin_on_fresh_project(
+        self, bundle: dict
+    ) -> tuple[subprocess.CompletedProcess[str], "ComponentDesignV4CliTest"]:
+        """Run `begin` against an edited bundle on an untouched copy of the project."""
+
+        nested = ComponentDesignV4CliTest(
+            methodName="test_begin_creates_page_fact_work_items_before_group_abstraction"
+        )
+        nested.setUp()
+        write_json(nested.bundle_path, bundle)
+        return nested.begin(), nested
+
+    def test_row_data_key_order_is_not_a_source_contract(self) -> None:
+        bundle = read_json(self.bundle_path)
+        original_rows = {
+            member["title"]: dict(member["row_data"]) for member in bundle["members"]
+        }
+        for member in bundle["members"]:
+            member["row_data"] = dict(reversed(list(member["row_data"].items())))
+        self.assertNotEqual(
+            list(next(m for m in bundle["members"] if m["title"] == "Design A")["row_data"]),
+            bundle["row_data_columns"],
+        )
+        refresh_iole_digests(bundle)
+
+        begun, nested = self.begin_on_fresh_project(bundle)
+        try:
+            self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+            context = read_json(
+                nested.project / ".icp" / "component-design" / "business-context.json"
+            )
+            for member in context["members"]:
+                self.assertEqual(
+                    list(member["row_data"]), bundle["row_data_columns"]
+                )
+                self.assertEqual(member["row_data"], original_rows[member["title"]])
+        finally:
+            nested.tearDown()
+
+    def test_row_data_rejects_missing_unexpected_and_degraded_values(self) -> None:
+        base = read_json(self.bundle_path)
+
+        def design_a(edited: dict) -> dict:
+            return next(m for m in edited["members"] if m["title"] == "Design A")
+
+        missing = json.loads(json.dumps(base))
+        design_a(missing)["row_data"].pop("UT")
+        refresh_iole_digests(missing)
+        rejected, _ = self.begin_on_fresh_project(missing)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("row_data must match declared source columns", rejected.stderr)
+        self.assertIn("missing=['UT']", rejected.stderr)
+
+        unexpected = json.loads(json.dumps(base))
+        design_a(unexpected)["row_data"]["undeclared-column"] = "unexpected"
+        refresh_iole_digests(unexpected)
+        rejected, _ = self.begin_on_fresh_project(unexpected)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("row_data must match declared source columns", rejected.stderr)
+        self.assertIn("unexpected=['undeclared-column']", rejected.stderr)
+
+        empty_string = json.loads(json.dumps(base))
+        design_a(empty_string)["row_data"]["UT"] = ""
+        refresh_iole_digests(empty_string)
+        rejected, _ = self.begin_on_fresh_project(empty_string)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn(
+            "row_data values must be complete strings or null", rejected.stderr
+        )
+
+        lost_null = json.loads(json.dumps(base))
+        design_a(lost_null)["row_data"]["UT"] = 5
+        refresh_iole_digests(lost_null)
+        rejected, _ = self.begin_on_fresh_project(lost_null)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn(
+            "row_data values must be complete strings or null", rejected.stderr
+        )
+
+    def reorder_analysis_fields(self, bundle: dict) -> dict:
+        """Reverse each analysis row's field order and keep field reviews consistent."""
+
+        closure = bundle["source_closure"]
+        analysis = closure["analysis"]
+        review_by_key = {
+            (item["title"], item["column"]): item
+            for item in closure["review"]["field_reviews"]
+        }
+        for row in analysis["rows"]:
+            row["fields"].reverse()
+        closure["review"]["field_reviews"] = [
+            review_by_key[(row["title"], field["column"])]
+            for row in analysis["rows"]
+            for field in row["fields"]
+        ]
+        return bundle
+
+    def test_analyzed_column_coverage_is_order_independent(self) -> None:
+        bundle = self.reorder_analysis_fields(read_json(self.bundle_path))
+        first_row = bundle["source_closure"]["analysis"]["rows"][0]
+        self.assertNotEqual(
+            [field["column"] for field in first_row["fields"]],
+            [field["column"] for field in reversed(first_row["fields"])],
+        )
+        refresh_iole_digests(bundle)
+
+        begun, nested = self.begin_on_fresh_project(bundle)
+        try:
+            self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+            context = read_json(
+                nested.project / ".icp" / "component-design" / "business-context.json"
+            )
+            frozen_row = next(
+                row
+                for row in context["source_closure"]["analysis"]["rows"]
+                if row["title"] == "Design A"
+            )
+            self.assertEqual(
+                [field["column"] for field in frozen_row["fields"]],
+                [field["column"] for field in first_row["fields"]],
+            )
+        finally:
+            nested.tearDown()
+
+    def test_analyzed_column_rejects_duplicate_missing_and_unexpected_columns(self) -> None:
+        base = read_json(self.bundle_path)
+
+        duplicate = self.reorder_analysis_fields(json.loads(json.dumps(base)))
+        row = duplicate["source_closure"]["analysis"]["rows"][0]
+        row["fields"].append(dict(row["fields"][0]))
+        refresh_iole_digests(duplicate)
+        rejected, _ = self.begin_on_fresh_project(duplicate)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("IOLE source analysis column mismatch", rejected.stderr)
+        self.assertIn(f"duplicates=['{row['fields'][0]['column']}']", rejected.stderr)
+
+        missing = json.loads(json.dumps(base))
+        row = missing["source_closure"]["analysis"]["rows"][0]
+        dropped = row["fields"].pop()
+        reviews = missing["source_closure"]["review"]["field_reviews"]
+        reviews.remove(
+            next(
+                item
+                for item in reviews
+                if (item["title"], item["column"])
+                == (row["title"], dropped["column"])
+            )
+        )
+        refresh_iole_digests(missing)
+        rejected, _ = self.begin_on_fresh_project(missing)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn(
+            "IOLE source analysis does not cover every declared source column",
+            rejected.stderr,
+        )
+        self.assertIn(f"missing=['{dropped['column']}']", rejected.stderr)
+
+        unexpected = json.loads(json.dumps(base))
+        row = unexpected["source_closure"]["analysis"]["rows"][0]
+        row["fields"].append(
+            {
+                "column": "undeclared-column",
+                "source_sha256": hashlib.sha256(b"").hexdigest(),
+                "references": [],
+                "dismissals": [],
+            }
+        )
+        refresh_iole_digests(unexpected)
+        rejected, _ = self.begin_on_fresh_project(unexpected)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("IOLE source analysis column mismatch", rejected.stderr)
+        self.assertIn("undeclared-column", rejected.stderr)
+
+    def test_relation_topology_is_order_independent(self) -> None:
+        self.bundle_path = self.build_source_bundle(include_designless_context=True)
+        bundle = read_json(self.bundle_path)
+        self.assertEqual(len(bundle["relations"]), 2)
+        bundle["relations"].reverse()
+        refresh_iole_digests(bundle)
+
+        begun, nested = self.begin_on_fresh_project(bundle)
+        try:
+            self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+            context = read_json(
+                nested.project / ".icp" / "component-design" / "business-context.json"
+            )
+            self.assertEqual(
+                context["relations"],
+                [
+                    {"from_title": "Design A", "to_title": "Design B"},
+                    {"from_title": "Design A", "to_title": "Designless Context"},
+                ],
+            )
+        finally:
+            nested.tearDown()
+
+    def test_relation_normalization_does_not_follow_analysis_traversal_order(self) -> None:
+        self.bundle_path = self.build_source_bundle(include_designless_context=True)
+        bundle = read_json(self.bundle_path)
+        analysis_rows = bundle["source_closure"]["analysis"]["rows"]
+        analysis_rows.reverse()
+        for row in analysis_rows:
+            row["fields"].reverse()
+            for field in row["fields"]:
+                field["references"].reverse()
+        refresh_iole_digests(bundle)
+
+        begun, nested = self.begin_on_fresh_project(bundle)
+        try:
+            self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+            context = read_json(
+                nested.project / ".icp" / "component-design" / "business-context.json"
+            )
+            self.assertEqual(
+                context["relations"],
+                sorted(
+                    context["relations"],
+                    key=lambda item: (item["from_title"], item["to_title"]),
+                ),
+            )
+        finally:
+            nested.tearDown()
+
+    def test_relation_topology_rejects_duplicate_missing_and_unexpected_edges(self) -> None:
+        self.bundle_path = self.build_source_bundle(include_designless_context=True)
+        base = read_json(self.bundle_path)
+
+        duplicate = json.loads(json.dumps(base))
+        duplicate["relations"].append(dict(duplicate["relations"][0]))
+        refresh_iole_digests(duplicate)
+        rejected, _ = self.begin_on_fresh_project(duplicate)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("duplicate relation", rejected.stderr)
+
+        missing = json.loads(json.dumps(base))
+        missing["relations"].pop()
+        refresh_iole_digests(missing)
+        rejected, _ = self.begin_on_fresh_project(missing)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("IOLE relations do not reach members", rejected.stderr)
+
+        unexpected = json.loads(json.dumps(base))
+        unexpected["relations"].append(
+            {"from_title": "Design B", "to_title": "Design A"}
+        )
+        refresh_iole_digests(unexpected)
+        rejected, _ = self.begin_on_fresh_project(unexpected)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn(
+            "IOLE source closure relation projection mismatch", rejected.stderr
+        )
+        self.assertIn("unexpected=[('Design B', 'Design A')]", rejected.stderr)
+
+    def test_field_review_coverage_is_order_independent(self) -> None:
+        bundle = read_json(self.bundle_path)
+        reviews = bundle["source_closure"]["review"]["field_reviews"]
+        self.assertGreater(len(reviews), 1)
+        reviews.reverse()
+        refresh_iole_digests(bundle)
+
+        begun, nested = self.begin_on_fresh_project(bundle)
+        try:
+            self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        finally:
+            nested.tearDown()
+
+    def test_field_review_rejects_duplicate_and_missing_identities(self) -> None:
+        base = read_json(self.bundle_path)
+
+        duplicate = json.loads(json.dumps(base))
+        reviews = duplicate["source_closure"]["review"]["field_reviews"]
+        duplicated = dict(reviews[0])
+        dropped = reviews.pop()
+        reviews.append(duplicated)
+        refresh_iole_digests(duplicate)
+        rejected, _ = self.begin_on_fresh_project(duplicate)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn(
+            "IOLE source field review projection mismatch", rejected.stderr
+        )
+        self.assertIn("duplicates=[", rejected.stderr)
+        self.assertIn(
+            f"missing=[('{dropped['title']}', '{dropped['column']}', "
+            f"'{dropped['source_sha256']}')]",
+            rejected.stderr,
+        )
+
+    def record_modal_usage_on(
+        self, fx: "ComponentDesignV4CliTest", declared_transform=None
+    ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+        """Seal a modal fixture whose requirement matches two source facts."""
+
+        fx.bundle_path = fx.build_source_bundle(design_a_relation_kind="modal")
+        begun = fx.begin()
+        assert begun.returncode == 0, begun.stdout + begun.stderr
+        pages = json.loads(begun.stdout)["pages"]
+        design_a = next(page for page in pages if page["member_title"] == "Design A")
+        facts = fx.valid_page_facts(design_a)
+        interaction = next(
+            clause
+            for clause in facts["source_coverage"]
+            if clause["clause_id"] == "page:interaction"
+        )
+        text = interaction["source_text"]
+        extra_id = f"{facts['page_key']}-modal-usage-context"
+        content = facts["candidates"][1]
+        content["facts"].append(
+            {
+                "fact_id": extra_id,
+                "evidence_class": "business_source",
+                "kind": "responsibility",
+                "meaning": "The modal reference stays inside this page's content semantics.",
+                "source_refs": [
+                    {
+                        "member_title": facts["member_title"],
+                        "clause_id": interaction["clause_id"],
+                        "source_sha256": interaction["source_sha256"],
+                        "start": 0,
+                        "end": len(text),
+                        "quote": text,
+                    }
+                ],
+                "block_refs": [
+                    {"design_name": facts["design_names"][0], "block_id": "content"}
+                ],
+            }
+        )
+        interaction["segments"][0]["fact_ids"].append(extra_id)
+        recorded = fx.record_page(design_a, facts)
+        assert recorded.returncode == 0, recorded.stdout + recorded.stderr
+        for page in pages:
+            if page["member_title"] == "Design A":
+                continue
+            recorded = fx.record_page(page, fx.valid_page_facts(page))
+            assert recorded.returncode == 0, recorded.stdout + recorded.stderr
+        plan = fx.valid_abstraction_plan()
+        registry = read_json(fx.stage_dir / "group-candidate-registry.json")
+        requirement = next(
+            requirement
+            for page in registry["pages"]
+            if page["member_title"] == "Design A"
+            for requirement in page["presentation_requirements"]
+        )
+
+        def covers_requirement(source_ref: dict) -> bool:
+            return (
+                source_ref["clause_id"] == requirement["source_ref"]["clause_id"]
+                and source_ref["start"] <= requirement["source_ref"]["start"]
+                and source_ref["end"] >= requirement["source_ref"]["end"]
+            )
+
+        source_candidate = next(
+            item
+            for item in registry["candidates"]
+            if item["member_title"] == "Design A"
+            and any(
+                covers_requirement(source_ref)
+                for fact in item["candidate"]["facts"]
+                for source_ref in fact["source_refs"]
+            )
+        )
+        matching_fact_ids = [
+            fact["fact_id"]
+            for fact in source_candidate["candidate"]["facts"]
+            if any(
+                covers_requirement(source_ref)
+                for source_ref in fact["source_refs"]
+            )
+        ]
+        assert len(matching_fact_ids) == 3, matching_fact_ids
+        source_instance = next(
+            item
+            for item in plan["component_instances"]
+            if source_candidate["candidate_id"] in item["candidate_ids"]
+        )
+        target_page = next(
+            item for item in registry["pages"] if item["member_title"] == "Design B"
+        )
+        target_instance = next(
+            item
+            for item in plan["component_instances"]
+            if target_page["root_candidate_ids"][0] in item["candidate_ids"]
+        )
+        usage_evidence = {
+            "presentation_requirement_id": requirement["presentation_requirement_id"],
+            "source_page_key": COMPONENT_DESIGN.page_key_for("Design A"),
+            "source_member_title": "Design A",
+            "host_instance_id": source_instance["instance_id"],
+            "source_fact_ids": list(matching_fact_ids),
+            "target_page_key": requirement["target_page_key"],
+            "target_member_title": requirement["target_member_title"],
+            "target_instance_id": target_instance["instance_id"],
+            "target_component_id": target_instance["component_id"],
+            "presentation_mode": "modal",
+        }
+        declared_usage = dict(usage_evidence)
+        if declared_transform is not None:
+            declared_usage["source_fact_ids"] = list(
+                declared_transform(list(matching_fact_ids))
+            )
+        plan["presentation_usages"] = [
+            {
+                "usage_id": "usage-" + canonical_digest(usage_evidence)[:20],
+                **declared_usage,
+            }
+        ]
+        return fx.record_abstraction(plan), matching_fact_ids
+
+    def test_presentation_source_fact_coverage_is_order_independent(self) -> None:
+        recorded, matching = self.record_modal_usage_on(
+            self, declared_transform=lambda ids: list(reversed(ids))
+        )
+
+        self.assertEqual(recorded.returncode, 0, recorded.stdout + recorded.stderr)
+        verified = self.verify()
+        self.assertEqual(verified.returncode, 0, verified.stdout + verified.stderr)
+        lock = read_json(self.stage_dir / "component-lock.json")
+        self.assertEqual(len(lock["presentation_usages"]), 1)
+        self.assertEqual(
+            lock["presentation_usages"][0]["source_fact_ids"], matching
+        )
+
+    def test_presentation_source_fact_rejects_duplicate_missing_and_unexpected(self) -> None:
+        def run(declared_transform) -> str:
+            nested = ComponentDesignV4CliTest(
+                methodName="test_begin_creates_page_fact_work_items_before_group_abstraction"
+            )
+            nested.setUp()
+            try:
+                recorded, _matching = self.record_modal_usage_on(
+                    nested, declared_transform=declared_transform
+                )
+                return recorded.stderr
+            finally:
+                nested.tearDown()
+
+        duplicated = run(lambda ids: [ids[0], ids[0]])
+        self.assertIn("invalid_contract", duplicated)
+        self.assertIn(
+            "source_fact_ids must not contain duplicates", duplicated
+        )
+
+        missing = run(lambda ids: ids[:1])
+        self.assertIn("presentation_usage_invalid", missing)
+        self.assertIn("does not bind every exact source fact", missing)
+        self.assertIn("missing=[", missing)
+
+        unexpected = run(lambda ids: [*ids, "unexpected-fact"])
+        self.assertIn("presentation_usage_invalid", unexpected)
+        self.assertIn("unexpected=['unexpected-fact']", unexpected)
 
     def test_designless_context_with_business_data_gets_a_source_only_work_item(self) -> None:
         self.bundle_path = self.build_source_bundle(include_designless_context=True)
@@ -1416,6 +2899,7 @@ class ComponentDesignV4CliTest(unittest.TestCase):
                     else None
                 ),
                 "change_scope": member["change_scope"],
+                "route": member["route"],
                 "design_names": [
                     state["design_name"] for state in member["design_states"]
                 ],
@@ -1616,7 +3100,10 @@ class ComponentDesignV4CliTest(unittest.TestCase):
         facts_paths = []
         for page in pages:
             path = self.root / f"{page['page_key']}.concurrent-facts.json"
-            write_json(path, self.valid_page_facts(page))
+            facts = self.valid_page_facts(page)
+            acquired = self.acquire_page_contracts(page, facts)
+            self.assertIsNone(acquired, acquired.stderr if acquired else "")
+            write_json(path, facts)
             facts_paths.append(path)
 
         lock_path = self.stage_dir / ".write.lock"
@@ -1911,7 +3398,7 @@ class ComponentDesignV4CliTest(unittest.TestCase):
         )
         self.assertEqual(
             [item["kind"] for item in interaction_review["linked_facts"]],
-            ["behavior", "state"],
+            ["behavior", "result", "state"],
         )
         sealed = self.record_page_review(page, self.page_review(page))
         self.assertEqual(sealed.returncode, 0, sealed.stdout + sealed.stderr)
@@ -1942,7 +3429,13 @@ class ComponentDesignV4CliTest(unittest.TestCase):
                     "fact_id": interaction_fact["fact_id"],
                     "meaning": interaction_fact["meaning"],
                 },
-            }
+                "result": None,
+            },
+            *[
+                item
+                for item in facts["interaction_items"]
+                if item["result"] is not None
+            ],
         ]
 
         drafted = self.record_page_draft(page, facts)
@@ -1957,7 +3450,1062 @@ class ComponentDesignV4CliTest(unittest.TestCase):
         self.assertIsNone(item["condition"])
         self.assertIsNone(item["state"])
         self.assertIsNone(item["trigger"])
+        self.assertIsNone(item["result"])
         self.assertEqual(item["behavior"]["fact_id"], interaction_fact["fact_id"])
+
+    def test_page_facts_accepts_a_component_bound_interaction_graph(self) -> None:
+        begun = self.begin()
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        page = json.loads(begun.stdout)["pages"][0]
+        facts = self.valid_page_facts(page)
+        interaction_item = next(
+            item for item in facts["interaction_items"] if item["behavior"] is not None
+        )
+        behavior_fact_id = interaction_item["behavior"]["fact_id"]
+        api_contract_id = facts["api_contracts"][0]["api_contract_id"]
+        content_candidate_id = next(
+            candidate["candidate_id"]
+            for candidate in facts["candidates"]
+            if any(
+                fact["fact_id"] == behavior_fact_id for fact in candidate["facts"]
+            )
+        )
+        facts["interaction_graph"] = {
+            "schema": "icp.component-design.interaction-graph.v2",
+            "interactions": [
+                {
+                    "interaction_id": f"{facts['page_key']}-submit",
+                    "condition": None,
+                    "state": None,
+                    "trigger": {
+                        "fact_ids": [],
+                        "inference_basis": [facts["api_requirements"][0]["requirement_id"]],
+                    },
+                    "behavior": {
+                        "fact_ids": [behavior_fact_id],
+                        "inference_basis": [],
+                        "kind": "api_call",
+                        "api_contract_id": api_contract_id,
+                    },
+                    "result": None,
+                    "component_bindings": {
+                        "condition_candidate_ids": [],
+                        "state_candidate_ids": [],
+                        "trigger_candidate_ids": [content_candidate_id],
+                        "behavior_candidate_ids": [content_candidate_id],
+                        "result_candidate_ids": [],
+                    },
+                }
+            ],
+            "edges": [],
+            "terminal_outcomes": [],
+        }
+        self.add_api_continuations(
+            facts, facts["interaction_graph"]["interactions"][0]
+        )
+        self.close_result_outcomes(facts)
+
+        drafted = self.record_page_draft(page, facts)
+
+        self.assertEqual(drafted.returncode, 0, drafted.stdout + drafted.stderr)
+        normalized = read_json(
+            self.stage_dir
+            / "page-component-facts"
+            / f"{page['page_key']}.draft.json"
+        )
+        self.assertEqual(
+            normalized["interaction_graph"], facts["interaction_graph"]
+        )
+
+    def test_non_empty_interaction_description_requires_complete_interaction_graph(self) -> None:
+        begun = self.begin()
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        page = json.loads(begun.stdout)["pages"][0]
+        facts = self.valid_page_facts(page)
+        facts["interaction_graph"] = {
+            "schema": "icp.component-design.interaction-graph.v2",
+            "interactions": [],
+            "edges": [],
+            "terminal_outcomes": [],
+        }
+
+        drafted = self.record_page_draft(page, facts)
+
+        self.assertNotEqual(drafted.returncode, 0)
+        self.assertIn("interaction_graph_coverage", drafted.stderr)
+
+    def test_interface_description_is_projected_as_an_api_contract_requirement(self) -> None:
+        begun = self.begin()
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        page = json.loads(begun.stdout)["pages"][0]
+        template = read_json(Path(page["input_path"]))
+
+        self.assertEqual(len(template["api_requirements"]), 1)
+        requirement = template["api_requirements"][0]
+        self.assertEqual(requirement["source_kind"], "interface_description")
+        self.assertEqual(
+            requirement["source_ref"]["quote"],
+            "Read the amount from the loan detail response.",
+        )
+        self.assertIsNone(requirement["locator"])
+        self.assertEqual(template["api_contracts"], [])
+
+    def test_api_directive_in_interaction_description_is_a_technical_locator(self) -> None:
+        self.bundle_path = self.build_source_bundle(
+            design_a_interaction_override="点击刷新，API:GET /loans，然后显示 Design B 列表。",
+            design_a_api_override="",
+        )
+        begun = self.begin()
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        page = next(
+            item for item in json.loads(begun.stdout)["pages"]
+            if item["member_title"] == "Design A"
+        )
+        template = read_json(Path(page["input_path"]))
+
+        self.assertEqual(len(template["api_requirements"]), 1)
+        requirement = template["api_requirements"][0]
+        self.assertEqual(requirement["source_kind"], "api_directive")
+        self.assertEqual(requirement["locator"], "GET /loans")
+        self.assertEqual(requirement["source_ref"]["quote"], "API:GET /loans")
+
+    def test_api_directive_stops_before_quotes_and_following_prose(self) -> None:
+        self.bundle_path = self.build_source_bundle(
+            design_a_interaction_override=(
+                "页面加载，API：/auth/otp-requests“，完成后 "
+                "API: /auth/otp-requests请求成功后，校验 API:/auth/sessions“，"
+                "上传 API:/feedback/images\"上传，首页 API:/offers”接口，随后显示 Design B。"
+            ),
+            design_a_api_override="",
+        )
+        begun = self.begin()
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        page = next(
+            item for item in json.loads(begun.stdout)["pages"]
+            if item["member_title"] == "Design A"
+        )
+        template = read_json(Path(page["input_path"]))
+
+        self.assertEqual(
+            [item["locator"] for item in template["api_requirements"]],
+            [
+                "/auth/otp-requests",
+                "/auth/otp-requests",
+                "/auth/sessions",
+                "/feedback/images",
+                "/offers",
+            ],
+        )
+        self.assertEqual(
+            [item["source_ref"]["quote"] for item in template["api_requirements"]],
+            [
+                "API：/auth/otp-requests",
+                "API: /auth/otp-requests",
+                "API:/auth/sessions",
+                "API:/feedback/images",
+                "API:/offers",
+            ],
+        )
+
+    def test_empty_interface_sources_create_no_api_requirement_or_contract(self) -> None:
+        self.bundle_path = self.build_source_bundle(
+            design_a_interaction_override="点击刷新，然后显示 Design B 列表。",
+            design_a_api_override="",
+        )
+        begun = self.begin()
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        page = next(
+            item for item in json.loads(begun.stdout)["pages"]
+            if item["member_title"] == "Design A"
+        )
+        template = read_json(Path(page["input_path"]))
+
+        self.assertEqual(template["api_requirements"], [])
+        self.assertEqual(template["api_contracts"], [])
+
+    def test_natural_language_after_api_colon_is_not_a_technical_locator(self) -> None:
+        self.bundle_path = self.build_source_bundle(
+            design_a_interaction_override=(
+                "不调用外部 API：请稍后处理，随后显示 Design B 列表。"
+            ),
+            design_a_api_override="",
+        )
+        begun = self.begin()
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        page = next(
+            item for item in json.loads(begun.stdout)["pages"]
+            if item["member_title"] == "Design A"
+        )
+        template = read_json(Path(page["input_path"]))
+
+        self.assertEqual(template["api_requirements"], [])
+
+    def test_api_directive_must_match_the_frozen_endpoint_shape(self) -> None:
+        self.bundle_path = self.build_source_bundle(
+            design_a_interaction_override=(
+                "点击刷新，API:GET /loans，然后显示 Design B 列表。"
+            ),
+            design_a_api_override="",
+        )
+        begun = self.begin()
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        page = next(
+            item for item in json.loads(begun.stdout)["pages"]
+            if item["member_title"] == "Design A"
+        )
+        facts = self.bind_first_api_contract(self.valid_page_facts(page))
+        contract = facts["api_contracts"][0]
+        contract["locator"] = "POST /audit"
+        contract["normalized"]["method"] = "POST"
+        contract["normalized"]["path"] = "/audit"
+
+        drafted = self.record_page_draft(page, facts)
+
+        self.assertNotEqual(drafted.returncode, 0)
+        self.assertIn("api_locator_mismatch", drafted.stderr)
+
+    def test_page_facts_cannot_author_an_unsealed_apifox_contract(self) -> None:
+        begun = self.begin()
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        page = json.loads(begun.stdout)["pages"][0]
+        facts = self.bind_first_api_contract(self.valid_page_facts(page))
+
+        drafted = self.record_page_draft(
+            page, facts, acquire_contracts=False
+        )
+
+        self.assertNotEqual(drafted.returncode, 0)
+        self.assertIn("api_acquisition_missing", drafted.stderr)
+
+    def test_apifox_acquisition_rejects_a_false_raw_hash(self) -> None:
+        begun = self.begin()
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        page = json.loads(begun.stdout)["pages"][0]
+        facts = self.bind_first_api_contract(self.valid_page_facts(page))
+        facts["api_contracts"][0]["apifox"]["raw_sha256"] = "0" * 64
+
+        acquired = self.acquire_page_contracts(page, facts)
+
+        self.assertIsNotNone(acquired)
+        self.assertNotEqual(acquired.returncode, 0)
+        self.assertIn("invalid_api_acquisition", acquired.stderr)
+
+    def test_every_api_requirement_needs_one_acquired_contract(self) -> None:
+        begun = self.begin()
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        page = json.loads(begun.stdout)["pages"][0]
+        facts = self.bind_first_api_contract(self.valid_page_facts(page))
+        api_interaction = next(
+            interaction
+            for interaction in facts["interaction_graph"]["interactions"]
+            if interaction["behavior"] is not None
+            and interaction["behavior"]["kind"] == "api_call"
+        )
+        api_interaction["behavior"]["kind"] = "local"
+        api_interaction["behavior"]["api_contract_id"] = None
+        facts["api_contracts"] = []
+
+        drafted = self.record_page_draft(page, facts)
+
+        self.assertNotEqual(drafted.returncode, 0)
+        self.assertIn("api_contract_coverage", drafted.stderr)
+
+    def test_every_acquired_contract_must_drive_an_api_interaction(self) -> None:
+        begun = self.begin()
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        page = json.loads(begun.stdout)["pages"][0]
+        facts = self.bind_first_api_contract(self.valid_page_facts(page))
+        api_interaction = next(
+            interaction
+            for interaction in facts["interaction_graph"]["interactions"]
+            if interaction["behavior"] is not None
+            and interaction["behavior"]["kind"] == "api_call"
+        )
+        api_interaction["behavior"]["kind"] = "local"
+        api_interaction["behavior"]["api_contract_id"] = None
+
+        drafted = self.record_page_draft(page, facts)
+
+        self.assertNotEqual(drafted.returncode, 0)
+        self.assertIn("api_interaction_coverage", drafted.stderr)
+
+    def test_api_call_interaction_requires_a_frozen_apifox_contract(self) -> None:
+        begun = self.begin()
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        page = json.loads(begun.stdout)["pages"][0]
+        facts = self.valid_page_facts(page)
+        api_interaction = next(
+            interaction
+            for interaction in facts["interaction_graph"]["interactions"]
+            if interaction["behavior"] is not None
+        )
+        api_interaction["behavior"]["kind"] = "api_call"
+        api_interaction["behavior"]["api_contract_id"] = "loan-detail"
+
+        drafted = self.record_page_draft(page, facts)
+
+        self.assertNotEqual(drafted.returncode, 0)
+        self.assertIn("api_contract_missing", drafted.stderr)
+
+    def test_api_call_interaction_requires_a_trigger_in_the_same_node(self) -> None:
+        begun = self.begin()
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        page = json.loads(begun.stdout)["pages"][0]
+        facts = self.bind_first_api_contract(self.valid_page_facts(page))
+        api_interaction = next(
+            interaction
+            for interaction in facts["interaction_graph"]["interactions"]
+            if interaction["behavior"] is not None
+            and interaction["behavior"]["kind"] == "api_call"
+        )
+        api_interaction["trigger"] = None
+        api_interaction["component_bindings"]["trigger_candidate_ids"] = []
+
+        drafted = self.record_page_draft(page, facts)
+
+        self.assertNotEqual(drafted.returncode, 0)
+        self.assertIn("api_interaction_trigger_missing", drafted.stderr)
+
+    def test_api_call_requires_success_and_failure_continuations(self) -> None:
+        begun = self.begin()
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        page = json.loads(begun.stdout)["pages"][0]
+        facts = self.bind_first_api_contract(self.valid_page_facts(page))
+        api_interaction = next(
+            interaction
+            for interaction in facts["interaction_graph"]["interactions"]
+            if interaction["behavior"] is not None
+            and interaction["behavior"]["kind"] == "api_call"
+        )
+        facts["interaction_graph"]["edges"] = [
+            edge
+            for edge in facts["interaction_graph"]["edges"]
+            if edge["from_interaction_id"] != api_interaction["interaction_id"]
+        ]
+
+        drafted = self.record_page_draft(page, facts)
+
+        self.assertNotEqual(drafted.returncode, 0)
+        self.assertIn("api_interaction_outcome_missing", drafted.stderr)
+
+    def test_api_outcome_may_be_explicitly_terminal_with_a_reason(self) -> None:
+        begun = self.begin()
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        page = json.loads(begun.stdout)["pages"][0]
+        facts = self.bind_first_api_contract(self.valid_page_facts(page))
+        api_interaction = next(
+            interaction
+            for interaction in facts["interaction_graph"]["interactions"]
+            if interaction["behavior"] is not None
+            and interaction["behavior"]["kind"] == "api_call"
+        )
+        facts["interaction_graph"]["edges"] = [
+            edge
+            for edge in facts["interaction_graph"]["edges"]
+            if not (
+                edge["from_interaction_id"] == api_interaction["interaction_id"]
+                and edge["outcome"] == "failure"
+            )
+        ]
+        facts["interaction_graph"]["terminal_outcomes"].append(
+            {
+                "interaction_id": api_interaction["interaction_id"],
+                "outcome": "failure",
+                "inference_basis": ["failure is intentionally terminal"],
+            }
+        )
+
+        drafted = self.record_page_draft(page, facts)
+
+        self.assertEqual(drafted.returncode, 0, drafted.stdout + drafted.stderr)
+
+    def test_trigger_only_interaction_is_not_a_causal_unit(self) -> None:
+        begun = self.begin()
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        page = json.loads(begun.stdout)["pages"][0]
+        facts = self.bind_first_api_contract(self.valid_page_facts(page))
+        candidate_id = facts["candidates"][0]["candidate_id"]
+        facts["interaction_graph"]["interactions"].append(
+            {
+                "interaction_id": f"{facts['page_key']}-orphan-trigger",
+                "condition": None,
+                "state": None,
+                "trigger": {
+                    "fact_ids": [],
+                    "inference_basis": ["orphan test trigger"],
+                },
+                "behavior": None,
+                "result": None,
+                "component_bindings": {
+                    "condition_candidate_ids": [],
+                    "state_candidate_ids": [],
+                    "trigger_candidate_ids": [candidate_id],
+                    "behavior_candidate_ids": [],
+                    "result_candidate_ids": [],
+                },
+            }
+        )
+
+        drafted = self.record_page_draft(page, facts)
+
+        self.assertNotEqual(drafted.returncode, 0)
+        self.assertIn("interaction_causality_missing", drafted.stderr)
+
+    def test_behavior_only_interaction_is_not_a_causal_unit(self) -> None:
+        begun = self.begin()
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        page = json.loads(begun.stdout)["pages"][0]
+        facts = self.bind_first_api_contract(self.valid_page_facts(page))
+        candidate_id = facts["candidates"][0]["candidate_id"]
+        facts["interaction_graph"]["interactions"].append(
+            {
+                "interaction_id": f"{facts['page_key']}-orphan-behavior",
+                "condition": None,
+                "state": None,
+                "trigger": None,
+                "behavior": {
+                    "fact_ids": [],
+                    "inference_basis": ["orphan test behavior"],
+                    "kind": "local",
+                    "api_contract_id": None,
+                },
+                "result": None,
+                "component_bindings": {
+                    "condition_candidate_ids": [],
+                    "state_candidate_ids": [],
+                    "trigger_candidate_ids": [],
+                    "behavior_candidate_ids": [candidate_id],
+                    "result_candidate_ids": [],
+                },
+            }
+        )
+
+        drafted = self.record_page_draft(page, facts)
+
+        self.assertNotEqual(drafted.returncode, 0)
+        self.assertIn("interaction_causality_missing", drafted.stderr)
+
+    def test_graph_edge_must_start_from_a_behavior_node(self) -> None:
+        begun = self.begin()
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        page = json.loads(begun.stdout)["pages"][0]
+        facts = self.bind_first_api_contract(self.valid_page_facts(page))
+        candidate_id = facts["candidates"][0]["candidate_id"]
+        source_id = f"{facts['page_key']}-state-source"
+        facts["interaction_graph"]["interactions"].append(
+            {
+                "interaction_id": source_id,
+                "condition": None,
+                "state": {
+                    "fact_ids": [],
+                    "inference_basis": ["state-only source"],
+                },
+                "trigger": None,
+                "behavior": None,
+                "result": None,
+                "component_bindings": {
+                    "condition_candidate_ids": [],
+                    "state_candidate_ids": [candidate_id],
+                    "trigger_candidate_ids": [],
+                    "behavior_candidate_ids": [],
+                    "result_candidate_ids": [],
+                },
+            }
+        )
+        target_id = facts["interaction_graph"]["interactions"][0]["interaction_id"]
+        facts["interaction_graph"]["edges"].append(
+            {
+                "from_interaction_id": source_id,
+                "outcome": "next",
+                "target": {"kind": "interaction", "to_interaction_id": target_id},
+            }
+        )
+
+        drafted = self.record_page_draft(page, facts)
+
+        self.assertNotEqual(drafted.returncode, 0)
+        self.assertIn("invalid_interaction_edge_causality", drafted.stderr)
+
+    def test_result_is_a_first_class_fact_graph_field_and_locked_outcome(self) -> None:
+        self.bundle_path = self.build_source_bundle(design_a_api_override="")
+        begun = self.begin()
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        pages = json.loads(begun.stdout)["pages"]
+        page_a = next(item for item in pages if item["member_title"] == "Design A")
+        page_b = next(item for item in pages if item["member_title"] == "Design B")
+        page_key = page_a["page_key"]
+        facts = self.valid_page_facts(page_a)
+        result_fact = next(
+            fact
+            for candidate in facts["candidates"]
+            for fact in candidate["facts"]
+            if fact["kind"] == "result"
+        )
+        navigation = facts["navigation_requirements"][0]
+        self.assertEqual(navigation["relation_kind"], "navigation")
+        interaction = facts["interaction_graph"]["interactions"][0]
+        interaction["behavior"]["kind"] = "navigate"
+        navigation_edge = next(
+            edge
+            for edge in facts["interaction_graph"]["edges"]
+            if edge["target"]["kind"] == "navigation"
+        )
+        self.assertEqual(
+            navigation_edge["target"]["requirement_ids"],
+            [navigation["navigation_requirement_id"]],
+        )
+
+        drafted = self.record_page_draft(page_a, facts)
+
+        self.assertEqual(drafted.returncode, 0, drafted.stdout + drafted.stderr)
+        normalized = read_json(
+            self.stage_dir / "page-component-facts" / f"{page_key}.draft.json"
+        )
+        normalized_interaction = normalized["interaction_graph"]["interactions"][0]
+        self.assertEqual(
+            normalized_interaction["result"]["fact_ids"], [result_fact["fact_id"]]
+        )
+        self.assertEqual(
+            normalized_interaction["component_bindings"]["result_candidate_ids"],
+            normalized_interaction["component_bindings"]["behavior_candidate_ids"],
+        )
+        self.assertEqual(
+            normalized["interaction_graph"]["edges"],
+            facts["interaction_graph"]["edges"],
+        )
+        self.assertTrue(
+            any(
+                item["result"] is not None
+                and item["result"]["fact_id"] == result_fact["fact_id"]
+                for item in normalized["interaction_items"]
+            )
+        )
+
+        resultless = json.loads(json.dumps(facts))
+        resultless["interaction_graph"]["interactions"][0]["result"] = None
+        resultless["interaction_graph"]["interactions"][0]["component_bindings"][
+            "result_candidate_ids"
+        ] = []
+        rejected = self.record_page_draft(page_a, resultless)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("interaction_result_missing", rejected.stderr)
+
+        orphan_result = json.loads(json.dumps(facts))
+        orphan_result["interaction_graph"]["interactions"][0]["behavior"] = None
+        orphan_result["interaction_graph"]["interactions"][0]["trigger"] = None
+        orphan_result["interaction_graph"]["interactions"][0]["component_bindings"][
+            "behavior_candidate_ids"
+        ] = []
+        orphan_result["interaction_graph"]["interactions"][0]["component_bindings"][
+            "trigger_candidate_ids"
+        ] = []
+        rejected = self.record_page_draft(page_a, orphan_result)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("interaction_causality_missing", rejected.stderr)
+
+        recorded = self.record_page(page_a, facts)
+        self.assertEqual(recorded.returncode, 0, recorded.stdout + recorded.stderr)
+        recorded = self.record_page(page_b, self.valid_page_facts(page_b))
+        self.assertEqual(recorded.returncode, 0, recorded.stdout + recorded.stderr)
+        recorded = self.record_abstraction(self.valid_abstraction_plan())
+        self.assertEqual(recorded.returncode, 0, recorded.stdout + recorded.stderr)
+
+        verified = self.verify()
+
+        self.assertEqual(verified.returncode, 0, verified.stdout + verified.stderr)
+        lock = read_json(self.stage_dir / "component-lock.json")
+        locked_page_a = next(
+            page for page in lock["pages"] if page["member_title"] == "Design A"
+        )
+        locked_page_b = next(
+            page for page in lock["pages"] if page["member_title"] == "Design B"
+        )
+        locked_graph = next(
+            graph
+            for graph in lock["interaction_graphs"]
+            if graph["member_title"] == "Design A"
+        )
+        locked_interaction = locked_graph["interactions"][0]
+        self.assertEqual(
+            locked_interaction["result"]["fact_ids"], [result_fact["fact_id"]]
+        )
+        self.assertTrue(
+            locked_interaction["component_bindings"]["result_component_instance_ids"]
+        )
+        self.assertNotIn(
+            "result_candidate_ids", locked_interaction["component_bindings"]
+        )
+        self.assertEqual(locked_graph["edges"], facts["interaction_graph"]["edges"])
+        self.assertTrue(
+            any(
+                item["result"] is not None
+                and item["result"]["fact_id"] == result_fact["fact_id"]
+                for item in locked_page_a["interaction_items"]
+            )
+        )
+        page_a_fact_ids = {
+            fact["fact_id"]
+            for candidate in locked_page_a["candidates"]
+            for fact in candidate["facts"]
+        }
+        page_b_fact_ids = {
+            fact["fact_id"]
+            for candidate in locked_page_b["candidates"]
+            for fact in candidate["facts"]
+        }
+        self.assertEqual(page_a_fact_ids & page_b_fact_ids, set())
+        for candidate in locked_page_b["candidates"]:
+            for fact in candidate["facts"]:
+                self.assertTrue(
+                    all(
+                        ref["design_name"] == "Design B" for ref in fact["block_refs"]
+                    )
+                )
+        locked_api_graph = next(
+            graph
+            for graph in lock["interaction_graphs"]
+            if graph["member_title"] == "Design B"
+        )
+        api_interaction = next(
+            item
+            for item in locked_api_graph["interactions"]
+            if item["behavior"] is not None and item["behavior"]["kind"] == "api_call"
+        )
+        self.assertEqual(
+            set(api_interaction["result"]["outcomes"]), {"success", "failure"}
+        )
+        resolved_outcomes = {
+            edge["outcome"]
+            for edge in locked_api_graph["edges"]
+            if edge["from_interaction_id"] == api_interaction["interaction_id"]
+        } | {
+            terminal["outcome"]
+            for terminal in locked_api_graph["terminal_outcomes"]
+            if terminal["interaction_id"] == api_interaction["interaction_id"]
+        }
+        self.assertTrue({"success", "failure"} <= resolved_outcomes)
+
+    def test_cross_page_modal_result_needs_exact_iole_relation_evidence(self) -> None:
+        self.bundle_path = self.build_source_bundle(
+            design_a_relation_kind="modal",
+            design_a_api_override="",
+        )
+        begun = self.begin()
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        pages = json.loads(begun.stdout)["pages"]
+        page_a = next(item for item in pages if item["member_title"] == "Design A")
+        page_b = next(item for item in pages if item["member_title"] == "Design B")
+        facts = self.valid_page_facts(page_a)
+        modal = facts["presentation_requirements"][0]
+        self.assertEqual(modal["relation_kind"], "modal")
+        interaction = facts["interaction_graph"]["interactions"][0]
+        interaction["behavior"]["kind"] = "present"
+        self.assertEqual(
+            [edge["target"]["kind"] for edge in facts["interaction_graph"]["edges"]],
+            ["modal"],
+        )
+        self.assertEqual(
+            facts["interaction_graph"]["edges"][0]["target"]["requirement_ids"],
+            [modal["presentation_requirement_id"]],
+        )
+
+        evidenceless = json.loads(json.dumps(facts))
+        evidenceless["interaction_graph"]["edges"][0]["target"]["requirement_ids"] = []
+        rejected = self.record_page_draft(page_a, evidenceless)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("invalid_interaction_edge_target", rejected.stderr)
+
+        unknown_requirement = json.loads(json.dumps(facts))
+        unknown_requirement["interaction_graph"]["edges"][0]["target"][
+            "requirement_ids"
+        ] = ["presentation-unknown000000000000000"]
+        rejected = self.record_page_draft(page_a, unknown_requirement)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("invalid_interaction_edge_target", rejected.stderr)
+
+        unknown_design = json.loads(json.dumps(facts))
+        unknown_design["interaction_graph"]["edges"][0]["target"][
+            "design_name"
+        ] = "Design B 2"
+        rejected = self.record_page_draft(page_a, unknown_design)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("invalid_interaction_edge_target", rejected.stderr)
+
+        unknown_kind = json.loads(json.dumps(facts))
+        unknown_kind["interaction_graph"]["edges"][0]["target"]["kind"] = "teleport"
+        rejected = self.record_page_draft(page_a, unknown_kind)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("invalid_interaction_edge_target", rejected.stderr)
+
+        recorded = self.record_page(page_a, facts)
+        self.assertEqual(recorded.returncode, 0, recorded.stdout + recorded.stderr)
+        recorded = self.record_page(page_b, self.valid_page_facts(page_b))
+        self.assertEqual(recorded.returncode, 0, recorded.stdout + recorded.stderr)
+        recorded = self.record_abstraction(
+            self.add_presentation_usages(self.valid_abstraction_plan())
+        )
+        self.assertEqual(recorded.returncode, 0, recorded.stdout + recorded.stderr)
+
+        verified = self.verify()
+
+        self.assertEqual(verified.returncode, 0, verified.stdout + verified.stderr)
+        lock = read_json(self.stage_dir / "component-lock.json")
+        locked_graph = next(
+            graph
+            for graph in lock["interaction_graphs"]
+            if graph["member_title"] == "Design A"
+        )
+        self.assertEqual(len(locked_graph["edges"]), 1)
+        edge = locked_graph["edges"][0]
+        self.assertEqual(edge["target"]["kind"], "modal")
+        self.assertEqual(
+            edge["target"]["page_key"], COMPONENT_DESIGN.page_key_for("Design B")
+        )
+        self.assertEqual(
+            edge["target"]["requirement_ids"],
+            [modal["presentation_requirement_id"]],
+        )
+        locked_page_a = next(
+            page for page in lock["pages"] if page["member_title"] == "Design A"
+        )
+        locked_page_b = next(
+            page for page in lock["pages"] if page["member_title"] == "Design B"
+        )
+        page_a_fact_ids = {
+            fact["fact_id"]
+            for candidate in locked_page_a["candidates"]
+            for fact in candidate["facts"]
+        }
+        page_b_fact_ids = {
+            fact["fact_id"]
+            for candidate in locked_page_b["candidates"]
+            for fact in candidate["facts"]
+        }
+        self.assertEqual(page_a_fact_ids & page_b_fact_ids, set())
+        for candidate in locked_page_b["candidates"]:
+            for fact in candidate["facts"]:
+                self.assertTrue(
+                    all(ref["design_name"] == "Design B" for ref in fact["block_refs"])
+                )
+
+        # A component/reference relation is never a runtime transition.
+        nested = ComponentDesignV4CliTest(
+            methodName="test_designless_context_with_business_data_gets_a_source_only_work_item"
+        )
+        nested.setUp()
+        try:
+            nested.bundle_path = nested.build_source_bundle(
+                design_a_relation_kind="component",
+                design_a_api_override="",
+            )
+            nested_begun = nested.begin()
+            self.assertEqual(
+                nested_begun.returncode, 0, nested_begun.stdout + nested_begun.stderr
+            )
+            nested_pages = json.loads(nested_begun.stdout)["pages"]
+            nested_page_a = next(
+                item
+                for item in nested_pages
+                if item["member_title"] == "Design A"
+            )
+            nested_facts = nested.valid_page_facts(nested_page_a)
+            component_requirement = nested_facts["presentation_requirements"][0]
+            self.assertEqual(component_requirement["relation_kind"], "component")
+            nested_interaction = nested_facts["interaction_graph"]["interactions"][0]
+            nested_interaction["behavior"]["kind"] = "present"
+            nested_interaction["result"]["outcomes"] = ["opened"]
+            nested_facts["interaction_graph"]["terminal_outcomes"] = []
+            nested_facts["interaction_graph"]["edges"].append(
+                {
+                    "from_interaction_id": nested_interaction["interaction_id"],
+                    "outcome": "opened",
+                    "target": {
+                        "kind": "modal",
+                        "page_key": component_requirement["target_page_key"],
+                        "design_name": "Design B",
+                        "requirement_ids": [
+                            component_requirement["presentation_requirement_id"]
+                        ],
+                    },
+                }
+            )
+
+            rejected = nested.record_page_draft(nested_page_a, nested_facts)
+
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertIn("invalid_interaction_edge_target", rejected.stderr)
+        finally:
+            nested.tearDown()
+
+    def test_every_behavior_result_outcome_is_resolved_exactly_once(self) -> None:
+        self.bundle_path = self.build_source_bundle(design_a_api_override="")
+        begun = self.begin()
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        pages = json.loads(begun.stdout)["pages"]
+        page_a = next(item for item in pages if item["member_title"] == "Design A")
+        page_b = next(item for item in pages if item["member_title"] == "Design B")
+        facts = self.valid_page_facts(page_a)
+        interaction = facts["interaction_graph"]["interactions"][0]
+        self.assertEqual(interaction["result"]["outcomes"], ["done", "opened"])
+        self.assertEqual(
+            [
+                (terminal["interaction_id"], terminal["outcome"])
+                for terminal in facts["interaction_graph"]["terminal_outcomes"]
+            ],
+            [(interaction["interaction_id"], "done")],
+        )
+        self.assertEqual(
+            [
+                (edge["from_interaction_id"], edge["outcome"])
+                for edge in facts["interaction_graph"]["edges"]
+            ],
+            [(interaction["interaction_id"], "opened")],
+        )
+
+        drafted = self.record_page_draft(page_a, json.loads(json.dumps(facts)))
+
+        self.assertEqual(drafted.returncode, 0, drafted.stdout + drafted.stderr)
+
+        terminal_removed = json.loads(json.dumps(facts))
+        terminal_removed["interaction_graph"]["terminal_outcomes"] = []
+        rejected = self.record_page_draft(page_a, terminal_removed)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("interaction_result_outcome_unresolved", rejected.stderr)
+
+        edge_removed = json.loads(json.dumps(facts))
+        edge_removed["interaction_graph"]["edges"] = []
+        rejected = self.record_page_draft(page_a, edge_removed)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("interaction_result_outcome_unresolved", rejected.stderr)
+
+        self_edge = json.loads(json.dumps(facts))
+        self_edge["interaction_graph"]["edges"].append(
+            {
+                "from_interaction_id": interaction["interaction_id"],
+                "outcome": "done",
+                "target": {
+                    "kind": "interaction",
+                    "to_interaction_id": interaction["interaction_id"],
+                },
+            }
+        )
+        rejected = self.record_page_draft(page_a, self_edge)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("invalid_interaction_graph", rejected.stderr)
+
+        undeclared = json.loads(json.dumps(facts))
+        undeclared["interaction_graph"]["terminal_outcomes"][0]["outcome"] = "finished"
+        rejected = self.record_page_draft(page_a, undeclared)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("invalid_interaction_terminal_outcome", rejected.stderr)
+
+        api_facts = self.valid_page_facts(page_b)
+        api_interaction = next(
+            item
+            for item in api_facts["interaction_graph"]["interactions"]
+            if item["behavior"] is not None and item["behavior"]["kind"] == "api_call"
+        )
+        self.assertEqual(
+            api_interaction["result"]["outcomes"], ["success", "failure"]
+        )
+        unresolved_api = json.loads(json.dumps(api_facts))
+        unresolved_api["interaction_graph"]["edges"] = [
+            edge
+            for edge in unresolved_api["interaction_graph"]["edges"]
+            if not (
+                edge["from_interaction_id"] == api_interaction["interaction_id"]
+                and edge["outcome"] == "success"
+            )
+        ]
+        rejected = self.record_page_draft(page_b, unresolved_api)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("api_interaction_outcome_missing", rejected.stderr)
+
+    def test_transition_requirements_are_consumed_exactly_once_with_covering_result_facts(self) -> None:
+        begun = self.begin()
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        pages = json.loads(begun.stdout)["pages"]
+        page_a = next(item for item in pages if item["member_title"] == "Design A")
+        page_b = next(item for item in pages if item["member_title"] == "Design B")
+        facts = self.valid_page_facts(page_a)
+        navigation = facts["navigation_requirements"][0]
+        interaction = facts["interaction_graph"]["interactions"][0]
+        navigation_edge = next(
+            edge
+            for edge in facts["interaction_graph"]["edges"]
+            if edge["target"]["kind"] == "navigation"
+        )
+        self.assertEqual(
+            navigation_edge["target"]["requirement_ids"],
+            [navigation["navigation_requirement_id"]],
+        )
+
+        omitted = json.loads(json.dumps(facts))
+        omitted["interaction_graph"]["edges"] = [
+            edge
+            for edge in omitted["interaction_graph"]["edges"]
+            if edge["target"]["kind"] != "navigation"
+        ]
+        omitted["interaction_graph"]["interactions"][0]["result"]["outcomes"] = [
+            outcome
+            for outcome in omitted["interaction_graph"]["interactions"][0]["result"][
+                "outcomes"
+            ]
+            if outcome != navigation_edge["outcome"]
+        ]
+        rejected = self.record_page_draft(page_a, omitted)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("interaction_transition_evidence_missing", rejected.stderr)
+
+        duplicated = json.loads(json.dumps(facts))
+        duplicated_interaction = duplicated["interaction_graph"]["interactions"][0]
+        duplicated_interaction["result"]["outcomes"] = list(
+            duplicated_interaction["result"]["outcomes"]
+        ) + ["opened-again"]
+        duplicated["interaction_graph"]["edges"].append(
+            {
+                "from_interaction_id": duplicated_interaction["interaction_id"],
+                "outcome": "opened-again",
+                "target": json.loads(json.dumps(navigation_edge["target"])),
+            }
+        )
+        rejected = self.record_page_draft(page_a, duplicated)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("interaction_transition_evidence_duplicate", rejected.stderr)
+
+        wrong_result = json.loads(json.dumps(facts))
+        wrong_result["interaction_graph"]["edges"] = [
+            edge
+            for edge in wrong_result["interaction_graph"]["edges"]
+            if edge["target"]["kind"] != "navigation"
+        ]
+        wrong_result["interaction_graph"]["interactions"][0]["result"]["outcomes"] = [
+            outcome
+            for outcome in wrong_result["interaction_graph"]["interactions"][0][
+                "result"
+            ]["outcomes"]
+            if outcome != navigation_edge["outcome"]
+        ]
+        continuation = next(
+            item
+            for item in wrong_result["interaction_graph"]["interactions"]
+            if item["interaction_id"].endswith("-success")
+        )
+        continuation["result"]["outcomes"] = list(
+            continuation["result"]["outcomes"]
+        ) + ["opened-elsewhere"]
+        wrong_result["interaction_graph"]["edges"].append(
+            {
+                "from_interaction_id": continuation["interaction_id"],
+                "outcome": "opened-elsewhere",
+                "target": json.loads(json.dumps(navigation_edge["target"])),
+            }
+        )
+        rejected = self.record_page_draft(page_a, wrong_result)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("interaction_transition_evidence_unbound", rejected.stderr)
+
+        recorded = self.record_page(page_a, facts)
+        self.assertEqual(recorded.returncode, 0, recorded.stdout + recorded.stderr)
+        recorded = self.record_page(page_b, self.valid_page_facts(page_b))
+        self.assertEqual(recorded.returncode, 0, recorded.stdout + recorded.stderr)
+        recorded = self.record_abstraction(self.valid_abstraction_plan())
+        self.assertEqual(recorded.returncode, 0, recorded.stdout + recorded.stderr)
+
+        verified = self.verify()
+
+        self.assertEqual(verified.returncode, 0, verified.stdout + verified.stderr)
+        lock = read_json(self.stage_dir / "component-lock.json")
+        locked_graph = next(
+            graph
+            for graph in lock["interaction_graphs"]
+            if graph["member_title"] == "Design A"
+        )
+        self.assertEqual(
+            locked_graph["transition_requirements"],
+            facts["navigation_requirements"],
+        )
+        locked_edge = next(
+            edge
+            for edge in locked_graph["edges"]
+            if edge["target"]["kind"] == "navigation"
+        )
+        self.assertEqual(
+            locked_edge["target"]["requirement_ids"],
+            [navigation["navigation_requirement_id"]],
+        )
+        self.assertIn(
+            navigation["source_ref"]["quote"],
+            locked_graph["transition_requirements"][0]["source_ref"]["quote"],
+        )
+
+    def test_component_lock_projects_api_interactions_to_final_component_instances(self) -> None:
+        begun = self.begin()
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        pages = json.loads(begun.stdout)["pages"]
+        for page in pages:
+            facts = self.bind_first_api_contract(self.valid_page_facts(page))
+            recorded = self.record_page(page, facts)
+            self.assertEqual(recorded.returncode, 0, recorded.stdout + recorded.stderr)
+        recorded = self.record_abstraction(self.valid_abstraction_plan())
+        self.assertEqual(recorded.returncode, 0, recorded.stdout + recorded.stderr)
+
+        verified = self.verify()
+
+        self.assertEqual(verified.returncode, 0, verified.stdout + verified.stderr)
+        lock = read_json(self.stage_dir / "component-lock.json")
+        self.assertEqual(lock["schema"], "icp.component-design.lock.v8")
+        self.assertEqual(len(lock["api_contracts"]), 2)
+        self.assertEqual(len(lock["interaction_graphs"]), 2)
+        for contract in lock["api_contracts"]:
+            artifact = contract["acquisition_artifact"]
+            artifact_path = self.stage_dir / artifact["path"]
+            self.assertTrue(artifact_path.is_file())
+            self.assertEqual(
+                hashlib.sha256(artifact_path.read_bytes()).hexdigest(),
+                artifact["sha256"],
+            )
+        for graph in lock["interaction_graphs"]:
+            api_interaction = next(
+                item
+                for item in graph["interactions"]
+                if item["behavior"] is not None
+                and item["behavior"]["kind"] == "api_call"
+            )
+            self.assertTrue(
+                api_interaction["component_bindings"][
+                    "behavior_component_instance_ids"
+                ]
+            )
+            self.assertNotIn(
+                "behavior_candidate_ids", api_interaction["component_bindings"]
+            )
+
+    def test_page_review_exposes_interaction_graph_and_api_contract_checks(self) -> None:
+        begun = self.begin()
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        page = json.loads(begun.stdout)["pages"][0]
+        facts = self.bind_first_api_contract(self.valid_page_facts(page))
+        drafted = self.record_page_draft(page, facts)
+        self.assertEqual(drafted.returncode, 0, drafted.stdout + drafted.stderr)
+
+        review = read_json(
+            self.stage_dir
+            / "page-component-facts"
+            / f"{page['page_key']}.review.input.json"
+        )
+
+        self.assertEqual(review["interaction_graph"], facts["interaction_graph"])
+        self.assertEqual(
+            review["navigation_requirements"], facts["navigation_requirements"]
+        )
+        self.assertEqual(review["api_contracts"], facts["api_contracts"])
+        self.assertEqual(review["schema"], "icp.component-design.page-review.v3")
+        self.assertFalse(review["cross_page_review"]["interaction_graph_complete"])
+        self.assertFalse(
+            review["cross_page_review"]["interaction_component_bindings_correct"]
+        )
+        self.assertFalse(review["cross_page_review"]["api_contracts_correct"])
 
     def test_interaction_item_rejects_a_missing_nullable_field(self) -> None:
         begun = self.begin()
@@ -1992,7 +4540,7 @@ class ComponentDesignV4CliTest(unittest.TestCase):
         self.assertNotEqual(drafted.returncode, 0)
         self.assertIn("invalid_interaction_item", drafted.stderr)
 
-    def test_interaction_description_can_split_into_all_four_atomic_item_types(self) -> None:
+    def test_interaction_description_can_split_into_all_five_atomic_item_types(self) -> None:
         begun = self.begin()
         self.assertEqual(begun.returncode, 0, begun.stderr)
         page = json.loads(begun.stdout)["pages"][0]
@@ -2036,16 +4584,16 @@ class ComponentDesignV4CliTest(unittest.TestCase):
             {
                 field
                 for item in normalized["interaction_items"]
-                for field in ("condition", "state", "trigger", "behavior")
+                for field in ("condition", "state", "trigger", "behavior", "result")
                 if item[field] is not None
             },
-            {"condition", "state", "trigger", "behavior"},
+            {"condition", "state", "trigger", "behavior", "result"},
         )
         self.assertTrue(
             all(
                 sum(
                     item[field] is not None
-                    for field in ("condition", "state", "trigger", "behavior")
+                    for field in ("condition", "state", "trigger", "behavior", "result")
                 )
                 == 1
                 for item in normalized["interaction_items"]
@@ -2091,6 +4639,7 @@ class ComponentDesignV4CliTest(unittest.TestCase):
                     "state": None,
                     "trigger": None,
                     "behavior": None,
+                    "result": None,
                 }
             ],
         )
@@ -2110,9 +4659,14 @@ class ComponentDesignV4CliTest(unittest.TestCase):
         self.assertIn("interaction_item_coverage", drafted.stderr)
 
     def test_non_interaction_meaning_in_interaction_text_uses_an_all_null_item(self) -> None:
+        self.bundle_path = self.build_source_bundle(include_designless_context=True)
         begun = self.begin()
         self.assertEqual(begun.returncode, 0, begun.stderr)
-        page = json.loads(begun.stdout)["pages"][0]
+        page = next(
+            item
+            for item in json.loads(begun.stdout)["pages"]
+            if item["member_title"] == "Designless Context"
+        )
         facts = self.valid_page_facts(page)
         interaction_item = facts["interaction_items"][0]
         fact_id = interaction_item["behavior"]["fact_id"]
@@ -2124,6 +4678,7 @@ class ComponentDesignV4CliTest(unittest.TestCase):
         )
         fact["kind"] = "data"
         interaction_item["behavior"] = None
+        self.with_interaction_items(facts)
 
         drafted = self.record_page_draft(page, facts)
 
@@ -2136,7 +4691,7 @@ class ComponentDesignV4CliTest(unittest.TestCase):
         self.assertTrue(
             all(
                 normalized["interaction_items"][0][field] is None
-                for field in ("condition", "state", "trigger", "behavior")
+                for field in ("condition", "state", "trigger", "behavior", "result")
             )
         )
 
@@ -2169,7 +4724,7 @@ class ComponentDesignV4CliTest(unittest.TestCase):
         begun = self.begin()
         self.assertEqual(begun.returncode, 0, begun.stderr)
         page = json.loads(begun.stdout)["pages"][0]
-        facts = self.page_facts_v2(self.valid_page_facts(page))
+        facts = self.page_facts_v4(self.valid_page_facts(page))
         self.add_design_visible_fact(facts)
 
         recorded = self.record_page(page, facts)
@@ -2201,7 +4756,7 @@ class ComponentDesignV4CliTest(unittest.TestCase):
         page = json.loads(begun.stdout)["pages"][0]
         for forbidden_kind in ("behavior", "api_dependency"):
             with self.subTest(kind=forbidden_kind):
-                facts = self.page_facts_v2(self.valid_page_facts(page))
+                facts = self.page_facts_v4(self.valid_page_facts(page))
                 self.add_design_visible_fact(facts, kind=forbidden_kind)
 
                 recorded = self.record_page(page, facts)
@@ -2213,7 +4768,7 @@ class ComponentDesignV4CliTest(unittest.TestCase):
         begun = self.begin()
         self.assertEqual(begun.returncode, 0, begun.stderr)
         page = json.loads(begun.stdout)["pages"][0]
-        facts = self.page_facts_v2(self.valid_page_facts(page))
+        facts = self.page_facts_v4(self.valid_page_facts(page))
         source_ref = facts["candidates"][1]["facts"][0]["source_refs"][0]
         self.add_design_visible_fact(facts, source_refs=[source_ref])
 
@@ -2222,7 +4777,7 @@ class ComponentDesignV4CliTest(unittest.TestCase):
         self.assertNotEqual(with_source.returncode, 0)
         self.assertIn("invalid_fact_evidence_class", with_source.stderr)
 
-        facts = self.page_facts_v2(self.valid_page_facts(page))
+        facts = self.page_facts_v4(self.valid_page_facts(page))
         self.add_design_visible_fact(facts, visible_basis=None)
 
         without_basis = self.record_page(page, facts)
@@ -2230,7 +4785,7 @@ class ComponentDesignV4CliTest(unittest.TestCase):
         self.assertNotEqual(without_basis.returncode, 0)
         self.assertIn("invalid_fact_evidence_class", without_basis.stderr)
 
-        facts = self.page_facts_v2(self.valid_page_facts(page))
+        facts = self.page_facts_v4(self.valid_page_facts(page))
         self.add_design_visible_fact(facts, visible_basis=" ")
 
         with_empty_basis = self.record_page(page, facts)
@@ -2242,7 +4797,7 @@ class ComponentDesignV4CliTest(unittest.TestCase):
         begun = self.begin()
         self.assertEqual(begun.returncode, 0, begun.stderr)
         page = json.loads(begun.stdout)["pages"][0]
-        facts = self.page_facts_v2(self.valid_page_facts(page))
+        facts = self.page_facts_v4(self.valid_page_facts(page))
         facts["candidates"][1]["facts"][0]["visible_basis"] = (
             "Business facts must not masquerade as design-only evidence."
         )
@@ -2256,7 +4811,7 @@ class ComponentDesignV4CliTest(unittest.TestCase):
         begun = self.begin()
         self.assertEqual(begun.returncode, 0, begun.stderr)
         page = json.loads(begun.stdout)["pages"][0]
-        facts = self.page_facts_v2(self.valid_page_facts(page))
+        facts = self.page_facts_v4(self.valid_page_facts(page))
         target = facts["candidates"][1]["facts"][0]
         target["evidence_class"] = "design_visible"
         target["visible_basis"] = "The cited Block is visible in this design."
@@ -2271,7 +4826,7 @@ class ComponentDesignV4CliTest(unittest.TestCase):
         begun = self.begin()
         self.assertEqual(begun.returncode, 0, begun.stderr)
         page = json.loads(begun.stdout)["pages"][0]
-        facts = self.page_facts_v2(self.valid_page_facts(page))
+        facts = self.page_facts_v4(self.valid_page_facts(page))
         visible = self.add_design_visible_fact(facts)
         visible["block_refs"] = [{"design_name": "Design B", "block_id": "page"}]
 
@@ -3924,8 +6479,16 @@ class ComponentDesignV4CliTest(unittest.TestCase):
         self.assertEqual(verified.returncode, 0, verified.stdout + verified.stderr)
         payload = json.loads(verified.stdout)
         self.assertEqual(payload["state"], "locked")
+        checklist = read_json(self.stage_dir / "checklist.json")
+        self.assertTrue(
+            all(item["status"] == "completed" for item in checklist["nodes"])
+        )
+        self.assertEqual(
+            read_json(self.stage_dir / "state.json")["checklist_sha256"],
+            hashlib.sha256((self.stage_dir / "checklist.json").read_bytes()).hexdigest(),
+        )
         lock = read_json(self.stage_dir / "component-lock.json")
-        self.assertEqual(lock["schema"], "icp.component-design.lock.v6")
+        self.assertEqual(lock["schema"], "icp.component-design.lock.v8")
         self.assertEqual(lock["stage_boundary"], "component-semantics-only")
         self.assertNotIn("business_rules", lock)
         self.assertNotIn("implementation", lock)
@@ -3958,7 +6521,7 @@ class ComponentDesignV4CliTest(unittest.TestCase):
         )
         stage_result = read_json(self.stage_dir / "stage-result.json")
         self.assertEqual(
-            stage_result["schema"], "icp.component-design.stage-result.v6"
+            stage_result["schema"], "icp.component-design.stage-result.v8"
         )
         self.assertEqual(stage_result["status"], "complete")
         self.assertEqual(
@@ -4031,6 +6594,71 @@ class ComponentDesignV4CliTest(unittest.TestCase):
             len({item["design_instance_id"] for item in shared_shell_bindings}), 2
         )
 
+    def test_verify_freezes_complete_component_bound_layout_inputs(self) -> None:
+        self.seal_all_pages()
+        recorded = self.record_abstraction(self.valid_abstraction_plan())
+        self.assertEqual(recorded.returncode, 0, recorded.stdout + recorded.stderr)
+
+        verified = self.verify()
+
+        self.assertEqual(verified.returncode, 0, verified.stdout + verified.stderr)
+        bindings = read_json(self.stage_dir / "block-component-bindings.json")
+        catalog = read_json(self.stage_dir / "source-catalog.json")
+        layout_inputs = bindings["layout_inputs"]
+        self.assertEqual(
+            {item["design_state_id"] for item in layout_inputs},
+            {item["design_name"] for item in catalog["designs"]},
+        )
+        for layout_input in layout_inputs:
+            self.assertEqual(
+                set(layout_input),
+                {
+                    "page_key",
+                    "design_state_id",
+                    "root_instance_id",
+                    "reference",
+                    "instances",
+                    "blocks_by_id",
+                    "source_nodes_by_id",
+                    "component_definitions_by_id",
+                    "platform_context",
+                },
+            )
+            self.assertEqual(
+                layout_input["reference"]["coordinate_contract"],
+                {"supported_frame_spaces": ["canvas", "artboard", "parent"]},
+            )
+            self.assertEqual(
+                set(layout_input["source_nodes_by_id"]),
+                {
+                    node_id
+                    for block in layout_input["blocks_by_id"].values()
+                    for node_id in block["ordered_source_node_ids"]
+                },
+            )
+            self.assertEqual(
+                set(layout_input["component_definitions_by_id"]),
+                {item["component_id"] for item in self.valid_abstraction_plan()["component_definitions"]},
+            )
+            root = next(
+                item
+                for item in layout_input["instances"]
+                if item["instance_id"] == layout_input["root_instance_id"]
+            )
+            self.assertIsNone(root["parent_instance_id"])
+            self.assertEqual(root["slot"], "root")
+            siblings: dict[tuple[object, object], list[int]] = {}
+            for item in layout_input["instances"]:
+                siblings.setdefault(
+                    (item["parent_instance_id"], item["slot"]), []
+                ).append(item["order"])
+            self.assertTrue(
+                all(sorted(orders) == list(range(len(orders))) for orders in siblings.values())
+            )
+            serialized = json.dumps(layout_input, ensure_ascii=False)
+            self.assertNotIn("source_bundle", serialized)
+            self.assertNotIn("interaction_description", serialized)
+
     def test_locked_block_component_bindings_cannot_be_changed(self) -> None:
         self.seal_all_pages()
         recorded = self.record_abstraction(self.valid_abstraction_plan())
@@ -4048,6 +6676,7 @@ class ComponentDesignV4CliTest(unittest.TestCase):
 
     def test_exact_business_source_may_legitimately_contain_todo_text(self) -> None:
         self.bundle_path = self.build_source_bundle(source_contains_todo=True)
+        source_bundle = read_json(self.bundle_path)
         self.project = create_verified_extract(
             self.root / "todo-extract",
             {
@@ -4056,6 +6685,8 @@ class ComponentDesignV4CliTest(unittest.TestCase):
             },
         )
         self.stage_dir = self.project / ".icp" / "component-design"
+        self.bundle_path = self.project / ".icp" / "source" / "source-bundle.json"
+        write_json(self.bundle_path, source_bundle)
         begun = self.begin()
         self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
         pages = json.loads(begun.stdout)["pages"]

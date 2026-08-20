@@ -17,6 +17,18 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
+
+ICP_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ICP_ROOT / "scripts"))
+from stage_checklist import (  # noqa: E402
+    ChecklistError,
+    complete as complete_checklist_node,
+    create as create_checklist,
+    node as checklist_node,
+    require_complete as require_checklist_complete,
+    require_ready as require_checklist_node_ready,
+)
 
 
 EXTRACT_SCRIPT = Path(__file__).resolve().parents[2] / "extract" / "scripts" / "extract.py"
@@ -42,13 +54,33 @@ PAGE_FACT_KINDS = {
     "responsibility",
     "condition",
     "behavior",
+    "result",
     "state",
     "trigger",
     "data",
     "api_dependency",
     "component_relation",
 }
-INTERACTION_ITEM_FIELDS = ("condition", "state", "trigger", "behavior")
+INTERACTION_ITEM_FIELDS = ("condition", "state", "trigger", "behavior", "result")
+INTERACTION_BEHAVIOR_KINDS = {
+    "local",
+    "api_call",
+    "render",
+    "navigate",
+    "present",
+    "validate",
+    "mutate",
+}
+API_DIRECTIVE_RE = re.compile(
+    r"(?<![A-Za-z0-9_])API\s*[:：]\s*"
+    r"(?P<locator>"
+    r"(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+"
+    r"(?:https?://|/)[A-Za-z0-9._~:/?#\[\]@!$&'()*+=%{}-]*"
+    r"|https?://[A-Za-z0-9._~:/?#\[\]@!$&'()*+=%{}-]*"
+    r"|/[A-Za-z0-9._~:/?#\[\]@!$&'()*+=%{}-]*"
+    r"|\d+(?:/\d+)?"
+    r")"
+)
 COMPONENT_RELATION_INTENTS = {
     "local_boundary",
     "shared_candidate",
@@ -317,6 +349,170 @@ def remove_if_exists(path: Path) -> None:
         pass
 
 
+def component_checklist_specs(stage_dir: Path, state: dict[str, Any]) -> list[dict[str, Any]]:
+    specs = [checklist_node("stage.begin", "Freeze the complete Stage 2 input.")]
+    review_nodes: list[str] = []
+    for page_key in require_dict(state.get("pages"), "page states"):
+        page_input = require_dict(
+            read_json(stage_dir / "page-component-facts" / f"{page_key}.input.json"),
+            f"page input {page_key}",
+        )
+        dependency = "stage.begin"
+        if require_list(page_input.get("api_requirements"), "page API requirements"):
+            api_node = f"page:{page_key}.api-contracts"
+            specs.append(
+                checklist_node(
+                    api_node,
+                    f"Seal every API contract required by page {page_key}.",
+                    ["stage.begin"],
+                )
+            )
+            dependency = api_node
+        facts_node = f"page:{page_key}.facts"
+        review_node = f"page:{page_key}.review"
+        specs.extend(
+            [
+                checklist_node(
+                    facts_node,
+                    f"Record complete component facts for page {page_key}.",
+                    [dependency],
+                ),
+                checklist_node(
+                    review_node,
+                    f"Pass the complete page review for {page_key}.",
+                    [facts_node],
+                ),
+            ]
+        )
+        review_nodes.append(review_node)
+    specs.extend(
+        [
+            checklist_node(
+                "group.abstraction",
+                "Record the complete cross-page component abstraction.",
+                review_nodes,
+            ),
+            checklist_node(
+                "stage.verify",
+                "Verify and seal the Stage 2 implementation contract.",
+                ["group.abstraction"],
+            ),
+        ]
+    )
+    return specs
+
+
+def component_checklist_input(state: dict[str, Any]) -> str:
+    return sha256_bytes(
+        canonical_bytes(
+            {
+                "extract_run_result_sha256": state["extract_run_result_sha256"],
+                "source_catalog_sha256": state["source_catalog_sha256"],
+                "iole_source_bundle_sha256": state["iole_source_bundle_sha256"],
+                "business_context_sha256": state["business_context_sha256"],
+                "mobile_component_patterns_sha256": state[
+                    "mobile_component_patterns_sha256"
+                ],
+                "project_catalog_snapshot_sha256": state[
+                    "project_catalog_snapshot_sha256"
+                ],
+                "page_keys": list(require_dict(state.get("pages"), "page states")),
+            }
+        )
+    )
+
+
+def mark_component_checklist(
+    stage_dir: Path,
+    state: dict[str, Any],
+    node_id: str,
+    evidence_sha256: str,
+) -> None:
+    try:
+        complete_checklist_node(
+            stage_dir / "checklist.json",
+            stage="component-design",
+            input_sha256=component_checklist_input(state),
+            nodes=component_checklist_specs(stage_dir, state),
+            node_id=node_id,
+            evidence_sha256=evidence_sha256,
+        )
+    except ChecklistError as exc:
+        raise ContractError(exc.code, exc.message) from exc
+
+
+def require_component_checklist(
+    stage_dir: Path,
+    state: dict[str, Any],
+    *,
+    exclude: tuple[str, ...] = (),
+) -> None:
+    try:
+        require_checklist_complete(
+            stage_dir / "checklist.json",
+            stage="component-design",
+            input_sha256=component_checklist_input(state),
+            nodes=component_checklist_specs(stage_dir, state),
+            exclude=exclude,
+        )
+    except ChecklistError as exc:
+        raise ContractError(exc.code, exc.message) from exc
+
+
+def require_component_checklist_node(
+    stage_dir: Path, state: dict[str, Any], node_id: str
+) -> None:
+    try:
+        require_checklist_node_ready(
+            stage_dir / "checklist.json",
+            stage="component-design",
+            input_sha256=component_checklist_input(state),
+            nodes=component_checklist_specs(stage_dir, state),
+            node_id=node_id,
+        )
+    except ChecklistError as exc:
+        raise ContractError(exc.code, exc.message) from exc
+
+
+def mark_page_api_checklist_if_complete(
+    stage_dir: Path,
+    state: dict[str, Any],
+    page_key: str,
+    requirements: list[dict[str, Any]],
+) -> None:
+    page_state = require_dict(state.get("pages", {}).get(page_key), "page state")
+    covered_requirement_ids: list[str] = []
+    for artifact_value in require_list(
+        page_state.get("api_contract_artifacts"), "page API contract artifacts"
+    ):
+        artifact = require_dict(artifact_value, "API contract artifact")
+        artifact_contract = require_dict(
+            read_json(
+                stage_dir
+                / require_string(artifact.get("path"), "API contract artifact path")
+            ),
+            "API contract artifact",
+        )
+        covered_requirement_ids.extend(
+            require_string_list(
+                artifact_contract.get("requirement_ids"),
+                "API contract requirement IDs",
+            )
+        )
+    expected_requirement_ids = [item["requirement_id"] for item in requirements]
+    if (
+        expected_requirement_ids
+        and len(covered_requirement_ids) == len(set(covered_requirement_ids))
+        and set(covered_requirement_ids) == set(expected_requirement_ids)
+    ):
+        mark_component_checklist(
+            stage_dir,
+            state,
+            f"page:{page_key}.api-contracts",
+            sha256_bytes(canonical_bytes(sorted(covered_requirement_ids))),
+        )
+
+
 def run_extract_verify(project_root: Path) -> dict[str, Any]:
     completed = subprocess.run(
         [
@@ -357,6 +553,14 @@ def verified_artifact(stage_dir: Path, descriptor: object, label: str) -> tuple[
     if sha256_bytes(path.read_bytes()) != expected_sha:
         raise ContractError("extract_drift", f"extract artifact hash changed: {path}")
     return path, read_json(path)
+
+
+def require_project_relative_path(value: object, label: str) -> str:
+    path = require_string(value, label)
+    candidate = Path(path)
+    if candidate.is_absolute() or ".." in candidate.parts:
+        raise ContractError("invalid_path", f"{label} must be project-relative")
+    return path
 
 
 def build_source_catalog(project_root: Path) -> tuple[dict[str, Any], str]:
@@ -435,6 +639,24 @@ def build_source_catalog(project_root: Path) -> tuple[dict[str, Any], str]:
         joined_blocks = copy.deepcopy(
             require_list(semantic_blocks.get("blocks"), f"{design_name} Blocks")
         )
+        for block in joined_blocks:
+            for node in require_list(
+                require_dict(block, "semantic Block").get("source_nodes"),
+                f"{design_name} Block source nodes",
+            ):
+                source_node = require_dict(node, "semantic Block source node")
+                for asset in require_list(
+                    source_node.get("assets"), "semantic Block source assets"
+                ):
+                    source_asset = require_dict(asset, "semantic Block source asset")
+                    source_asset["source_project_path"] = str(
+                        Path(".icp")
+                        / "extract"
+                        / design_dir_name
+                        / require_project_relative_path(
+                            source_asset.get("local_path"), "source asset path"
+                        )
+                    )
         non_rendering = copy.deepcopy(
             require_list(
                 semantic_blocks.get("non_rendering_source_nodes"),
@@ -458,12 +680,28 @@ def build_source_catalog(project_root: Path) -> tuple[dict[str, Any], str]:
         catalog_designs.append(
             {
                 "design_name": design_name,
+                "design_dir": design_dir_name,
                 "design_url": run_design.get("design_url"),
                 "design_id": manifest.get("design_id"),
                 "version_id": manifest.get("version_id"),
                 "project_id": source_identity.get("project_id", ""),
                 "image_id": source_identity.get("image_id", ""),
                 "root_block_id": root_block_id,
+                "root_node_id": semantic_blocks.get("root_node_id"),
+                "visual_reference": {
+                    **copy.deepcopy(
+                        require_dict(manifest.get("reference"), "visual reference")
+                    ),
+                    "source_project_path": str(
+                        Path(".icp")
+                        / "extract"
+                        / design_dir_name
+                        / require_project_relative_path(
+                            require_dict(manifest.get("reference"), "visual reference").get("path"),
+                            "visual reference path",
+                        )
+                    ),
+                },
                 "semantic_context": copy.deepcopy(
                     require_dict(
                         semantic_blocks.get("semantic_context"),
@@ -629,9 +867,17 @@ def validate_iole_source_closure(
                 field_label,
             )
             column = require_string(field.get("column"), f"{field_label}.column")
-            if column in seen_columns or column not in row_data:
+            if column in seen_columns:
                 raise ContractError(
-                    "invalid_iole_input", f"IOLE source analysis column mismatch: {title}/{column}"
+                    "invalid_iole_input",
+                    f"IOLE source analysis column mismatch: {title}/{column}; "
+                    f"duplicates=['{column}']",
+                )
+            if column not in row_data:
+                raise ContractError(
+                    "invalid_iole_input",
+                    f"IOLE source analysis column mismatch: {title}/{column}; "
+                    f"unexpected=['{column}']",
                 )
             seen_columns.add(column)
             analyzed_columns.append(column)
@@ -722,19 +968,41 @@ def validate_iole_source_closure(
             for column in row_data
             if column != catalog.get("row_id_column")
         ]
-        if analyzed_columns != expected_columns:
+        # Analyzed columns are an identity set: field order inside one row is
+        # incidental storage order, not a coverage contract.
+        missing_columns = sorted(set(expected_columns) - set(analyzed_columns))
+        unexpected_columns = sorted(set(analyzed_columns) - set(expected_columns))
+        if missing_columns or unexpected_columns:
             raise ContractError(
                 "invalid_iole_input",
-                f"IOLE source analysis does not cover every declared source column: {title}",
+                f"IOLE source analysis does not cover every declared source column: {title}; "
+                f"missing={missing_columns} unexpected={unexpected_columns}",
             )
     if analyzed_titles != set(members_by_title):
         raise ContractError(
             "invalid_iole_input", "IOLE source closure does not cover every member"
         )
-    if relation_projection != relations:
+    # Relations are graph topology: unique (from_title, to_title) edges are
+    # compared as a set, then normalized by stable edge identity. Neither the
+    # flow list nor the analysis/reference traversal order is a contract.
+    projection_edges = {
+        (item["from_title"], item["to_title"]) for item in relation_projection
+    }
+    flow_edges = {
+        (item["from_title"], item["to_title"]) for item in relations
+    }
+    missing_edges = sorted(projection_edges - flow_edges)
+    unexpected_edges = sorted(flow_edges - projection_edges)
+    if missing_edges or unexpected_edges:
         raise ContractError(
-            "invalid_iole_input", "IOLE source closure relation projection mismatch"
+            "invalid_iole_input",
+            "IOLE source closure relation projection mismatch; "
+            f"missing={missing_edges} unexpected={unexpected_edges}",
         )
+    relations[:] = [
+        {"from_title": from_title, "to_title": to_title}
+        for from_title, to_title in sorted(projection_edges)
+    ]
 
     review = require_dict(closure.get("review"), "IOLE source closure review")
     review_sha = sha256_bytes(canonical_bytes(review))
@@ -799,9 +1067,27 @@ def validate_iole_source_closure(
                 require_string(field_review.get("source_sha256"), "review source hash"),
             )
         )
-    if review_projection != field_projection:
+    # Field-review coverage is an identity set over (title, column,
+    # source_sha256): review order is incidental and stays frozen verbatim.
+    review_identities = set(review_projection)
+    if (
+        len(review_projection) != len(review_identities)
+        or review_identities != set(field_projection)
+    ):
+        missing_reviews = sorted(set(field_projection) - review_identities)
+        unexpected_reviews = sorted(review_identities - set(field_projection))
+        duplicate_reviews = sorted(
+            {
+                item
+                for item in review_projection
+                if review_projection.count(item) > 1
+            }
+        )
         raise ContractError(
-            "invalid_iole_input", "IOLE source field review projection mismatch"
+            "invalid_iole_input",
+            "IOLE source field review projection mismatch; "
+            f"missing={missing_reviews} unexpected={unexpected_reviews} "
+            f"duplicates={duplicate_reviews}",
         )
     cross_review = require_dict(review.get("cross_review"), "IOLE cross review")
     require_exact_keys(
@@ -883,11 +1169,17 @@ def build_business_context(
         if change_scope not in allowed_scopes:
             raise ContractError("invalid_iole_input", f"invalid change_scope for {title}")
         row_data = require_dict(row.get("row_data"), f"{label}.row_data")
-        if list(row_data) != row_data_columns:
+        missing_columns = sorted(set(row_data_columns) - set(row_data))
+        unexpected_columns = sorted(set(row_data) - set(row_data_columns))
+        if missing_columns or unexpected_columns:
             raise ContractError(
                 "invalid_iole_input",
-                f"row_data must match declared source columns for {title}",
+                f"row_data must match declared source columns for {title}; "
+                f"missing={missing_columns} unexpected={unexpected_columns}",
             )
+        # JSON object key insertion order is not a contract: read row_data in
+        # the authoritative row_data_columns order for deterministic storage.
+        row_data = {column: row_data[column] for column in row_data_columns}
         for column, value in row_data.items():
             if not isinstance(column, str) or not column:
                 raise ContractError(
@@ -1174,6 +1466,7 @@ def build_business_context(
         "source_kind": str(flow["kind"]),
         "source_id": source_id,
         "root_title": root_title,
+        "bundle_digest": bundle_digest,
         "mapping_digest": mapping_digest,
         "source_closure": source_closure,
         "members": members,
@@ -1189,7 +1482,7 @@ def stage_dir_for(project_root: Path) -> Path:
 def load_state(project_root: Path) -> tuple[Path, dict[str, Any]]:
     stage_dir = stage_dir_for(project_root)
     state = require_dict(read_json(stage_dir / "state.json"), "component-design state")
-    if state.get("schema") != "icp.component-design.state.v1":
+    if state.get("schema") != "icp.component-design.state.v2":
         raise ContractError("invalid_state", "component-design state schema is invalid")
     return stage_dir, state
 
@@ -1215,7 +1508,7 @@ def verify_live_catalog(
 def verify_live_business_context(
     stage_dir: Path, state: dict[str, Any], catalog: dict[str, Any]
 ) -> dict[str, Any]:
-    flow_path = stage_dir / "iole-source-bundle.json"
+    flow_path = stage_dir.parent / "source" / "source-bundle.json"
     context_path = stage_dir / "business-context.json"
     if (
         not flow_path.is_file()
@@ -1284,6 +1577,7 @@ def build_source_context(business_context: dict[str, Any]) -> dict[str, Any]:
                 "title": title,
                 "page_key": page_key,
                 "change_scope": member.get("change_scope"),
+                "route": member.get("route"),
                 "design_names": design_names,
                 "contract_digest": require_string(
                     source_contract.get("contract_digest"),
@@ -1362,8 +1656,14 @@ def validate_source_context_joins(
                 )
 
 
-def build_presentation_requirements(
-    member: dict[str, Any], business_context: dict[str, Any]
+def build_relation_requirements(
+    member: dict[str, Any],
+    business_context: dict[str, Any],
+    *,
+    relation_kinds: set[str],
+    id_prefix: str,
+    id_field: str,
+    require_target_designs: bool = False,
 ) -> list[dict[str, Any]]:
     member_title = require_string(member.get("title"), "business member title")
     members_by_title = {
@@ -1407,7 +1707,7 @@ def build_presentation_requirements(
         ):
             reference = require_dict(reference_value, "business source reference")
             relation_kind = reference.get("relation_kind")
-            if relation_kind not in {"modal", "component"}:
+            if relation_kind not in relation_kinds:
                 continue
             matching_clauses = [
                 clause
@@ -1436,9 +1736,18 @@ def build_presentation_requirements(
                 reference.get("target_title"), "presentation target title"
             )
             target_member = members_by_title.get(target_title)
-            if target_member is None or not member_requires_semantic_work_item(
-                target_member
+            if (
+                target_member is None
+                or not member_requires_semantic_work_item(target_member)
+                or (
+                    require_target_designs
+                    and not member_has_design_states(target_member)
+                )
             ):
+                if require_target_designs and target_member is not None and member_requires_semantic_work_item(target_member):
+                    # A navigation transition must land on a frozen visual
+                    # state; designless context rows are not runtime targets.
+                    continue
                 raise ContractError(
                     "presentation_target_unmapped",
                     f"presentation target has no component work item: {target_title}",
@@ -1462,12 +1771,38 @@ def build_presentation_requirements(
             }
             requirements.append(
                 {
-                    "presentation_requirement_id": "presentation-"
-                    + sha256_bytes(canonical_bytes(evidence))[:20],
+                    id_field: id_prefix + "-" + sha256_bytes(canonical_bytes(evidence))[:20],
                     **evidence,
                 }
             )
     return requirements
+
+
+def build_presentation_requirements(
+    member: dict[str, Any], business_context: dict[str, Any]
+) -> list[dict[str, Any]]:
+    return build_relation_requirements(
+        member,
+        business_context,
+        relation_kinds={"modal", "component"},
+        id_prefix="presentation",
+        id_field="presentation_requirement_id",
+    )
+
+
+def build_navigation_requirements(
+    member: dict[str, Any], business_context: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Preserve exact IOLE navigation evidence as closed page input."""
+
+    return build_relation_requirements(
+        member,
+        business_context,
+        relation_kinds={"navigation"},
+        id_prefix="navigation",
+        id_field="navigation_requirement_id",
+        require_target_designs=True,
+    )
 
 
 def build_page_facts_template(
@@ -1509,10 +1844,11 @@ def build_page_facts_template(
                 "state": None,
                 "trigger": None,
                 "behavior": None,
+                "result": None,
             }
         )
     return {
-        "schema": "icp.component-design.page-facts.v2",
+        "schema": "icp.component-design.page-facts.v4",
         "page_key": page_key,
         "member_title": member_title,
         "source_catalog_sha256": source_catalog_sha,
@@ -1528,7 +1864,18 @@ def build_page_facts_template(
         "presentation_requirements": build_presentation_requirements(
             member, business_context
         ),
+        "navigation_requirements": build_navigation_requirements(
+            member, business_context
+        ),
+        "api_requirements": build_api_requirements(member),
+        "api_contracts": [],
         "interaction_items": interaction_items,
+        "interaction_graph": {
+            "schema": "icp.component-design.interaction-graph.v2",
+            "interactions": [],
+            "edges": [],
+            "terminal_outcomes": [],
+        },
         "candidates": [],
         "design_compositions": [],
     }
@@ -1550,6 +1897,93 @@ def page_work_items(stage_dir: Path, context: dict[str, Any]) -> list[dict[str, 
             }
         )
     return result
+
+
+def build_api_requirements(member: dict[str, Any]) -> list[dict[str, Any]]:
+    """Project exact same-page interface sources before model resolution."""
+
+    member_title = require_string(member.get("title"), "business member title")
+    requirements: list[dict[str, Any]] = []
+    for clause_value in require_list(member.get("clauses"), "business clauses"):
+        clause = require_dict(clause_value, "business clause")
+        clause_id = require_string(clause.get("clause_id"), "business clause_id")
+        label = require_string(clause.get("label"), "business clause label")
+        text = require_text(clause.get("text"), "business clause text")
+        source_sha = sha256_bytes(text.encode("utf-8"))
+        if label == "接口描述" and text.strip():
+            evidence = {
+                "source_kind": "interface_description",
+                "source_ref": {
+                    "member_title": member_title,
+                    "clause_id": clause_id,
+                    "source_sha256": source_sha,
+                    "start": 0,
+                    "end": len(text),
+                    "quote": text,
+                },
+                "locator": None,
+            }
+            requirements.append(
+                {
+                    "requirement_id": "api-requirement-"
+                    + sha256_bytes(canonical_bytes(evidence))[:20],
+                    **evidence,
+                }
+            )
+        if clause_id != "page:interaction" or not text:
+            continue
+        for match in API_DIRECTIVE_RE.finditer(text):
+            locator = match.group("locator")
+            evidence = {
+                "source_kind": "api_directive",
+                "source_ref": {
+                    "member_title": member_title,
+                    "clause_id": clause_id,
+                    "source_sha256": source_sha,
+                    "start": match.start(),
+                    "end": match.end(),
+                    "quote": text[match.start() : match.end()],
+                },
+                "locator": locator,
+            }
+            requirements.append(
+                {
+                    "requirement_id": "api-requirement-"
+                    + sha256_bytes(canonical_bytes(evidence))[:20],
+                    **evidence,
+                }
+            )
+    return requirements
+
+
+def api_locator_matches_contract(
+    locator: str,
+    contract_locator: str,
+    apifox: dict[str, Any],
+    normalized: dict[str, Any],
+) -> bool:
+    if contract_locator != locator:
+        return False
+    method_target = re.fullmatch(
+        r"(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(.+)", locator
+    )
+    if method_target is not None:
+        method, target = method_target.groups()
+        expected_path = urlsplit(target).path if target.startswith("http") else target
+        return normalized["method"] == method and normalized["path"] == expected_path
+    if locator.startswith("http"):
+        return normalized["path"] == urlsplit(locator).path
+    if locator.startswith("/"):
+        return normalized["path"] == locator
+    numeric_parts = locator.split("/")
+    if len(numeric_parts) == 1 and numeric_parts[0].isdigit():
+        return apifox["endpoint_id"] == int(numeric_parts[0])
+    if len(numeric_parts) == 2 and all(part.isdigit() for part in numeric_parts):
+        return (
+            apifox["project_id"] == int(numeric_parts[0])
+            and apifox["endpoint_id"] == int(numeric_parts[1])
+        )
+    return False
 
 
 def validate_project_catalog(value: object, project_root: Path) -> dict[str, Any]:
@@ -1608,6 +2042,8 @@ def validate_project_catalog(value: object, project_root: Path) -> dict[str, Any
                 "icp.component-design.lock.v4",
                 "icp.component-design.lock.v5",
                 "icp.component-design.lock.v6",
+                "icp.component-design.lock.v7",
+                "icp.component-design.lock.v8",
             }:
                 raise ContractError(
                     "historical_component_evidence",
@@ -1636,7 +2072,12 @@ def validate_project_catalog(value: object, project_root: Path) -> dict[str, Any
 
 def begin(args: argparse.Namespace) -> dict[str, Any]:
     project_root = Path(args.project_root).resolve()
-    source_path = Path(args.source_bundle)
+    source_path = project_root / ".icp" / "source" / "source-bundle.json"
+    if not source_path.is_file():
+        raise ContractError(
+            "missing_frozen_source",
+            "Stage 2 requires the single source bundle frozen by Stage 1",
+        )
     stage_dir = stage_dir_for(project_root)
     state_path = stage_dir / "state.json"
     if state_path.exists():
@@ -1644,13 +2085,23 @@ def begin(args: argparse.Namespace) -> dict[str, Any]:
         verify_live_mobile_component_pattern_context(stage_dir, state)
         catalog = verify_live_catalog(project_root, stage_dir, state)
         flow_value = read_json(source_path)
-        flow_sha = sha256_bytes(json_bytes(flow_value))
+        flow_sha = sha256_bytes(source_path.read_bytes())
         if flow_sha != state.get("iole_source_bundle_sha256"):
             raise ContractError("input_drift", "IOLE flow input changed after component design began")
         verify_live_business_context(stage_dir, state, catalog)
         context = require_dict(
             read_json(stage_dir / "business-context.json"), "business context"
         )
+        try:
+            create_checklist(
+                stage_dir / "checklist.json",
+                stage="component-design",
+                input_sha256=component_checklist_input(state),
+                nodes=component_checklist_specs(stage_dir, state),
+                initially_completed=["stage.begin"],
+            )
+        except ChecklistError as exc:
+            raise ContractError(exc.code, exc.message) from exc
         return {
             "ok": True,
             "stage": "component-design",
@@ -1670,19 +2121,20 @@ def begin(args: argparse.Namespace) -> dict[str, Any]:
     catalog_sha = sha256_bytes(json_bytes(catalog))
     flow_value = read_json(source_path)
     business_context = build_business_context(flow_value, catalog)
-    flow_sha = sha256_bytes(json_bytes(flow_value))
+    flow_sha = sha256_bytes(source_path.read_bytes())
     business_context_sha = sha256_bytes(json_bytes(business_context))
     mobile_pattern_context, mobile_pattern_bytes = (
         load_skill_mobile_component_pattern_context()
     )
     state = {
-        "schema": "icp.component-design.state.v1",
+        "schema": "icp.component-design.state.v2",
         "stage": "component-design",
         "state": "collecting_page_facts",
         "revision": 0,
         "extract_run_result_sha256": run_sha,
         "source_catalog_sha256": catalog_sha,
         "iole_source_bundle_sha256": flow_sha,
+        "source_bundle_digest": business_context["bundle_digest"],
         "business_context_sha256": business_context_sha,
         "mobile_component_patterns_sha256": mobile_pattern_context[
             "knowledge_sha256"
@@ -1691,6 +2143,7 @@ def begin(args: argparse.Namespace) -> dict[str, Any]:
             page_key_for(require_string(member.get("title"), "business member title")): {
                 "member_title": require_string(member.get("title"), "business member title"),
                 "status": "pending",
+                "api_contract_artifacts": [],
             }
             for member in require_list(business_context.get("members"), "business context members")
             if member_requires_semantic_work_item(
@@ -1699,7 +2152,6 @@ def begin(args: argparse.Namespace) -> dict[str, Any]:
         },
     }
     atomic_write_json(stage_dir / "source-catalog.json", catalog)
-    atomic_write_json(stage_dir / "iole-source-bundle.json", flow_value)
     atomic_write_json(stage_dir / "business-context.json", business_context)
     atomic_write_bytes(
         stage_dir / MOBILE_COMPONENT_PATTERNS_STAGE_NAME, mobile_pattern_bytes
@@ -1737,6 +2189,16 @@ def begin(args: argparse.Namespace) -> dict[str, Any]:
             / f"{template['page_key']}.input.json",
             template,
         )
+    try:
+        create_checklist(
+            stage_dir / "checklist.json",
+            stage="component-design",
+            input_sha256=component_checklist_input(state),
+            nodes=component_checklist_specs(stage_dir, state),
+            initially_completed=["stage.begin"],
+        )
+    except ChecklistError as exc:
+        raise ContractError(exc.code, exc.message) from exc
     atomic_write_json(state_path, state)
     return {
         "ok": True,
@@ -1753,6 +2215,190 @@ def begin(args: argparse.Namespace) -> dict[str, Any]:
         "project_component_catalog": str(
             stage_dir / "project-component-catalog.snapshot.json"
         ),
+    }
+
+
+def record_api_contract(args: argparse.Namespace) -> dict[str, Any]:
+    project_root = Path(args.project_root).resolve()
+    stage_dir, state = load_state(project_root)
+    if state.get("state") not in {
+        "collecting_page_facts",
+        "awaiting_group_abstraction",
+    }:
+        raise ContractError(
+            "invalid_state", "API contracts cannot be recorded in this state"
+        )
+    page_key = require_string(args.page_key, "page key")
+    page_state = require_dict(state.get("pages", {}).get(page_key), "page state")
+    catalog = verify_live_catalog(project_root, stage_dir, state)
+    context = verify_live_business_context(stage_dir, state, catalog)
+    member = next(
+        (
+            require_dict(value, "business context member")
+            for value in require_list(context.get("members"), "business members")
+            if require_dict(value, "business context member").get("title")
+            == page_state.get("member_title")
+        ),
+        None,
+    )
+    if member is None:
+        raise ContractError("page_identity_mismatch", "page is absent from business context")
+    requirements = build_api_requirements(member)
+    require_component_checklist_node(
+        stage_dir, state, f"page:{page_key}.api-contracts"
+    )
+    requirement_by_id = {item["requirement_id"]: item for item in requirements}
+    contract = require_dict(read_json(Path(args.contract)), "Apifox contract")
+    require_exact_keys(
+        contract,
+        {"api_contract_id", "requirement_ids", "locator", "apifox", "normalized"},
+        "Apifox contract",
+        code="invalid_api_acquisition",
+    )
+    contract_id = require_string(
+        contract.get("api_contract_id"), "API contract ID"
+    )
+    if not COMPONENT_ID_RE.fullmatch(contract_id):
+        raise ContractError(
+            "invalid_api_acquisition", f"invalid API contract ID {contract_id}"
+        )
+    requirement_ids = require_string_list(
+        contract.get("requirement_ids"), "API contract requirement IDs"
+    )
+    if len(requirement_ids) != len(set(requirement_ids)) or any(
+        requirement_id not in requirement_by_id for requirement_id in requirement_ids
+    ):
+        raise ContractError(
+            "invalid_api_acquisition",
+            "API contract binds an unknown or duplicate same-page requirement",
+        )
+    contract_locator = require_string(contract.get("locator"), "API contract locator")
+    apifox = require_dict(contract.get("apifox"), "Apifox acquisition")
+    require_exact_keys(
+        apifox,
+        {"project_id", "endpoint_id", "acquired_by", "raw_contract", "raw_sha256"},
+        "Apifox acquisition",
+        code="invalid_api_acquisition",
+    )
+    if type(apifox.get("project_id")) is not int or apifox["project_id"] <= 0:
+        raise ContractError("invalid_api_acquisition", "invalid Apifox project ID")
+    if type(apifox.get("endpoint_id")) is not int or apifox["endpoint_id"] <= 0:
+        raise ContractError("invalid_api_acquisition", "invalid Apifox endpoint ID")
+    if apifox.get("acquired_by") not in {
+        "readEntityDetails",
+        "getHttpEndpoint",
+        "exportData",
+    }:
+        raise ContractError("invalid_api_acquisition", "invalid Apifox read method")
+    raw_contract = require_dict(
+        apifox.get("raw_contract"), "Apifox raw contract"
+    )
+    if apifox.get("raw_sha256") != sha256_bytes(canonical_bytes(raw_contract)):
+        raise ContractError(
+            "invalid_api_acquisition", "Apifox raw contract hash changed"
+        )
+    normalized = require_dict(contract.get("normalized"), "normalized API contract")
+    require_exact_keys(
+        normalized,
+        {"method", "path", "auth", "parameters", "request_body", "responses", "errors"},
+        "normalized API contract",
+        code="invalid_api_acquisition",
+    )
+    method = require_string(normalized.get("method"), "normalized API method").upper()
+    if method not in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}:
+        raise ContractError("invalid_api_acquisition", "invalid normalized API method")
+    require_string(normalized.get("path"), "normalized API path")
+    for field in ("parameters", "responses", "errors"):
+        require_list(normalized.get(field), f"normalized API {field}")
+    for requirement_id in requirement_ids:
+        requirement = requirement_by_id[requirement_id]
+        if (
+            requirement["source_kind"] == "api_directive"
+            and not api_locator_matches_contract(
+                requirement["locator"],
+                contract_locator,
+                apifox,
+                {**normalized, "method": method},
+            )
+        ):
+            raise ContractError(
+                "api_locator_mismatch",
+                f"acquired contract does not match API directive {requirement['locator']}",
+            )
+    artifact_path = (
+        stage_dir / "api-contracts" / page_key / f"{contract_id}.json"
+    )
+    artifact_sha = sha256_bytes(json_bytes(contract))
+    entries = require_list(
+        page_state.get("api_contract_artifacts"), "page API contract artifacts"
+    )
+    existing = next(
+        (
+            require_dict(value, "API contract artifact")
+            for value in entries
+            if require_dict(value, "API contract artifact").get("api_contract_id")
+            == contract_id
+        ),
+        None,
+    )
+    for artifact_value in entries:
+        artifact = require_dict(artifact_value, "API contract artifact")
+        if artifact.get("api_contract_id") == contract_id:
+            continue
+        existing_path = stage_dir / require_string(
+            artifact.get("path"), "API contract artifact path"
+        )
+        existing_contract = require_dict(
+            read_json(existing_path), "existing API contract artifact"
+        )
+        if set(require_string_list(existing_contract.get("requirement_ids"), "requirement IDs")) & set(requirement_ids):
+            raise ContractError(
+                "invalid_api_acquisition",
+                "one API requirement cannot be sealed by multiple contracts",
+            )
+    if existing is not None:
+        if (
+            existing.get("sha256") == artifact_sha
+            and artifact_path.is_file()
+            and sha256_bytes(artifact_path.read_bytes()) == artifact_sha
+        ):
+            mark_page_api_checklist_if_complete(
+                stage_dir, state, page_key, requirements
+            )
+            return {
+                "ok": True,
+                "stage": "component-design",
+                "page_key": page_key,
+                "api_contract_id": contract_id,
+                "artifact": str(artifact_path),
+                "sha256": artifact_sha,
+                "resumed": True,
+            }
+        if page_state.get("status") not in {"pending", "revision_required"}:
+            raise ContractError(
+                "api_acquisition_locked",
+                f"API contract cannot change while page is {page_state.get('status')}",
+            )
+        entries.remove(existing)
+    atomic_write_json(artifact_path, contract)
+    entries.append(
+        {
+            "api_contract_id": contract_id,
+            "path": str(artifact_path.relative_to(stage_dir)),
+            "sha256": artifact_sha,
+        }
+    )
+    page_state["api_contract_artifacts"] = entries
+    atomic_write_json(stage_dir / "state.json", state)
+    mark_page_api_checklist_if_complete(stage_dir, state, page_key, requirements)
+    return {
+        "ok": True,
+        "stage": "component-design",
+        "page_key": page_key,
+        "api_contract_id": contract_id,
+        "artifact": str(artifact_path),
+        "sha256": artifact_sha,
+        "resumed": False,
     }
 
 
@@ -1914,6 +2560,7 @@ def validate_page_facts(
     business_context: dict[str, Any],
     catalog: dict[str, Any],
     state: dict[str, Any],
+    stage_dir: Path,
 ) -> dict[str, Any]:
     facts = require_dict(value, "page facts")
     require_exact_keys(
@@ -1928,13 +2575,17 @@ def validate_page_facts(
             "design_names",
             "source_coverage",
             "presentation_requirements",
+            "navigation_requirements",
+            "api_requirements",
+            "api_contracts",
             "interaction_items",
+            "interaction_graph",
             "candidates",
             "design_compositions",
         },
         "page facts",
     )
-    if facts.get("schema") != "icp.component-design.page-facts.v2":
+    if facts.get("schema") != "icp.component-design.page-facts.v4":
         raise ContractError("invalid_page_facts", "page facts schema is invalid")
     member_title = require_string(member.get("title"), "business member title")
     if facts.get("page_key") != page_key or facts.get("member_title") != member_title:
@@ -1963,6 +2614,247 @@ def validate_page_facts(
             "presentation_requirement_drift",
             "page presentation requirements changed from the verified source closure",
         )
+    expected_navigation_requirements = build_navigation_requirements(
+        member, business_context
+    )
+    if facts.get("navigation_requirements") != expected_navigation_requirements:
+        raise ContractError(
+            "navigation_requirement_drift",
+            "page navigation requirements changed from the verified source closure",
+        )
+    expected_api_requirements = build_api_requirements(member)
+    if facts.get("api_requirements") != expected_api_requirements:
+        raise ContractError(
+            "api_requirement_drift",
+            "page API requirements changed from the same-page source",
+        )
+    page_state = require_dict(state.get("pages", {}).get(page_key), "page state")
+    acquired_contracts: list[dict[str, Any]] = []
+    for artifact_index, artifact_value in enumerate(
+        require_list(
+            page_state.get("api_contract_artifacts"),
+            "page API contract artifacts",
+        )
+    ):
+        label = f"page API contract artifacts[{artifact_index}]"
+        artifact = require_dict(artifact_value, label)
+        require_exact_keys(
+            artifact, {"api_contract_id", "path", "sha256"}, label
+        )
+        contract_id = require_string(
+            artifact.get("api_contract_id"), f"{label}.api_contract_id"
+        )
+        relative_path = Path(
+            require_string(artifact.get("path"), f"{label}.path")
+        )
+        if relative_path.is_absolute() or ".." in relative_path.parts:
+            raise ContractError(
+                "api_acquisition_drift", f"{label}.path escapes the stage"
+            )
+        artifact_path = stage_dir / relative_path
+        expected_sha = require_string(artifact.get("sha256"), f"{label}.sha256")
+        if (
+            not artifact_path.is_file()
+            or sha256_bytes(artifact_path.read_bytes()) != expected_sha
+        ):
+            raise ContractError(
+                "api_acquisition_drift", f"sealed API artifact changed: {contract_id}"
+            )
+        contract = require_dict(read_json(artifact_path), "sealed API contract")
+        if contract.get("api_contract_id") != contract_id:
+            raise ContractError(
+                "api_acquisition_drift", f"sealed API identity changed: {contract_id}"
+            )
+        acquired_contracts.append(contract)
+    # Page API contracts are an ID-keyed object collection: the declared list
+    # must cover every sealed artifact exactly (duplicate IDs rejected, whole
+    # payloads compared by ID); acquisition-list order is not a contract, so
+    # the declared list is normalized to the sealed artifact order.
+    declared_contracts_by_id: dict[str, dict[str, Any]] = {}
+    for contract_index, contract_value in enumerate(
+        require_list(facts.get("api_contracts"), "page api_contracts")
+    ):
+        contract_label = f"page api_contracts[{contract_index}]"
+        declared_contract = require_dict(contract_value, contract_label)
+        declared_id = require_string(
+            declared_contract.get("api_contract_id"),
+            f"{contract_label}.api_contract_id",
+        )
+        if declared_id in declared_contracts_by_id:
+            raise ContractError(
+                "api_acquisition_missing",
+                "page API contracts must exactly equal the separately sealed "
+                f"Apifox artifacts; duplicates=['{declared_id}']",
+            )
+        declared_contracts_by_id[declared_id] = declared_contract
+    acquired_contracts_by_id = {
+        require_string(
+            contract.get("api_contract_id"), "sealed API contract ID"
+        ): contract
+        for contract in acquired_contracts
+    }
+    missing_contracts = sorted(
+        set(acquired_contracts_by_id) - set(declared_contracts_by_id)
+    )
+    unexpected_contracts = sorted(
+        set(declared_contracts_by_id) - set(acquired_contracts_by_id)
+    )
+    if missing_contracts or unexpected_contracts:
+        raise ContractError(
+            "api_acquisition_missing",
+            "page API contracts must exactly equal the separately sealed Apifox "
+            f"artifacts; missing={missing_contracts} "
+            f"unexpected={unexpected_contracts}",
+        )
+    for acquired_contract in acquired_contracts:
+        acquired_id = require_string(
+            acquired_contract.get("api_contract_id"), "sealed API contract ID"
+        )
+        if declared_contracts_by_id[acquired_id] != acquired_contract:
+            raise ContractError(
+                "api_acquisition_missing",
+                f"page API contract payload changed: {acquired_id}",
+            )
+    ordered_declared_contracts = [
+        declared_contracts_by_id[
+            require_string(
+                contract.get("api_contract_id"), "sealed API contract ID"
+            )
+        ]
+        for contract in acquired_contracts
+    ]
+    api_requirement_ids = {
+        item["requirement_id"] for item in expected_api_requirements
+    }
+    api_requirement_by_id = {
+        item["requirement_id"]: item for item in expected_api_requirements
+    }
+    api_contract_ids: set[str] = set()
+    normalized_api_contracts: list[dict[str, Any]] = []
+    for contract_index, contract_value in enumerate(ordered_declared_contracts):
+        label = f"page api_contracts[{contract_index}]"
+        contract = require_dict(contract_value, label)
+        require_exact_keys(
+            contract,
+            {
+                "api_contract_id",
+                "requirement_ids",
+                "locator",
+                "apifox",
+                "normalized",
+            },
+            label,
+            code="invalid_api_contract",
+        )
+        contract_id = require_string(
+            contract.get("api_contract_id"), f"{label}.api_contract_id"
+        )
+        if (
+            not COMPONENT_ID_RE.fullmatch(contract_id)
+            or contract_id in api_contract_ids
+        ):
+            raise ContractError(
+                "invalid_api_contract", f"invalid or duplicate API contract {contract_id}"
+            )
+        api_contract_ids.add(contract_id)
+        requirement_ids = require_string_list(
+            contract.get("requirement_ids"), f"{label}.requirement_ids"
+        )
+        if len(requirement_ids) != len(set(requirement_ids)) or any(
+            requirement_id not in api_requirement_ids
+            for requirement_id in requirement_ids
+        ):
+            raise ContractError(
+                "invalid_api_contract",
+                f"{label} binds an unknown or duplicate API requirement",
+            )
+        require_string(contract.get("locator"), f"{label}.locator")
+        apifox = require_dict(contract.get("apifox"), f"{label}.apifox")
+        require_exact_keys(
+            apifox,
+            {
+                "project_id",
+                "endpoint_id",
+                "acquired_by",
+                "raw_contract",
+                "raw_sha256",
+            },
+            f"{label}.apifox",
+            code="invalid_api_contract",
+        )
+        if type(apifox.get("project_id")) is not int or apifox["project_id"] <= 0:
+            raise ContractError(
+                "invalid_api_contract", f"{label}.apifox.project_id is invalid"
+            )
+        if type(apifox.get("endpoint_id")) is not int or apifox["endpoint_id"] <= 0:
+            raise ContractError(
+                "invalid_api_contract", f"{label}.apifox.endpoint_id is invalid"
+            )
+        if apifox.get("acquired_by") not in {
+            "readEntityDetails",
+            "getHttpEndpoint",
+            "exportData",
+        }:
+            raise ContractError(
+                "invalid_api_contract", f"{label}.apifox.acquired_by is invalid"
+            )
+        raw_contract = require_dict(
+            apifox.get("raw_contract"), f"{label}.apifox.raw_contract"
+        )
+        raw_sha = require_string(
+            apifox.get("raw_sha256"), f"{label}.apifox.raw_sha256"
+        )
+        if raw_sha != sha256_bytes(canonical_bytes(raw_contract)):
+            raise ContractError(
+                "invalid_api_contract", f"{label}.apifox raw contract hash changed"
+            )
+        normalized = require_dict(
+            contract.get("normalized"), f"{label}.normalized"
+        )
+        require_exact_keys(
+            normalized,
+            {
+                "method",
+                "path",
+                "auth",
+                "parameters",
+                "request_body",
+                "responses",
+                "errors",
+            },
+            f"{label}.normalized",
+            code="invalid_api_contract",
+        )
+        method = require_string(
+            normalized.get("method"), f"{label}.normalized.method"
+        ).upper()
+        if method not in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}:
+            raise ContractError(
+                "invalid_api_contract", f"{label}.normalized.method is invalid"
+            )
+        require_string(normalized.get("path"), f"{label}.normalized.path")
+        require_list(normalized.get("parameters"), f"{label}.normalized.parameters")
+        require_list(normalized.get("responses"), f"{label}.normalized.responses")
+        require_list(normalized.get("errors"), f"{label}.normalized.errors")
+        for requirement_id in requirement_ids:
+            requirement = api_requirement_by_id[requirement_id]
+            locator = requirement["locator"]
+            if (
+                requirement["source_kind"] == "api_directive"
+                and not api_locator_matches_contract(
+                    require_string(locator, "API directive locator"),
+                    contract["locator"],
+                    apifox,
+                    {**normalized, "method": method},
+                )
+            ):
+                raise ContractError(
+                    "api_locator_mismatch",
+                    f"{label} does not match API directive {locator}",
+                )
+        normalized_contract = copy.deepcopy(contract)
+        normalized_contract["normalized"]["method"] = method
+        normalized_api_contracts.append(normalized_contract)
     allowed_designs = set(design_names)
     clause_map = {
         require_string(item.get("clause_id"), "business clause_id"): item
@@ -1977,6 +2869,7 @@ def validate_page_facts(
     fact_kinds_by_id: dict[str, str] = {}
     fact_meanings_by_id: dict[str, str] = {}
     fact_source_keys: dict[str, set[tuple[str, int, int]]] = {}
+    candidate_by_fact_id: dict[str, str] = {}
     normalized_candidates: list[dict[str, Any]] = []
     owned_block_refs: list[tuple[str, str]] = []
     for candidate_index, candidate_value in enumerate(
@@ -2067,6 +2960,7 @@ def validate_page_facts(
             if not COMPONENT_ID_RE.fullmatch(fact_id) or fact_id in fact_ids:
                 raise ContractError("invalid_semantic_fact", f"invalid or duplicate {fact_id}")
             fact_ids.add(fact_id)
+            candidate_by_fact_id[fact_id] = candidate_id
             fact_kind = require_string(fact.get("kind"), f"{fact_label}.kind")
             if fact_kind not in PAGE_FACT_KINDS:
                 raise ContractError("invalid_semantic_fact", f"invalid fact kind {fact_kind}")
@@ -2479,12 +3373,625 @@ def validate_page_facts(
     if interaction_fact_ids != expected_interaction_fact_ids:
         raise ContractError(
             "interaction_item_coverage",
-            "interaction items and condition/state/trigger/behavior facts are not bidirectionally equal",
+            "interaction items and condition/state/trigger/behavior/result facts "
+            "are not bidirectionally equal",
         )
     if interaction_text and interaction_item_source_keys != interaction_coverage_source_keys:
         raise ContractError(
             "interaction_item_coverage",
             "every interaction source segment must be checked by at least one atomic item",
+        )
+
+    interaction_graph = require_dict(
+        facts.get("interaction_graph"), "page interaction_graph"
+    )
+    require_exact_keys(
+        interaction_graph,
+        {"schema", "interactions", "edges", "terminal_outcomes"},
+        "page interaction_graph",
+        code="invalid_interaction_graph",
+    )
+    if interaction_graph.get("schema") != "icp.component-design.interaction-graph.v2":
+        raise ContractError(
+            "invalid_interaction_graph", "page interaction graph schema is invalid"
+        )
+    normalized_graph_interactions: list[dict[str, Any]] = []
+    graph_interaction_ids: set[str] = set()
+    graph_fact_ids: set[str] = set()
+    used_api_contract_ids: set[str] = set()
+    for interaction_index, interaction_value in enumerate(
+        require_list(interaction_graph.get("interactions"), "graph interactions")
+    ):
+        label = f"graph interactions[{interaction_index}]"
+        interaction = require_dict(interaction_value, label)
+        require_exact_keys(
+            interaction,
+            {"interaction_id", *INTERACTION_ITEM_FIELDS, "component_bindings"},
+            label,
+            code="invalid_interaction_graph",
+        )
+        interaction_id = require_string(
+            interaction.get("interaction_id"), f"{label}.interaction_id"
+        )
+        if (
+            not COMPONENT_ID_RE.fullmatch(interaction_id)
+            or interaction_id in graph_interaction_ids
+        ):
+            raise ContractError(
+                "invalid_interaction_graph",
+                f"invalid or duplicate interaction {interaction_id}",
+            )
+        graph_interaction_ids.add(interaction_id)
+        bindings = require_dict(
+            interaction.get("component_bindings"), f"{label}.component_bindings"
+        )
+        expected_binding_keys = {
+            f"{field}_candidate_ids" for field in INTERACTION_ITEM_FIELDS
+        }
+        require_exact_keys(
+            bindings,
+            expected_binding_keys,
+            f"{label}.component_bindings",
+            code="invalid_interaction_component_binding",
+        )
+        normalized_fields: dict[str, Any] = {}
+        non_null_fields = 0
+        for field in INTERACTION_ITEM_FIELDS:
+            part_value = interaction.get(field)
+            candidate_binding_ids = require_string_list(
+                bindings.get(f"{field}_candidate_ids"),
+                f"{label}.component_bindings.{field}_candidate_ids",
+                nonempty=False,
+            )
+            if len(candidate_binding_ids) != len(set(candidate_binding_ids)) or any(
+                candidate_id not in candidate_ids
+                for candidate_id in candidate_binding_ids
+            ):
+                raise ContractError(
+                    "invalid_interaction_component_binding",
+                    f"{label}.{field} binds an unknown or duplicate candidate",
+                )
+            if part_value is None:
+                if candidate_binding_ids:
+                    raise ContractError(
+                        "invalid_interaction_component_binding",
+                        f"{label}.{field} is null but has component bindings",
+                    )
+                normalized_fields[field] = None
+                continue
+            non_null_fields += 1
+            part = require_dict(part_value, f"{label}.{field}")
+            expected_part_keys = {"fact_ids", "inference_basis"}
+            if field == "behavior":
+                expected_part_keys.update({"kind", "api_contract_id"})
+            if field == "result":
+                expected_part_keys.add("outcomes")
+            require_exact_keys(
+                part,
+                expected_part_keys,
+                f"{label}.{field}",
+                code="invalid_interaction_graph",
+            )
+            part_fact_ids = require_string_list(
+                part.get("fact_ids"), f"{label}.{field}.fact_ids", nonempty=False
+            )
+            inference_basis = require_string_list(
+                part.get("inference_basis"),
+                f"{label}.{field}.inference_basis",
+                nonempty=False,
+            )
+            if not part_fact_ids and not inference_basis:
+                raise ContractError(
+                    "invalid_interaction_graph",
+                    f"{label}.{field} needs source facts or an explicit inference basis",
+                )
+            if field == "result":
+                part_outcomes = require_string_list(
+                    part.get("outcomes"), f"{label}.result.outcomes"
+                )
+                if len(part_outcomes) != len(set(part_outcomes)):
+                    raise ContractError(
+                        "invalid_interaction_graph",
+                        f"{label}.result.outcomes must be unique",
+                    )
+            if len(part_fact_ids) != len(set(part_fact_ids)) or any(
+                fact_id in graph_fact_ids
+                or fact_kinds_by_id.get(fact_id) != field
+                for fact_id in part_fact_ids
+            ):
+                raise ContractError(
+                    "interaction_graph_coverage",
+                    f"{label}.{field} repeats, omits, or mistypes an interaction fact",
+                )
+            if not candidate_binding_ids or any(
+                candidate_by_fact_id[fact_id] not in candidate_binding_ids
+                for fact_id in part_fact_ids
+            ):
+                raise ContractError(
+                    "invalid_interaction_component_binding",
+                    f"{label}.{field} is not bound to every owning candidate",
+                )
+            graph_fact_ids.update(part_fact_ids)
+            if field == "behavior":
+                behavior_kind = require_string(
+                    part.get("kind"), f"{label}.behavior.kind"
+                )
+                if behavior_kind not in INTERACTION_BEHAVIOR_KINDS:
+                    raise ContractError(
+                        "invalid_interaction_graph",
+                        f"{label}.behavior.kind is invalid",
+                    )
+                api_contract_id = part.get("api_contract_id")
+                if behavior_kind == "api_call":
+                    api_contract_id = require_string(
+                        api_contract_id, f"{label}.behavior.api_contract_id"
+                    )
+                    if api_contract_id not in api_contract_ids:
+                        raise ContractError(
+                            "api_contract_missing",
+                            f"{label} references unknown API contract {api_contract_id}",
+                        )
+                    used_api_contract_ids.add(api_contract_id)
+                elif api_contract_id is not None:
+                    raise ContractError(
+                        "invalid_interaction_graph",
+                        f"{label} non-API behavior cannot bind an API contract",
+                    )
+            normalized_fields[field] = copy.deepcopy(part)
+        if not non_null_fields:
+            raise ContractError(
+                "invalid_interaction_graph", f"{label} has no interaction meaning"
+            )
+        if (
+            normalized_fields["trigger"] is not None
+            and normalized_fields["behavior"] is None
+        ):
+            raise ContractError(
+                "interaction_causality_missing",
+                f"{label} trigger must keep its behavior in the same interaction",
+            )
+        if (
+            normalized_fields["behavior"] is not None
+            and normalized_fields["behavior"].get("kind") != "api_call"
+            and normalized_fields["trigger"] is None
+        ):
+            raise ContractError(
+                "interaction_causality_missing",
+                f"{label} behavior must keep its trigger in the same interaction",
+            )
+        if (
+            normalized_fields["behavior"] is not None
+            and normalized_fields["behavior"].get("kind") == "api_call"
+            and normalized_fields["trigger"] is None
+        ):
+            raise ContractError(
+                "api_interaction_trigger_missing",
+                f"{label} api_call must keep its trigger in the same interaction",
+            )
+        if (
+            normalized_fields["behavior"] is not None
+            and normalized_fields["result"] is None
+        ):
+            raise ContractError(
+                "interaction_result_missing",
+                f"{label} behavior must keep its result in the same interaction",
+            )
+        if (
+            normalized_fields["result"] is not None
+            and normalized_fields["behavior"] is None
+        ):
+            raise ContractError(
+                "interaction_causality_missing",
+                f"{label} result must keep its behavior in the same interaction",
+            )
+        normalized_graph_interactions.append(
+            {
+                "interaction_id": interaction_id,
+                **normalized_fields,
+                "component_bindings": copy.deepcopy(bindings),
+            }
+        )
+    normalized_graph_edges: list[dict[str, Any]] = []
+    seen_edges: set[tuple[str, str, bytes]] = set()
+    graph_interaction_by_id = {
+        interaction["interaction_id"]: interaction
+        for interaction in normalized_graph_interactions
+    }
+    catalog_design_order = set(catalog_maps(catalog)["design_order"])
+    members_by_title = {
+        require_string(member.get("title"), "business member title"): member
+        for member_value in require_list(
+            business_context.get("members"), "business context members"
+        )
+        for member in [require_dict(member_value, "business context member")]
+    }
+    navigation_requirements_by_id = {
+        requirement["navigation_requirement_id"]: requirement
+        for requirement in expected_navigation_requirements
+    }
+    modal_requirements_by_id = {
+        requirement["presentation_requirement_id"]: requirement
+        for requirement in expected_presentation_requirements
+        if requirement["relation_kind"] == "modal"
+    }
+    for edge_index, edge_value in enumerate(
+        require_list(interaction_graph.get("edges"), "graph edges")
+    ):
+        label = f"graph edges[{edge_index}]"
+        edge = require_dict(edge_value, label)
+        require_exact_keys(
+            edge,
+            {"from_interaction_id", "outcome", "target"},
+            label,
+            code="invalid_interaction_graph",
+        )
+        from_id = require_string(
+            edge.get("from_interaction_id"), f"{label}.from_interaction_id"
+        )
+        outcome = require_string(edge.get("outcome"), f"{label}.outcome")
+        target = require_dict(edge.get("target"), f"{label}.target")
+        target_kind = target.get("kind")
+        if target_kind == "interaction":
+            require_exact_keys(
+                target,
+                {"kind", "to_interaction_id"},
+                f"{label}.target",
+                code="invalid_interaction_edge_target",
+            )
+            to_id = require_string(
+                target.get("to_interaction_id"), f"{label}.target.to_interaction_id"
+            )
+            if (
+                from_id not in graph_interaction_ids
+                or to_id not in graph_interaction_ids
+                or from_id == to_id
+            ):
+                raise ContractError(
+                    "invalid_interaction_graph", f"{label} has invalid endpoints"
+                )
+            if graph_interaction_by_id[to_id]["trigger"] is None:
+                raise ContractError(
+                    "invalid_interaction_edge_causality",
+                    f"{label} must connect a behavior outcome to a triggered interaction",
+                )
+            normalized_target: dict[str, Any] = {
+                "kind": "interaction",
+                "to_interaction_id": to_id,
+            }
+        elif target_kind in {"navigation", "modal"}:
+            require_exact_keys(
+                target,
+                {"kind", "page_key", "design_name", "requirement_ids"},
+                f"{label}.target",
+                code="invalid_interaction_edge_target",
+            )
+            target_page_key = require_string(
+                target.get("page_key"), f"{label}.target.page_key"
+            )
+            target_design_name = require_string(
+                target.get("design_name"), f"{label}.target.design_name"
+            )
+            requirement_ids = require_string_list(
+                target.get("requirement_ids"),
+                f"{label}.target.requirement_ids",
+                nonempty=False,
+            )
+            allowed_requirements = (
+                navigation_requirements_by_id
+                if target_kind == "navigation"
+                else modal_requirements_by_id
+            )
+            if len(requirement_ids) != len(set(requirement_ids)):
+                raise ContractError(
+                    "invalid_interaction_edge_target",
+                    f"{label}.target cites one relation reference twice",
+                )
+            target_member_title: str | None = None
+            for requirement_id in requirement_ids:
+                requirement = allowed_requirements.get(requirement_id)
+                if requirement is None or requirement["target_page_key"] != target_page_key:
+                    raise ContractError(
+                        "invalid_interaction_edge_target",
+                        f"{label} does not cite exact {target_kind} relation evidence",
+                    )
+                target_member_title = requirement["target_member_title"]
+            if target_page_key != page_key and not requirement_ids:
+                raise ContractError(
+                    "invalid_interaction_edge_target",
+                    f"{label} cross-page target needs exact source relation evidence",
+                )
+            if target_member_title is None:
+                target_member = next(
+                    (
+                        member
+                        for member in members_by_title.values()
+                        if page_key_for(
+                            require_string(member.get("title"), "business member title")
+                        )
+                        == target_page_key
+                    ),
+                    None,
+                )
+            else:
+                target_member = members_by_title.get(target_member_title)
+            if target_member is None or not member_requires_semantic_work_item(
+                target_member
+            ):
+                raise ContractError(
+                    "invalid_interaction_edge_target",
+                    f"{label} target page is not a frozen component page",
+                )
+            target_design_names = [
+                require_string(state.get("design_name"), "design state name")
+                for state in require_list(
+                    target_member.get("design_states"), "design states"
+                )
+            ]
+            if (
+                target_design_name not in target_design_names
+                or target_design_name not in catalog_design_order
+            ):
+                raise ContractError(
+                    "invalid_interaction_edge_target",
+                    f"{label} target design is not in the frozen source catalog",
+                )
+            normalized_target = {
+                "kind": target_kind,
+                "page_key": target_page_key,
+                "design_name": target_design_name,
+                "requirement_ids": list(requirement_ids),
+            }
+        else:
+            raise ContractError(
+                "invalid_interaction_edge_target",
+                f"{label}.target.kind is invalid",
+            )
+        if from_id not in graph_interaction_ids:
+            raise ContractError(
+                "invalid_interaction_graph", f"{label} has invalid endpoints"
+            )
+        if graph_interaction_by_id[from_id]["behavior"] is None:
+            raise ContractError(
+                "invalid_interaction_edge_causality",
+                f"{label} must start from a behavior result",
+            )
+        edge_key = (from_id, outcome, canonical_bytes(normalized_target))
+        if edge_key in seen_edges:
+            raise ContractError(
+                "invalid_interaction_graph", f"{label} has invalid endpoints"
+            )
+        seen_edges.add(edge_key)
+        normalized_graph_edges.append(
+            {
+                "from_interaction_id": from_id,
+                "outcome": outcome,
+                "target": normalized_target,
+            }
+        )
+    terminal_outcomes: list[dict[str, Any]] = []
+    seen_terminal_outcomes: set[tuple[str, str]] = set()
+    for terminal_index, terminal_value in enumerate(
+        require_list(
+            interaction_graph.get("terminal_outcomes"), "graph terminal outcomes"
+        )
+    ):
+        label = f"graph terminal_outcomes[{terminal_index}]"
+        terminal = require_dict(terminal_value, label)
+        require_exact_keys(
+            terminal,
+            {"interaction_id", "outcome", "inference_basis"},
+            label,
+            code="invalid_interaction_graph",
+        )
+        interaction_id = require_string(
+            terminal.get("interaction_id"), f"{label}.interaction_id"
+        )
+        outcome = require_string(terminal.get("outcome"), f"{label}.outcome")
+        inference_basis = require_string_list(
+            terminal.get("inference_basis"), f"{label}.inference_basis"
+        )
+        key = (interaction_id, outcome)
+        terminal_interaction = graph_interaction_by_id.get(interaction_id)
+        terminal_result = (
+            terminal_interaction["result"] if terminal_interaction is not None else None
+        )
+        if (
+            terminal_interaction is None
+            or terminal_interaction["behavior"] is None
+            or terminal_result is None
+            or outcome not in terminal_result["outcomes"]
+            or key in seen_terminal_outcomes
+            or any(
+                edge["from_interaction_id"] == interaction_id
+                and edge["outcome"] == outcome
+                for edge in normalized_graph_edges
+            )
+        ):
+            raise ContractError(
+                "invalid_interaction_terminal_outcome",
+                f"{label} must uniquely terminate one declared result outcome",
+            )
+        seen_terminal_outcomes.add(key)
+        terminal_outcomes.append(
+            {
+                "interaction_id": interaction_id,
+                "outcome": outcome,
+                "inference_basis": inference_basis,
+            }
+        )
+    outgoing_outcomes = {
+        interaction_id: {
+            edge["outcome"]
+            for edge in normalized_graph_edges
+            if edge["from_interaction_id"] == interaction_id
+        }
+        | {
+            terminal["outcome"]
+            for terminal in terminal_outcomes
+            if terminal["interaction_id"] == interaction_id
+        }
+        for interaction_id in graph_interaction_ids
+    }
+    for interaction in normalized_graph_interactions:
+        behavior = interaction["behavior"]
+        if behavior is None or behavior.get("kind") != "api_call":
+            continue
+        missing_outcomes = {"success", "failure"} - (
+            set(interaction["result"]["outcomes"])
+            | outgoing_outcomes[interaction["interaction_id"]]
+        )
+        missing_resolutions = {"success", "failure"} - outgoing_outcomes[
+            interaction["interaction_id"]
+        ]
+        if missing_outcomes or missing_resolutions:
+            raise ContractError(
+                "api_interaction_outcome_missing",
+                "api_call must resolve success and failure outcomes; "
+                f"interaction={interaction['interaction_id']} "
+                f"missing={sorted(missing_outcomes | missing_resolutions)}",
+            )
+    for interaction in normalized_graph_interactions:
+        if interaction["behavior"] is None:
+            continue
+        result_outcomes = interaction["result"]["outcomes"]
+        resolutions = {outcome: 0 for outcome in result_outcomes}
+        for edge in normalized_graph_edges:
+            if edge["from_interaction_id"] != interaction["interaction_id"]:
+                continue
+            if edge["outcome"] not in resolutions:
+                raise ContractError(
+                    "interaction_result_outcome_unresolved",
+                    "graph edges must resolve declared result outcomes; "
+                    f"interaction={interaction['interaction_id']} "
+                    f"outcome={edge['outcome']}",
+                )
+            resolutions[edge["outcome"]] += 1
+        for terminal in terminal_outcomes:
+            if terminal["interaction_id"] != interaction["interaction_id"]:
+                continue
+            resolutions[terminal["outcome"]] += 1
+        unresolved = sorted(
+            outcome for outcome, count in resolutions.items() if count != 1
+        )
+        if unresolved:
+            raise ContractError(
+                "interaction_result_outcome_unresolved",
+                "every declared result outcome needs exactly one edge or terminal "
+                "resolution; "
+                f"interaction={interaction['interaction_id']} "
+                f"unresolved={unresolved}",
+            )
+    if graph_fact_ids != expected_interaction_fact_ids:
+        missing = sorted(expected_interaction_fact_ids - graph_fact_ids)
+        unexpected = sorted(graph_fact_ids - expected_interaction_fact_ids)
+        raise ContractError(
+            "interaction_graph_coverage",
+            "interaction graph must bind every atomic interaction fact exactly once; "
+            f"missing={missing} unexpected={unexpected}",
+        )
+    # Audit closure: every exact navigation/modal transition requirement from
+    # the verified IOLE source analysis is consumed exactly once by one
+    # external graph edge, and each cited reference span is contained by a
+    # source-backed result fact on the interaction that emits the edge.
+    transition_requirements: dict[str, dict[str, Any]] = {
+        requirement["navigation_requirement_id"]: requirement
+        for requirement in expected_navigation_requirements
+    }
+    transition_requirements.update(
+        {
+            requirement["presentation_requirement_id"]: requirement
+            for requirement in expected_presentation_requirements
+            if requirement["relation_kind"] == "modal"
+        }
+    )
+    requirement_consumers: dict[str, list[str]] = {}
+    for edge in normalized_graph_edges:
+        if edge["target"]["kind"] not in {"navigation", "modal"}:
+            continue
+        for requirement_id in edge["target"]["requirement_ids"]:
+            requirement_consumers.setdefault(requirement_id, []).append(
+                edge["from_interaction_id"]
+            )
+    missing_requirements = sorted(
+        requirement_id
+        for requirement_id in transition_requirements
+        if requirement_id not in requirement_consumers
+    )
+    if missing_requirements:
+        raise ContractError(
+            "interaction_transition_evidence_missing",
+            "every exact navigation/modal transition requirement needs one "
+            "external graph edge; "
+            f"missing={missing_requirements}",
+        )
+    duplicate_requirements = sorted(
+        requirement_id
+        for requirement_id, consumers in requirement_consumers.items()
+        if len(consumers) > 1
+    )
+    if duplicate_requirements:
+        raise ContractError(
+            "interaction_transition_evidence_duplicate",
+            "one exact transition requirement cannot support multiple edges; "
+            f"duplicates={duplicate_requirements}",
+        )
+    for edge in normalized_graph_edges:
+        if edge["target"]["kind"] not in {"navigation", "modal"}:
+            continue
+        source_result = graph_interaction_by_id[edge["from_interaction_id"]]["result"]
+        for requirement_id in edge["target"]["requirement_ids"]:
+            requirement_source_ref = transition_requirements[requirement_id][
+                "source_ref"
+            ]
+            if not any(
+                clause_id == requirement_source_ref["clause_id"]
+                and start <= requirement_source_ref["start"]
+                and end >= requirement_source_ref["end"]
+                for fact_id in source_result["fact_ids"]
+                for clause_id, start, end in fact_source_keys.get(fact_id, set())
+            ):
+                raise ContractError(
+                    "interaction_transition_evidence_unbound",
+                    "a transition reference is not contained by a source-backed "
+                    "result fact of its emitting interaction; "
+                    f"requirement={requirement_id} "
+                    f"interaction={edge['from_interaction_id']}",
+                )
+    normalized_interaction_graph = {
+        "schema": "icp.component-design.interaction-graph.v2",
+        "interactions": normalized_graph_interactions,
+        "edges": normalized_graph_edges,
+        "terminal_outcomes": terminal_outcomes,
+    }
+    covered_api_requirement_ids: list[str] = [
+        requirement_id
+        for contract in normalized_api_contracts
+        for requirement_id in contract["requirement_ids"]
+    ]
+    if (
+        len(covered_api_requirement_ids) != len(set(covered_api_requirement_ids))
+        or set(covered_api_requirement_ids) != api_requirement_ids
+    ):
+        raise ContractError(
+            "api_contract_coverage",
+            "every same-page API requirement needs exactly one frozen Apifox contract; "
+            f"missing={sorted(api_requirement_ids - set(covered_api_requirement_ids))} "
+            "duplicates="
+            + str(
+                sorted(
+                    {
+                        requirement_id
+                        for requirement_id in covered_api_requirement_ids
+                        if covered_api_requirement_ids.count(requirement_id) > 1
+                    }
+                )
+            ),
+        )
+    if used_api_contract_ids != api_contract_ids:
+        raise ContractError(
+            "api_interaction_coverage",
+            "every frozen API contract must belong to an api_call interaction; "
+            f"unused={sorted(api_contract_ids - used_api_contract_ids)}",
         )
 
     maps = catalog_maps(catalog)
@@ -2598,6 +4105,8 @@ def validate_page_facts(
         **copy.deepcopy(facts),
         "source_coverage": normalized_coverage,
         "interaction_items": normalized_interaction_items,
+        "interaction_graph": normalized_interaction_graph,
+        "api_contracts": normalized_api_contracts,
         "candidates": normalized_candidates,
         "design_compositions": normalized_compositions,
     }
@@ -2704,7 +4213,7 @@ def build_page_review_input(page_facts: dict[str, Any]) -> dict[str, Any]:
 
     draft_sha = sha256_bytes(json_bytes(page_facts))
     return {
-        "schema": "icp.component-design.page-review.v1",
+        "schema": "icp.component-design.page-review.v3",
         "page_key": page_facts["page_key"],
         "member_title": page_facts["member_title"],
         "page_facts_draft_sha256": draft_sha,
@@ -2717,7 +4226,13 @@ def build_page_review_input(page_facts: dict[str, Any]) -> dict[str, Any]:
         "presentation_requirements": copy.deepcopy(
             page_facts["presentation_requirements"]
         ),
+        "navigation_requirements": copy.deepcopy(
+            page_facts["navigation_requirements"]
+        ),
+        "api_requirements": copy.deepcopy(page_facts["api_requirements"]),
+        "api_contracts": copy.deepcopy(page_facts["api_contracts"]),
         "interaction_items": copy.deepcopy(page_facts["interaction_items"]),
+        "interaction_graph": copy.deepcopy(page_facts["interaction_graph"]),
         "segment_reviews": segment_reviews,
         "cross_page_review": {
             "candidate_boundaries_complete": False,
@@ -2725,6 +4240,9 @@ def build_page_review_input(page_facts: dict[str, Any]) -> dict[str, Any]:
             "all_visible_variation_roles_extracted": False,
             "no_cross_page_semantic_leak": False,
             "no_implementation_content": False,
+            "interaction_graph_complete": False,
+            "interaction_component_bindings_correct": False,
+            "api_contracts_correct": False,
             "evidence": [
                 "TODO: cite the page-local candidates, facts, Blocks, and source scope."
             ],
@@ -2762,7 +4280,11 @@ def validate_page_review(
             "mobile_component_pattern_context",
             "candidate_projection",
             "presentation_requirements",
+            "navigation_requirements",
+            "api_requirements",
+            "api_contracts",
             "interaction_items",
+            "interaction_graph",
             "segment_reviews",
             "cross_page_review",
             "decision",
@@ -2779,7 +4301,11 @@ def validate_page_review(
         "mobile_component_pattern_context",
         "candidate_projection",
         "presentation_requirements",
+        "navigation_requirements",
+        "api_requirements",
+        "api_contracts",
         "interaction_items",
+        "interaction_graph",
     ):
         if review.get(field) != expected.get(field):
             raise ContractError(
@@ -2852,6 +4378,9 @@ def validate_page_review(
         "all_visible_variation_roles_extracted",
         "no_cross_page_semantic_leak",
         "no_implementation_content",
+        "interaction_graph_complete",
+        "interaction_component_bindings_correct",
+        "api_contracts_correct",
     )
     require_exact_keys(
         cross, set(cross_flag_fields) | {"evidence", "issues"}, "cross_page_review"
@@ -3741,14 +5270,23 @@ def validate_abstraction_plan(
                 "presentation_usage_invalid",
                 f"presentation host does not own its source facts: {requirement_id}",
             )
+        # Source-fact coverage is an identity set: the declared list must
+        # cover exactly the matching facts and is normalized to the
+        # authoritative matching-fact order before the evidence-derived
+        # usage ID is checked, so identical semantics hash identically.
         source_fact_ids = require_string_list(
             usage.get("source_fact_ids"), f"{label}.source_fact_ids"
         )
-        if source_fact_ids != matching_fact_ids:
+        missing_fact_ids = sorted(set(matching_fact_ids) - set(source_fact_ids))
+        unexpected_fact_ids = sorted(set(source_fact_ids) - set(matching_fact_ids))
+        if missing_fact_ids or unexpected_fact_ids:
             raise ContractError(
                 "presentation_usage_invalid",
-                f"presentation usage does not bind every exact source fact: {requirement_id}",
+                "presentation usage does not bind every exact source fact: "
+                f"{requirement_id}; missing={missing_fact_ids} "
+                f"unexpected={unexpected_fact_ids}",
             )
+        usage["source_fact_ids"] = list(matching_fact_ids)
         target_instance_id = require_string(
             usage.get("target_instance_id"), f"{label}.target_instance_id"
         )
@@ -4071,6 +5609,7 @@ def record_abstraction(args: argparse.Namespace) -> dict[str, Any]:
     verify_live_mobile_component_pattern_context(stage_dir, state)
     if state.get("state") != "awaiting_group_abstraction":
         raise ContractError("invalid_state", "group abstraction is not ready")
+    require_component_checklist_node(stage_dir, state, "group.abstraction")
     catalog = verify_live_catalog(project_root, stage_dir, state)
     verify_live_business_context(stage_dir, state, catalog)
     registry = verify_live_group_registry(stage_dir, state)
@@ -4129,6 +5668,12 @@ def record_abstraction(args: argparse.Namespace) -> dict[str, Any]:
     state["replacement_map_sha256"] = sha256_bytes(replacement_path.read_bytes())
     state["state"] = "ready_to_lock"
     atomic_write_json(stage_dir / "state.json", state)
+    mark_component_checklist(
+        stage_dir,
+        state,
+        "group.abstraction",
+        state["abstraction_plan_sha256"],
+    )
     return {
         "ok": True,
         "stage": "component-design",
@@ -4165,8 +5710,9 @@ def record_page_facts(args: argparse.Namespace) -> dict[str, Any]:
     if member is None:
         raise ContractError("page_identity_mismatch", "page is absent from business context")
     normalized = validate_page_facts(
-        read_json(Path(args.facts)), page_key, member, context, catalog, state
+        read_json(Path(args.facts)), page_key, member, context, catalog, state, stage_dir
     )
+    require_component_checklist_node(stage_dir, state, f"page:{page_key}.facts")
     if state.get("state") == "awaiting_group_abstraction":
         verify_live_group_registry(stage_dir, state)
         state["state"] = "collecting_page_facts"
@@ -4200,6 +5746,12 @@ def record_page_facts(args: argparse.Namespace) -> dict[str, Any]:
     )
     total_pages = len(require_dict(state.get("pages"), "page states"))
     atomic_write_json(stage_dir / "state.json", state)
+    mark_component_checklist(
+        stage_dir,
+        state,
+        f"page:{page_key}.facts",
+        page_state["draft_sha256"],
+    )
     return {
         "ok": True,
         "stage": "component-design",
@@ -4221,6 +5773,7 @@ def record_page_review(args: argparse.Namespace) -> dict[str, Any]:
         raise ContractError("invalid_state", "page review cannot be recorded in this state")
     page_key = require_string(args.page_key, "page key")
     page_state = require_dict(state.get("pages", {}).get(page_key), "page state")
+    require_component_checklist_node(stage_dir, state, f"page:{page_key}.review")
     if page_state.get("status") != "awaiting_page_review":
         raise ContractError(
             "invalid_state", "page review requires an awaiting_page_review draft"
@@ -4244,7 +5797,7 @@ def record_page_review(args: argparse.Namespace) -> dict[str, Any]:
     ):
         raise ContractError("stage_drift", f"page facts draft changed: {page_key}")
     draft = validate_page_facts(
-        read_json(draft_path), page_key, member, context, catalog, state
+        read_json(draft_path), page_key, member, context, catalog, state, stage_dir
     )
     review, evidence_passes = validate_page_review(
         read_json(Path(args.review)), draft
@@ -4341,6 +5894,12 @@ def record_page_review(args: argparse.Namespace) -> dict[str, Any]:
         state["candidate_registry_sha256"] = registry_sha
         state["state"] = "awaiting_group_abstraction"
     atomic_write_json(stage_dir / "state.json", state)
+    mark_component_checklist(
+        stage_dir,
+        state,
+        f"page:{page_key}.review",
+        page_state["review_sha256"],
+    )
     return {
         "ok": True,
         "stage": "component-design",
@@ -4361,6 +5920,209 @@ def load_hashed_artifact(
     if not path.is_file() or sha256_bytes(path.read_bytes()) != state.get(state_field):
         raise ContractError("stage_drift", f"{filename} changed or is missing")
     return require_dict(read_json(path), filename)
+
+
+def _layout_rect(value: object) -> dict[str, int | float] | None:
+    if not isinstance(value, dict):
+        return None
+    projected = {
+        "left": value.get("left", value.get("x")),
+        "top": value.get("top", value.get("y")),
+        "width": value.get("width"),
+        "height": value.get("height"),
+    }
+    if any(
+        isinstance(item, bool) or not isinstance(item, (int, float))
+        for item in projected.values()
+    ):
+        return None
+    return projected
+
+
+def _rect_inside(inner: dict[str, int | float], outer: dict[str, int | float]) -> bool:
+    return (
+        inner["left"] >= outer["left"]
+        and inner["top"] >= outer["top"]
+        and inner["left"] + inner["width"] <= outer["left"] + outer["width"]
+        and inner["top"] + inner["height"] <= outer["top"] + outer["height"]
+    )
+
+
+def build_component_layout_inputs(
+    source_catalog: dict[str, Any],
+    page_compositions: list[dict[str, Any]],
+    component_definitions: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Project Stage-1 geometry and Stage-2 ownership into one closed input."""
+
+    compositions = {
+        require_string(item.get("design_name"), "composition design name"): item
+        for value in page_compositions
+        for item in [require_dict(value, "page composition")]
+    }
+    definitions = {
+        require_string(item.get("component_id"), "component definition ID"): copy.deepcopy(item)
+        for value in component_definitions
+        for item in [require_dict(value, "component definition")]
+    }
+    results: list[dict[str, Any]] = []
+    for design_value in require_list(source_catalog.get("designs"), "source catalog designs"):
+        design = require_dict(design_value, "source catalog design")
+        design_name = require_string(design.get("design_name"), "source catalog design name")
+        composition = require_dict(compositions.get(design_name), "design composition")
+        raw_nodes: dict[str, dict[str, Any]] = {}
+        blocks_by_id: dict[str, dict[str, Any]] = {}
+        ordered_node_ids: list[str] = []
+        for block_value in require_list(design.get("blocks"), f"{design_name} Blocks"):
+            block = require_dict(block_value, f"{design_name} Block")
+            block_id = require_string(block.get("block_id"), "Block ID")
+            semantic = require_dict(block.get("semantic"), "Block semantic data")
+            block_node_ids: list[str] = []
+            rendering_ids: list[str] = []
+            non_rendering_ids: list[str] = []
+            roles: dict[str, str] = {}
+            for node_value in require_list(block.get("source_nodes"), "Block source nodes"):
+                node = require_dict(node_value, "Block source node")
+                node_id = require_string(node.get("source_node_id"), "source node ID")
+                if node_id in raw_nodes:
+                    raise ContractError(
+                        "component_layout_input_invalid",
+                        f"source node belongs to multiple Blocks: {design_name}/{node_id}",
+                    )
+                raw_nodes[node_id] = node
+                ordered_node_ids.append(node_id)
+                block_node_ids.append(node_id)
+                role = require_string(node.get("content_role"), "source node content role")
+                roles[node_id] = role
+                if role in {"static_copy", "static_visual", "dynamic_content", "platform_element"}:
+                    rendering_ids.append(node_id)
+                else:
+                    non_rendering_ids.append(node_id)
+            blocks_by_id[block_id] = {
+                "block_id": block_id,
+                "semantic_parent_block_id": semantic.get("parent_block_id"),
+                "ordered_source_node_ids": block_node_ids,
+                "rendering_source_node_ids": rendering_ids,
+                "non_rendering_source_node_ids": non_rendering_ids,
+                "content_roles_by_source_node_id": roles,
+            }
+        roots = [
+            node_id
+            for node_id, node in raw_nodes.items()
+            if require_dict(node.get("source_fact"), "source fact").get("parent_id") is None
+        ]
+        if len(roots) != 1:
+            raise ContractError(
+                "component_layout_input_invalid",
+                f"design needs one source root: {design_name}",
+            )
+        root_source_node_id = roots[0]
+        root_fact = require_dict(raw_nodes[root_source_node_id].get("source_fact"), "root source fact")
+        root_payload = require_dict(root_fact.get("payload"), "root source payload")
+        root_frame = _layout_rect(root_payload.get("frame"))
+        if root_frame is None or root_frame["width"] <= 0 or root_frame["height"] <= 0:
+            raise ContractError(
+                "component_layout_input_invalid",
+                f"design root has no valid frame: {design_name}",
+            )
+        artboard_rect = {
+            "left": 0,
+            "top": 0,
+            "width": root_frame["width"],
+            "height": root_frame["height"],
+        }
+        source_nodes_by_id: dict[str, dict[str, Any]] = {}
+        for source_order, node_id in enumerate(ordered_node_ids):
+            node = raw_nodes[node_id]
+            fact = require_dict(node.get("source_fact"), "source fact")
+            payload = require_dict(fact.get("payload"), "source payload")
+            frame = _layout_rect(payload.get("frame"))
+            real_frame = _layout_rect(payload.get("realFrame", payload.get("real_frame")))
+            selected = real_frame if node.get("geometry_basis") == "real_frame" else frame
+            if node_id == root_source_node_id:
+                frame_space = "canvas"
+            elif selected is None:
+                frame_space = "artboard"
+            elif _rect_inside(selected, root_frame) and (
+                root_frame["left"] != 0 or root_frame["top"] != 0
+            ):
+                frame_space = "canvas"
+            elif _rect_inside(selected, artboard_rect):
+                frame_space = "artboard"
+            else:
+                # Stage 1 records raw design-tool frames, not parent-local layout
+                # instructions. Out-of-artboard decoration remains artboard-space.
+                frame_space = "artboard"
+            source_nodes_by_id[node_id] = {
+                "source_node_id": node_id,
+                "source_parent_node_id": fact.get("parent_id"),
+                "source_order": source_order,
+                "frame": frame,
+                "real_frame": real_frame,
+                "geometry_basis": node.get("geometry_basis"),
+                "frame_space": frame_space,
+            }
+        order_key_by_instance: dict[str, str] = {}
+        for instance_value in require_list(composition.get("instances"), "composition instances"):
+            instance = require_dict(instance_value, "composition instance")
+            source_paths = [
+                require_dict(raw_nodes[node_id].get("source_fact"), "source fact").get("source_path")
+                for block_id in require_string_list(instance.get("source_block_ids"), "instance source Blocks")
+                for node_id in blocks_by_id[block_id]["ordered_source_node_ids"]
+            ]
+            order_key_by_instance[instance["instance_id"]] = min(
+                (json.dumps(path, ensure_ascii=False, separators=(",", ":")) for path in source_paths),
+                default="[]",
+            )
+        sibling_groups: dict[tuple[object, str], list[str]] = {}
+        for instance_value in require_list(composition.get("instances"), "composition instances"):
+            instance = require_dict(instance_value, "composition instance")
+            sibling_groups.setdefault(
+                (instance.get("parent_instance_id"), require_string(instance.get("slot"), "instance slot")),
+                [],
+            ).append(require_string(instance.get("instance_id"), "instance ID"))
+        order_by_instance = {
+            instance_id: index
+            for group in sibling_groups.values()
+            for index, instance_id in enumerate(
+                sorted(group, key=lambda value: (order_key_by_instance[value], value))
+            )
+        }
+        instances = [
+            {
+                "instance_id": instance["instance_id"],
+                "component_id": instance["component_id"],
+                "parent_instance_id": instance["parent_instance_id"],
+                "slot": "root" if instance["parent_instance_id"] is None else instance["slot"],
+                "order": order_by_instance[instance["instance_id"]],
+                "source_block_ids": copy.deepcopy(instance["source_block_ids"]),
+            }
+            for value in require_list(composition.get("instances"), "composition instances")
+            for instance in [require_dict(value, "composition instance")]
+        ]
+        results.append(
+            {
+                "page_key": composition["page_key"],
+                "design_state_id": design_name,
+                "root_instance_id": composition["root_instance_id"],
+                "reference": {
+                    "root_source_node_id": root_source_node_id,
+                    "logical_artboard_size": {
+                        "width": root_frame["width"],
+                        "height": root_frame["height"],
+                    },
+                    "coordinate_contract": {
+                        "supported_frame_spaces": ["canvas", "artboard", "parent"]
+                    },
+                },
+                "instances": instances,
+                "blocks_by_id": blocks_by_id,
+                "source_nodes_by_id": source_nodes_by_id,
+                "component_definitions_by_id": copy.deepcopy(definitions),
+                "platform_context": {},
+            }
+        )
+    return results
 
 
 def build_block_component_bindings(
@@ -4527,10 +6289,466 @@ def build_block_component_bindings(
         "design_count": len(catalog_design_names),
         "binding_count": len(bindings),
         "bindings": bindings,
+        "visual_references": [
+            {
+                "design_name": require_string(design.get("design_name"), "design name"),
+                "path": require_string(
+                    require_dict(design.get("visual_reference"), "visual reference").get(
+                        "source_project_path"
+                    ),
+                    "visual reference project path",
+                ),
+                "sha256": require_string(
+                    require_dict(design.get("visual_reference"), "visual reference").get("sha256"),
+                    "visual reference SHA-256",
+                ),
+                "pixel_size": copy.deepcopy(
+                    require_dict(design.get("visual_reference"), "visual reference").get("pixel_size")
+                ),
+                "logical_artboard_size": copy.deepcopy(
+                    require_dict(design.get("visual_reference"), "visual reference").get(
+                        "logical_artboard_size"
+                    )
+                ),
+                "logical_scale": require_dict(
+                    design.get("visual_reference"), "visual reference"
+                ).get("logical_scale"),
+            }
+            for value in require_list(source_catalog.get("designs"), "source catalog designs")
+            for design in [require_dict(value, "source catalog design")]
+        ],
+        "layout_inputs": build_component_layout_inputs(
+            source_catalog,
+            page_compositions,
+            component_definitions,
+        ),
     }
 
 
-def build_v6_lock(
+def build_locked_interaction_contracts(
+    stage_dir: Path,
+    state: dict[str, Any],
+    pages: list[dict[str, Any]],
+    component_instances: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Replace page-local candidate bindings with final component instances."""
+
+    instance_by_candidate: dict[str, dict[str, Any]] = {}
+    for instance_value in component_instances:
+        instance = require_dict(instance_value, "component instance")
+        for candidate_id in require_string_list(
+            instance.get("candidate_ids"), "component instance candidate IDs"
+        ):
+            if candidate_id in instance_by_candidate:
+                raise ContractError(
+                    "interaction_component_binding_coverage",
+                    f"candidate {candidate_id} has multiple final component instances",
+                )
+            instance_by_candidate[candidate_id] = instance
+
+    interaction_graphs: list[dict[str, Any]] = []
+    api_contracts: list[dict[str, Any]] = []
+    for page in pages:
+        page_key = require_string(page.get("page_key"), "locked page key")
+        member_title = require_string(
+            page.get("member_title"), "locked page member title"
+        )
+        graph = require_dict(page.get("interaction_graph"), "page interaction graph")
+        projected_interactions: list[dict[str, Any]] = []
+        for interaction_value in require_list(
+            graph.get("interactions"), "page graph interactions"
+        ):
+            interaction = require_dict(interaction_value, "page graph interaction")
+            candidate_bindings = require_dict(
+                interaction.get("component_bindings"),
+                "interaction candidate bindings",
+            )
+            component_bindings: dict[str, list[str]] = {}
+            for field in INTERACTION_ITEM_FIELDS:
+                candidate_ids = require_string_list(
+                    candidate_bindings.get(f"{field}_candidate_ids"),
+                    f"interaction {field} candidate bindings",
+                    nonempty=False,
+                )
+                component_instance_ids: list[str] = []
+                for candidate_id in candidate_ids:
+                    instance = instance_by_candidate.get(candidate_id)
+                    if instance is None or instance.get("page_key") != page_key:
+                        raise ContractError(
+                            "interaction_component_binding_coverage",
+                            f"interaction candidate {candidate_id} has no same-page final component",
+                        )
+                    instance_id = require_string(
+                        instance.get("instance_id"), "component instance ID"
+                    )
+                    if instance_id not in component_instance_ids:
+                        component_instance_ids.append(instance_id)
+                component_bindings[
+                    f"{field}_component_instance_ids"
+                ] = component_instance_ids
+            projected_interactions.append(
+                {
+                    **{
+                        key: copy.deepcopy(value)
+                        for key, value in interaction.items()
+                        if key != "component_bindings"
+                    },
+                    "component_bindings": component_bindings,
+                }
+            )
+        interaction_graphs.append(
+            {
+                "schema": "icp.component-design.locked-interaction-graph.v2",
+                "page_key": page_key,
+                "member_title": member_title,
+                "interactions": projected_interactions,
+                "edges": copy.deepcopy(graph["edges"]),
+                "terminal_outcomes": copy.deepcopy(graph["terminal_outcomes"]),
+                "transition_requirements": [
+                    *copy.deepcopy(
+                        require_list(
+                            page.get("navigation_requirements"),
+                            "page navigation requirements",
+                        )
+                    ),
+                    *[
+                        copy.deepcopy(requirement)
+                        for requirement_value in require_list(
+                            page.get("presentation_requirements"),
+                            "page presentation requirements",
+                        )
+                        for requirement in [
+                            require_dict(requirement_value, "presentation requirement")
+                        ]
+                        if requirement.get("relation_kind") == "modal"
+                    ],
+                ],
+            }
+        )
+        page_state = require_dict(state.get("pages", {}).get(page_key), "page state")
+        artifact_by_contract_id = {
+            require_string(
+                artifact.get("api_contract_id"), "API artifact contract ID"
+            ): artifact
+            for artifact_value in require_list(
+                page_state.get("api_contract_artifacts"),
+                "page API contract artifacts",
+            )
+            for artifact in [require_dict(artifact_value, "API contract artifact")]
+        }
+        for contract in require_list(page.get("api_contracts"), "page API contracts"):
+            contract_id = require_string(
+                require_dict(contract, "page API contract").get("api_contract_id"),
+                "page API contract ID",
+            )
+            artifact = require_dict(
+                artifact_by_contract_id.get(contract_id), "API acquisition artifact"
+            )
+            relative_path = require_string(
+                artifact.get("path"), "API acquisition artifact path"
+            )
+            artifact_path = stage_dir / relative_path
+            artifact_sha = require_string(
+                artifact.get("sha256"), "API acquisition artifact SHA-256"
+            )
+            if (
+                not artifact_path.is_file()
+                or sha256_bytes(artifact_path.read_bytes()) != artifact_sha
+            ):
+                raise ContractError(
+                    "api_acquisition_drift",
+                    f"API acquisition artifact changed: {contract_id}",
+                )
+            api_contracts.append(
+                {
+                "page_key": page_key,
+                "member_title": member_title,
+                **copy.deepcopy(contract),
+                    "acquisition_artifact": {
+                        "path": relative_path,
+                        "sha256": artifact_sha,
+                    },
+                }
+            )
+    return interaction_graphs, api_contracts
+
+
+IMPLEMENTATION_CONTRACT_RAW_KEYS = {
+    "source_coverage",
+    "source_refs",
+    "source_ref",
+    "source_text",
+    "quote",
+    "row_data",
+    "source_contract",
+}
+
+
+def sanitize_implementation_value(value: Any) -> Any:
+    """Project Stage 2 decisions without leaking original source prose to Stage 3."""
+
+    if isinstance(value, dict):
+        return {
+            key: sanitize_implementation_value(item)
+            for key, item in value.items()
+            if key not in IMPLEMENTATION_CONTRACT_RAW_KEYS
+        }
+    if isinstance(value, list):
+        return [sanitize_implementation_value(item) for item in value]
+    return copy.deepcopy(value)
+
+
+def build_documented_integration_obligations(
+    business_context: dict[str, Any],
+    pages: list[dict[str, Any]],
+    interaction_graphs: list[dict[str, Any]],
+    component_instances: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Freeze source-derived test obligations while Stage 2 still owns semantics."""
+
+    instance_by_candidate: dict[str, str] = {}
+    fact_owner: dict[str, str] = {}
+    for instance_value in component_instances:
+        instance = require_dict(instance_value, "component instance")
+        instance_id = require_string(instance.get("instance_id"), "component instance ID")
+        for candidate_id in require_string_list(
+            instance.get("candidate_ids"), "component instance candidate IDs"
+        ):
+            instance_by_candidate[candidate_id] = instance_id
+        for binding_value in require_list(
+            instance.get("fact_bindings"), "component instance fact bindings"
+        ):
+            binding = require_dict(binding_value, "component instance fact binding")
+            fact_id = require_string(binding.get("fact_id"), "bound fact ID")
+            if fact_id in fact_owner:
+                raise ContractError(
+                    "integration_obligation_binding",
+                    f"fact has multiple component owners: {fact_id}",
+                )
+            fact_owner[fact_id] = instance_id
+
+    it_clause_ids_by_page: dict[str, set[str]] = {}
+    for member_value in require_list(
+        business_context.get("members"), "business context members"
+    ):
+        member = require_dict(member_value, "business context member")
+        if not member_requires_semantic_work_item(member):
+            continue
+        it_clauses = [
+            clause
+            for clause_value in require_list(member.get("clauses"), "business clauses")
+            for clause in [require_dict(clause_value, "business clause")]
+            if clause.get("label") == "IT"
+        ]
+        if len(it_clauses) > 1:
+            raise ContractError(
+                "integration_obligation_source",
+                f"member declares IT more than once: {member.get('title')}",
+            )
+        it_clause_ids_by_page[page_key_for(member["title"])] = {
+            require_string(clause.get("clause_id"), "IT clause ID")
+            for clause in it_clauses
+        }
+
+    obligations: list[dict[str, Any]] = []
+    for graph_value in interaction_graphs:
+        graph = require_dict(graph_value, "locked interaction graph")
+        page_key = require_string(graph.get("page_key"), "interaction page key")
+        member_title = require_string(
+            graph.get("member_title"), "interaction member title"
+        )
+        for interaction_value in require_list(
+            graph.get("interactions"), "locked interactions"
+        ):
+            interaction = require_dict(interaction_value, "locked interaction")
+            interaction_id = require_string(
+                interaction.get("interaction_id"), "interaction ID"
+            )
+            fact_ids: list[str] = []
+            component_instance_ids: list[str] = []
+            for field in INTERACTION_ITEM_FIELDS:
+                part = interaction.get(field)
+                if part is not None:
+                    for fact_id in require_string_list(
+                        require_dict(part, f"interaction {field}").get("fact_ids"),
+                        f"interaction {field} fact IDs",
+                        nonempty=False,
+                    ):
+                        if fact_id not in fact_ids:
+                            fact_ids.append(fact_id)
+                for instance_id in require_string_list(
+                    require_dict(
+                        interaction.get("component_bindings"),
+                        "interaction component bindings",
+                    ).get(f"{field}_component_instance_ids"),
+                    f"interaction {field} component bindings",
+                    nonempty=False,
+                ):
+                    if instance_id not in component_instance_ids:
+                        component_instance_ids.append(instance_id)
+            if not component_instance_ids:
+                raise ContractError(
+                    "integration_obligation_binding",
+                    f"interaction has no component binding: {interaction_id}",
+                )
+            behavior = interaction.get("behavior")
+            interaction_kind = (
+                require_string(
+                    require_dict(behavior, "interaction behavior").get("kind"),
+                    "interaction behavior kind",
+                )
+                if behavior is not None
+                else next(
+                    field
+                    for field in INTERACTION_ITEM_FIELDS
+                    if interaction.get(field) is not None
+                )
+            )
+            obligations.append(
+                {
+                    "obligation_id": "interaction-" + sha256_bytes(
+                        canonical_bytes({"page_key": page_key, "interaction_id": interaction_id})
+                    )[:20],
+                    "source_kind": "interaction_description",
+                    "page_key": page_key,
+                    "member_title": member_title,
+                    "item_id": interaction_id,
+                    "interaction_id": interaction_id,
+                    "kind": interaction_kind,
+                    "fact_id": fact_ids[0] if len(fact_ids) == 1 else None,
+                    "basis_fact_ids": fact_ids,
+                    "component_instance_id": component_instance_ids[0],
+                    "component_instance_ids": component_instance_ids,
+                    "meaning": f"Implement the complete frozen interaction {interaction_id}.",
+                }
+            )
+
+    for page in pages:
+        page_key = require_string(page.get("page_key"), "locked page key")
+        member_title = require_string(page.get("member_title"), "locked member title")
+        for candidate_value in require_list(page.get("candidates"), "page candidates"):
+            candidate = require_dict(candidate_value, "page candidate")
+            for fact_value in require_list(candidate.get("facts"), "candidate facts"):
+                fact = require_dict(fact_value, "candidate fact")
+                fact_id = require_string(fact.get("fact_id"), "fact ID")
+                has_it = any(
+                    require_dict(ref_value, "fact source ref").get("clause_id")
+                    in it_clause_ids_by_page.get(page_key, set())
+                    for ref_value in require_list(
+                        fact.get("source_refs"), "fact source refs"
+                    )
+                )
+                if not has_it:
+                    continue
+                owner = fact_owner.get(fact_id)
+                if owner is None:
+                    raise ContractError(
+                        "integration_obligation_binding",
+                        f"IT fact has no component binding: {fact_id}",
+                    )
+                obligations.append(
+                    {
+                        "obligation_id": "it-" + sha256_bytes(
+                            canonical_bytes({"page_key": page_key, "fact_id": fact_id})
+                        )[:20],
+                        "source_kind": "it_description",
+                        "page_key": page_key,
+                        "member_title": member_title,
+                        "item_id": "it-" + fact_id,
+                        "kind": fact.get("kind"),
+                        "fact_id": fact_id,
+                        "basis_fact_ids": [fact_id],
+                        "component_instance_id": owner,
+                        "component_instance_ids": [owner],
+                        "meaning": fact.get("meaning"),
+                    }
+                )
+    return obligations
+
+
+def build_implementation_contract(
+    business_context: dict[str, Any],
+    source_context: dict[str, Any],
+    pages: list[dict[str, Any]],
+    component_definitions: list[dict[str, Any]],
+    component_instances: list[dict[str, Any]],
+    page_compositions: list[dict[str, Any]],
+    interaction_graphs: list[dict[str, Any]],
+    api_contracts: list[dict[str, Any]],
+    presentation_usages: list[dict[str, Any]],
+) -> dict[str, Any]:
+    facts: list[dict[str, Any]] = []
+    pages_by_key = {page["page_key"]: page for page in pages}
+    instances_by_page: dict[str, list[str]] = {}
+    for instance in component_instances:
+        instances_by_page.setdefault(instance["page_key"], []).append(
+            instance["instance_id"]
+        )
+    for page in pages:
+        for candidate in require_list(page.get("candidates"), "page candidates"):
+            for fact in require_list(
+                require_dict(candidate, "page candidate").get("facts"),
+                "candidate facts",
+            ):
+                facts.append(
+                    {
+                        "page_key": page["page_key"],
+                        **sanitize_implementation_value(require_dict(fact, "semantic fact")),
+                    }
+                )
+    contract_pages = []
+    for member in require_list(source_context.get("members"), "source members"):
+        if member.get("page_key") is None:
+            continue
+        page_key = member["page_key"]
+        page = pages_by_key[page_key]
+        contract_pages.append(
+            {
+                "page_key": page_key,
+                "member_title": member["title"],
+                "route": member.get("route"),
+                "design_names": copy.deepcopy(member["design_names"]),
+                "component_instance_ids": copy.deepcopy(
+                    instances_by_page.get(page_key, [])
+                ),
+                "semantic_fact_ids": [
+                    fact["fact_id"] for fact in facts if fact["page_key"] == page_key
+                ],
+                "interaction_ids": [
+                    item["interaction_id"]
+                    for graph in interaction_graphs
+                    if graph["page_key"] == page_key
+                    for item in graph["interactions"]
+                ],
+            }
+        )
+    contract = {
+        "schema": "icp.component-design.implementation-contract.v1",
+        "source_identity": {
+            "source_id": business_context["source_id"],
+            "root_title": business_context["root_title"],
+            "bundle_digest": business_context["bundle_digest"],
+            "members": copy.deepcopy(source_context["members"]),
+        },
+        "page_keys": [page["page_key"] for page in contract_pages],
+        "pages": contract_pages,
+        "semantic_facts": facts,
+        "component_definitions": sanitize_implementation_value(component_definitions),
+        "component_instances": sanitize_implementation_value(component_instances),
+        "page_compositions": sanitize_implementation_value(page_compositions),
+        "interaction_graphs": sanitize_implementation_value(interaction_graphs),
+        "api_contracts": sanitize_implementation_value(api_contracts),
+        "presentation_usages": sanitize_implementation_value(presentation_usages),
+        "documented_integration_obligations": build_documented_integration_obligations(
+            business_context, pages, interaction_graphs, component_instances
+        ),
+    }
+    return require_dict(
+        sanitize_implementation_value(contract), "implementation contract"
+    )
+
+
+def build_v8_lock(
     stage_dir: Path,
     state: dict[str, Any],
     source_catalog: dict[str, Any],
@@ -4642,14 +6860,29 @@ def build_v6_lock(
         state["source_catalog_sha256"],
     )
     block_component_bindings_sha = sha256_bytes(json_bytes(block_component_bindings))
+    interaction_graphs, api_contracts = build_locked_interaction_contracts(
+        stage_dir, state, pages, component_instances
+    )
+    implementation_contract = build_implementation_contract(
+        business_context,
+        source_context,
+        pages,
+        system["component_definitions"],
+        component_instances,
+        page_compositions,
+        interaction_graphs,
+        api_contracts,
+        system["presentation_usages"],
+    )
     lock = {
-        "schema": "icp.component-design.lock.v6",
+        "schema": "icp.component-design.lock.v8",
         "stage_boundary": "component-semantics-only",
         "source_authority": copy.deepcopy(SOURCE_AUTHORITY),
         "source_hashes": {
             "extract_run_result_sha256": state["extract_run_result_sha256"],
             "source_catalog_sha256": state["source_catalog_sha256"],
             "iole_source_bundle_sha256": state["iole_source_bundle_sha256"],
+            "source_bundle_digest": state["source_bundle_digest"],
             "business_context_sha256": state["business_context_sha256"],
             "mobile_component_patterns_sha256": state[
                 "mobile_component_patterns_sha256"
@@ -4677,9 +6910,12 @@ def build_v6_lock(
         "context_members": context_members,
         "component_definitions": copy.deepcopy(system["component_definitions"]),
         "component_instances": component_instances,
+        "interaction_graphs": interaction_graphs,
+        "api_contracts": api_contracts,
         "presentation_usages": copy.deepcopy(system["presentation_usages"]),
         "decisions": copy.deepcopy(system["decisions"]),
         "page_compositions": page_compositions,
+        "implementation_contract": implementation_contract,
         "block_component_bindings": {
             "path": BLOCK_COMPONENT_BINDINGS_STAGE_NAME,
             "sha256": block_component_bindings_sha,
@@ -4697,9 +6933,10 @@ def build_v6_lock(
     return lock, block_component_bindings
 
 
-def verify_v6(args: argparse.Namespace) -> dict[str, Any]:
+def verify_v8(args: argparse.Namespace) -> dict[str, Any]:
     project_root = Path(args.project_root).resolve()
     stage_dir, state = load_state(project_root)
+    require_component_checklist(stage_dir, state, exclude=("stage.verify",))
     verify_live_mobile_component_pattern_context(stage_dir, state)
     if state.get("state") not in {"ready_to_lock", "locked"}:
         raise ContractError(
@@ -4768,7 +7005,7 @@ def verify_v6(args: argparse.Namespace) -> dict[str, Any]:
         raise ContractError(
             "cache_fold_mismatch", "cache log and replacement projection disagree"
         )
-    lock, block_component_bindings = build_v6_lock(
+    lock, block_component_bindings = build_v8_lock(
         stage_dir,
         state,
         catalog,
@@ -4804,7 +7041,7 @@ def verify_v6(args: argparse.Namespace) -> dict[str, Any]:
         atomic_write_json(lock_path, lock)
         lock_sha = sha256_bytes(lock_path.read_bytes())
         stage_result = {
-            "schema": "icp.component-design.stage-result.v6",
+            "schema": "icp.component-design.stage-result.v8",
             "stage": "component-design",
             "status": "complete",
             "stage_boundary": "component-semantics-only",
@@ -4838,6 +7075,17 @@ def verify_v6(args: argparse.Namespace) -> dict[str, Any]:
         state["component_lock_sha256"] = lock_sha
         state["stage_result_sha256"] = sha256_bytes(result_path.read_bytes())
         atomic_write_json(stage_dir / "state.json", state)
+    mark_component_checklist(
+        stage_dir,
+        state,
+        "stage.verify",
+        state["stage_result_sha256"],
+    )
+    require_component_checklist(stage_dir, state)
+    state["checklist_sha256"] = sha256_bytes(
+        (stage_dir / "checklist.json").read_bytes()
+    )
+    atomic_write_json(stage_dir / "state.json", state)
     return {
         "ok": True,
         "stage": "component-design",
@@ -4859,7 +7107,6 @@ def build_parser() -> argparse.ArgumentParser:
         "begin", help="join and freeze a verified extract batch for component design"
     )
     begin_parser.add_argument("--project-root", required=True)
-    begin_parser.add_argument("--source-bundle", required=True)
     begin_parser.add_argument("--project-catalog")
     begin_parser.add_argument(
         "--lock-timeout-seconds",
@@ -4868,6 +7115,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="bounded wait for the stage write lock (default: 30)",
     )
     begin_parser.set_defaults(handler=begin)
+    api_contract_parser = subparsers.add_parser(
+        "record-api-contract",
+        help="seal one exact Apifox acquisition artifact before page authoring",
+    )
+    api_contract_parser.add_argument("--project-root", required=True)
+    api_contract_parser.add_argument("--page-key", required=True)
+    api_contract_parser.add_argument("--contract", required=True)
+    api_contract_parser.add_argument(
+        "--lock-timeout-seconds",
+        type=float,
+        default=DEFAULT_LOCK_TIMEOUT_SECONDS,
+        help="bounded wait for the stage write lock (default: 30)",
+    )
+    api_contract_parser.set_defaults(handler=record_api_contract)
     page_facts_parser = subparsers.add_parser(
         "record-page-facts",
         help="validate one page-local fact draft and generate its semantic review input",
@@ -4919,7 +7180,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_LOCK_TIMEOUT_SECONDS,
         help="bounded wait for the stage write lock (default: 30)",
     )
-    verify_parser.set_defaults(handler=verify_v6)
+    verify_parser.set_defaults(handler=verify_v8)
     return parser
 
 

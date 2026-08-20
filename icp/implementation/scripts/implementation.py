@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import fcntl
 import hashlib
 import json
@@ -22,7 +23,22 @@ from typing import Any
 
 STAGE_ROOT = Path(__file__).resolve().parents[1]
 ICP_ROOT = STAGE_ROOT.parent
-COMPONENT_SCRIPT = ICP_ROOT / "component-design" / "scripts" / "component_design.py"
+sys.path.insert(0, str(ICP_ROOT / "scripts"))
+from stage_checklist import (  # noqa: E402
+    ChecklistError,
+    complete as complete_checklist_node,
+    create as create_checklist,
+    node as checklist_node,
+    require_complete as require_checklist_complete,
+    require_ready as require_checklist_node_ready,
+)
+sys.path.insert(0, str(STAGE_ROOT / "scripts"))
+from component_layout_derivation import (  # noqa: E402
+    LayoutContractError,
+    derive_component_layout,
+    prepare_component_layout_selection,
+    verify_runtime_layout,
+)
 PLATFORM_RULES = {
     "android-kotlin": STAGE_ROOT
     / "references"
@@ -36,8 +52,9 @@ RENDERING_CONTENT_ROLES = {
     "dynamic_content",
     "platform_element",
 }
-INTERACTION_FIELDS = ("condition", "state", "trigger", "behavior")
+INTERACTION_FIELDS = ("condition", "state", "trigger", "behavior", "result")
 COMMON_RULES_PROJECT_PATH = "common-rules.md"
+MAX_LAYOUT_DECISION_ATTEMPTS = 3
 
 
 class ContractError(Exception):
@@ -115,6 +132,145 @@ def implementation_dir(project_root: Path) -> Path:
     return project_root / ".icp" / "implementation"
 
 
+def implementation_checklist_specs(universe: dict[str, Any]) -> list[dict[str, Any]]:
+    specs = [
+        checklist_node("stage.begin", "Freeze the complete Stage 3 implementation universe."),
+        checklist_node("plan.record", "Record the complete implementation plan.", ["stage.begin"]),
+    ]
+    green_nodes: list[str] = []
+    for obligation in universe["integration_obligations"]:
+        obligation_id = obligation["obligation_id"]
+        red_node = f"case:{obligation_id}.red"
+        green_node = f"case:{obligation_id}.green"
+        specs.extend(
+            [
+                checklist_node(
+                    red_node,
+                    f"Observe RED for integration obligation {obligation_id}.",
+                    ["plan.record"],
+                ),
+                checklist_node(
+                    green_node,
+                    f"Implement and observe GREEN for integration obligation {obligation_id}.",
+                    [red_node],
+                ),
+            ]
+        )
+        green_nodes.append(green_node)
+    specs.append(
+        checklist_node(
+            "implementation.code-coverage",
+            "Verify complete production code, anchors, and assets.",
+            green_nodes or ["plan.record"],
+        )
+    )
+    final_runtime_nodes: list[str] = []
+    for page_key in universe["page_keys"]:
+        for viewport in ("compact", "expanded"):
+            node_id = f"responsive:{page_key}.{viewport}"
+            specs.append(
+                checklist_node(
+                    node_id,
+                    f"Verify {viewport} adaptive behavior for page {page_key}.",
+                    ["implementation.code-coverage"],
+                )
+            )
+            final_runtime_nodes.append(node_id)
+    for reference in universe["visual_references"]:
+        design_name = reference["design_name"]
+        capture_node = f"visual:{design_name}.capture"
+        verify_node = f"visual:{design_name}.verify"
+        specs.extend(
+            [
+                checklist_node(
+                    capture_node,
+                    f"Capture the production path for design {design_name}.",
+                    ["plan.record"],
+                ),
+                checklist_node(
+                    verify_node,
+                    f"Verify the production capture and runtime probes for design {design_name}.",
+                    ["implementation.code-coverage", capture_node],
+                ),
+            ]
+        )
+        final_runtime_nodes.append(verify_node)
+    specs.extend(
+        [
+            checklist_node(
+                "verification.commands",
+                "Run every frozen lint, build, and integration command.",
+                final_runtime_nodes or ["implementation.code-coverage"],
+            ),
+            checklist_node(
+                "stage.verify",
+                "Verify all Stage 3 artifacts and finish ICP.",
+                ["verification.commands"],
+            ),
+        ]
+    )
+    return specs
+
+
+def implementation_checklist_input(state: dict[str, Any], universe: dict[str, Any]) -> str:
+    return digest(
+        {
+            "component_lock_sha256": state["component_lock_sha256"],
+            "block_component_bindings_sha256": state[
+                "block_component_bindings_sha256"
+            ],
+            "coverage_universe_sha256": state["coverage_universe_sha256"],
+            "platform_rules_sha256": state["platform_rules_sha256"],
+            "common_rules_sha256": state["common_rules_sha256"],
+            "implementation_prompt_sha256": state["implementation_prompt_sha256"],
+            "page_keys": universe["page_keys"],
+            "obligation_ids": [
+                item["obligation_id"] for item in universe["integration_obligations"]
+            ],
+            "design_names": [
+                item["design_name"] for item in universe["visual_references"]
+            ],
+        }
+    )
+
+
+def implementation_checklist_call(
+    stage_dir: Path,
+    state: dict[str, Any],
+    universe: dict[str, Any],
+    operation: str,
+    *,
+    node_id: str | None = None,
+    evidence_sha256: str | None = None,
+    exclude: tuple[str, ...] = (),
+) -> None:
+    parameters = {
+        "stage": "implementation",
+        "input_sha256": implementation_checklist_input(state, universe),
+        "nodes": implementation_checklist_specs(universe),
+    }
+    try:
+        if operation == "ready":
+            require_checklist_node_ready(
+                stage_dir / "checklist.json", node_id=require_string(node_id, "checklist node"), **parameters
+            )
+        elif operation == "complete":
+            complete_checklist_node(
+                stage_dir / "checklist.json",
+                node_id=require_string(node_id, "checklist node"),
+                evidence_sha256=require_string(evidence_sha256, "checklist evidence"),
+                **parameters,
+            )
+        elif operation == "require-complete":
+            require_checklist_complete(
+                stage_dir / "checklist.json", exclude=exclude, **parameters
+            )
+        else:
+            raise ContractError("invalid_checklist_operation", operation)
+    except ChecklistError as exc:
+        raise ContractError(exc.code, exc.message) from exc
+
+
 @contextmanager
 def exclusive_case_recording(project_root: Path):
     """Serialize run-case read/execute/write cycles so evidence cannot be lost."""
@@ -128,33 +284,92 @@ def exclusive_case_recording(project_root: Path):
             fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
 
 
-def verify_component_design(project_root: Path) -> tuple[Path, dict[str, Any], dict[str, Any]]:
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(COMPONENT_SCRIPT),
-            "verify",
-            "--project-root",
-            str(project_root),
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
+def load_sealed_component_design(
+    project_root: Path,
+) -> tuple[Path, dict[str, Any], dict[str, Any]]:
+    """Verify Stage 2's sealed result without reopening any Stage 2 source input."""
+
+    component_dir = project_root / ".icp" / "component-design"
+    state = require_dict(
+        read_json(component_dir / "state.json"), "component-design state"
     )
-    if result.returncode != 0:
-        detail = (result.stderr or result.stdout).strip()
+    if (
+        state.get("schema") != "icp.component-design.state.v2"
+        or state.get("state") != "locked"
+    ):
+        raise ContractError(
+            "component_design_incomplete", "component-design is not sealed"
+        )
+    checklist_path = component_dir / "checklist.json"
+    if (
+        not checklist_path.is_file()
+        or file_sha(checklist_path) != state.get("checklist_sha256")
+    ):
         raise ContractError(
             "component_design_incomplete",
-            detail or "component-design live verification failed",
+            "component-design checklist is missing, incomplete, or changed",
         )
-    component_dir = project_root / ".icp" / "component-design"
+    checklist = require_dict(read_json(checklist_path), "component-design checklist")
+    checklist_nodes = require_list(
+        checklist.get("nodes"), "component-design checklist nodes"
+    )
+    if (
+        checklist.get("schema") != "icp.stage-checklist"
+        or checklist.get("stage") != "component-design"
+        or not checklist_nodes
+        or any(item.get("status") != "completed" for item in checklist_nodes)
+        or checklist_nodes[-1].get("node_id") != "stage.verify"
+    ):
+        raise ContractError(
+            "component_design_incomplete",
+            "component-design checklist has unfinished flow nodes",
+        )
+    result_path = component_dir / "stage-result.json"
+    if file_sha(result_path) != state.get("stage_result_sha256"):
+        raise ContractError(
+            "component_design_incomplete", "component-design result hash changed"
+        )
+    result = require_dict(read_json(result_path), "component-design result")
+    if (
+        result.get("schema") != "icp.component-design.stage-result.v8"
+        or result.get("status") != "complete"
+        or result.get("stage_boundary") != "component-semantics-only"
+    ):
+        raise ContractError(
+            "component_design_incomplete", "component-design result is incomplete"
+        )
+    artifacts = require_dict(
+        result.get("artifacts"), "component-design result artifacts"
+    )
+    lock_path = component_dir / "component-lock.json"
+    bindings_path = component_dir / "block-component-bindings.json"
+    lock_sha = file_sha(lock_path)
+    bindings_sha = file_sha(bindings_path)
+    lock_artifact = require_dict(
+        artifacts.get("component_lock"), "component-lock artifact"
+    )
+    bindings_artifact = require_dict(
+        artifacts.get("block_component_bindings"), "Block bindings artifact"
+    )
+    if (
+        lock_sha != state.get("component_lock_sha256")
+        or lock_sha != result.get("component_lock_sha256")
+        or lock_sha != lock_artifact.get("sha256")
+        or lock_artifact.get("path") != "component-lock.json"
+        or bindings_sha != state.get("block_component_bindings_sha256")
+        or bindings_sha != bindings_artifact.get("sha256")
+        or bindings_artifact.get("path") != "block-component-bindings.json"
+    ):
+        raise ContractError(
+            "component_design_incomplete", "component-design artifact hash changed"
+        )
     lock = require_dict(read_json(component_dir / "component-lock.json"), "component lock")
     bindings = require_dict(
         read_json(component_dir / "block-component-bindings.json"),
         "block-component bindings",
     )
-    if lock.get("schema") != "icp.component-design.lock.v6":
-        raise ContractError("component_design_incomplete", "component lock v6 is required")
+    if lock.get("schema") != "icp.component-design.lock.v8":
+        raise ContractError("component_design_incomplete", "component lock v8 is required")
     if lock.get("stage_boundary") != "component-semantics-only":
         raise ContractError("component_design_incomplete", "component stage boundary changed")
     return component_dir, lock, bindings
@@ -170,10 +385,62 @@ def visual_state_id(page_key: str, design_name: str) -> str:
     )[:20]
 
 
-def reference_bounds(source_fact: object) -> dict[str, int | float] | None:
+def _visual_values(containers: list[object], keys: tuple[str, ...]) -> list[Any]:
+    values: list[Any] = []
+    for container in containers:
+        if not isinstance(container, dict):
+            continue
+        for key in keys:
+            value = container.get(key)
+            if value is None:
+                continue
+            if isinstance(value, list):
+                values.extend(copy.deepcopy(value))
+            else:
+                values.append(copy.deepcopy(value))
+    return values
+
+
+def project_design_facts(source_fact: object, assets: list[dict[str, Any]]) -> dict[str, Any]:
+    """Create the sole Stage-3 visual projection from one bound Stage-1 node."""
+
     fact = source_fact if isinstance(source_fact, dict) else {}
     payload = fact.get("payload")
-    frame = payload.get("frame") if isinstance(payload, dict) else None
+    payload = payload if isinstance(payload, dict) else {}
+    style = payload.get("style")
+    style = style if isinstance(style, dict) else {}
+    text = payload.get("text")
+    text = text if isinstance(text, dict) else {}
+    text_style = text.get("style")
+    text_style = text_style if isinstance(text_style, dict) else {}
+    frame = payload.get("frame")
+    return {
+        "geometry": copy.deepcopy(frame) if isinstance(frame, dict) else {},
+        "backgrounds": _visual_values(
+            [payload, style], ("background", "backgrounds", "fill", "fills")
+        ),
+        "borders": _visual_values(
+            [payload, style], ("border", "borders", "stroke", "strokes")
+        ),
+        "radii": _visual_values(
+            [payload, style],
+            (
+                "radius",
+                "radii",
+                "cornerRadius",
+                "cornerRadii",
+                "rectangleCornerRadii",
+                "borderRadius",
+            ),
+        ),
+        "typography": copy.deepcopy(text_style),
+        "assets": copy.deepcopy(assets),
+    }
+
+
+def reference_bounds(design_facts: object) -> dict[str, int | float] | None:
+    facts = design_facts if isinstance(design_facts, dict) else {}
+    frame = facts.get("geometry")
     if not isinstance(frame, dict):
         return None
     values = {
@@ -192,11 +459,9 @@ def reference_bounds(source_fact: object) -> dict[str, int | float] | None:
     return values
 
 
-def reference_typography(source_fact: object) -> dict[str, int | float]:
-    fact = source_fact if isinstance(source_fact, dict) else {}
-    payload = fact.get("payload")
-    text = payload.get("text") if isinstance(payload, dict) else None
-    style = text.get("style") if isinstance(text, dict) else None
+def reference_typography(design_facts: object) -> dict[str, int | float]:
+    facts = design_facts if isinstance(design_facts, dict) else {}
+    style = facts.get("typography")
     font = style.get("font") if isinstance(style, dict) else None
     if not isinstance(font, dict):
         return {}
@@ -223,18 +488,12 @@ def reference_typography(source_fact: object) -> dict[str, int | float]:
     return result
 
 
-def reference_color(source_fact: object) -> dict[str, int | float] | None:
-    fact = source_fact if isinstance(source_fact, dict) else {}
-    payload = fact.get("payload")
-    if not isinstance(payload, dict):
-        return None
-    text = payload.get("text")
-    text_style = text.get("style") if isinstance(text, dict) else None
-    style = payload.get("style")
+def reference_color(design_facts: object) -> dict[str, int | float] | None:
+    facts = design_facts if isinstance(design_facts, dict) else {}
+    text_style = facts.get("typography")
     fill_candidates = [
-        payload.get("fills"),
-        style.get("fills") if isinstance(style, dict) else None,
         text_style.get("fills") if isinstance(text_style, dict) else None,
+        facts.get("backgrounds"),
     ]
     for fills in fill_candidates:
         if not isinstance(fills, list):
@@ -294,7 +553,7 @@ def build_reference_viewport_assertions(
             "component_instance_id": element["component_instance_id"],
             "probe_tag": "icp-probe-" + element["obligation_id"],
         }
-        bounds = reference_bounds(element.get("source_fact"))
+        bounds = reference_bounds(element.get("design_facts"))
         if bounds is not None:
             assertions.append(
                 {
@@ -309,10 +568,15 @@ def build_reference_viewport_assertions(
                     "kind": "bounds",
                     "mode": bounds_mode,
                     "expected": bounds,
+                    "evaluation": (
+                        {"operator": "finite_nonnegative_rect", "expected": None}
+                        if bounds_mode == "adaptive_at_reference"
+                        else {"operator": "equals", "expected": bounds}
+                    ),
                 }
             )
         if element["content_role"] == "static_copy":
-            typography = reference_typography(element.get("source_fact"))
+            typography = reference_typography(element.get("design_facts"))
             for kind, value in typography.items():
                 assertions.append(
                     {
@@ -324,9 +588,13 @@ def build_reference_viewport_assertions(
                         "kind": kind,
                         "mode": "exact_at_reference",
                         "expected": {"sp" if kind == "font_size" else "dp": value},
+                        "evaluation": {
+                            "operator": "equals",
+                            "expected": {"sp" if kind == "font_size" else "dp": value},
+                        },
                     }
                 )
-        color = reference_color(element.get("source_fact"))
+        color = reference_color(element.get("design_facts"))
         if color is not None:
             assertions.append(
                 {
@@ -341,172 +609,161 @@ def build_reference_viewport_assertions(
                     "kind": "color",
                     "mode": "exact_at_reference",
                     "expected": color,
+                    "evaluation": {"operator": "equals", "expected": color},
                 }
             )
     return assertions
 
 
+def evaluate_reference_assertion(assertion: object, actual: object) -> bool:
+    item = assertion if isinstance(assertion, dict) else {}
+    evaluation = item.get("evaluation")
+    if not isinstance(evaluation, dict):
+        return False
+    operator = evaluation.get("operator")
+    if operator == "equals":
+        return actual == evaluation.get("expected")
+    if operator == "finite_nonnegative_rect":
+        return (
+            isinstance(actual, dict)
+            and set(actual) == {"left", "top", "width", "height"}
+            and all(
+                not isinstance(value, bool)
+                and isinstance(value, (int, float))
+                and math.isfinite(float(value))
+                for value in actual.values()
+            )
+            and actual["width"] >= 0
+            and actual["height"] >= 0
+        )
+    return False
+
+
 def build_visual_references(
-    project_root: Path, design_names: list[str]
+    bindings: dict[str, Any], design_names: list[str]
 ) -> list[dict[str, Any]]:
-    extract_dir = project_root / ".icp" / "extract"
-    run_result = require_dict(read_json(extract_dir / "run-result.json"), "extract run result")
     designs = {
-        require_string(item.get("design_name"), "extract design name"): item
-        for value in require_list(run_result.get("designs"), "extract run designs")
-        for item in [require_dict(value, "extract run design")]
+        require_string(item.get("design_name"), "bound design name"): item
+        for value in require_list(
+            bindings.get("visual_references"), "bound visual references"
+        )
+        for item in [require_dict(value, "bound visual reference")]
     }
     result: list[dict[str, Any]] = []
     for design_name in design_names:
         design = designs.get(design_name)
         if design is None:
             raise ContractError("visual_reference_missing", f"extract design is missing: {design_name}")
-        design_dir = require_string(design.get("design_dir"), "extract design dir")
-        manifest_path = extract_dir / design_dir / "source-manifest.json"
-        manifest = require_dict(read_json(manifest_path), "extract source manifest")
-        reference = require_dict(manifest.get("reference"), "extract visual reference")
-        reference_path = manifest_path.parent / require_string(reference.get("path"), "reference path")
-        if not reference_path.is_file() or file_sha(reference_path) != reference.get("sha256"):
-            raise ContractError("visual_reference_missing", f"visual reference changed: {design_name}")
         result.append(
             {
                 "design_name": design_name,
-                "path": str(reference_path.relative_to(project_root)),
-                "sha256": reference["sha256"],
-                "pixel_size": reference["pixel_size"],
-                "logical_artboard_size": reference["logical_artboard_size"],
-                "logical_scale": reference["logical_scale"],
+                "path": require_relative_path(design.get("path"), "visual reference path"),
+                "sha256": design["sha256"],
+                "pixel_size": design["pixel_size"],
+                "logical_artboard_size": design["logical_artboard_size"],
+                "logical_scale": design["logical_scale"],
             }
         )
     return result
 
 
-def build_integration_obligations(
-    pages: list[dict[str, Any]],
-    component_instances: list[dict[str, Any]],
-    interaction_obligations: list[dict[str, Any]],
+def build_graph_interaction_obligations(
+    interaction_graphs: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    fact_owner: dict[str, str] = {}
-    instances_by_page: dict[str, list[dict[str, Any]]] = {}
-    for instance in component_instances:
-        page_key = require_string(instance.get("page_key"), "component instance page key")
-        instances_by_page.setdefault(page_key, []).append(instance)
-        for binding_value in require_list(
-            instance.get("fact_bindings"), "component instance fact bindings"
-        ):
-            binding = require_dict(binding_value, "component instance fact binding")
-            fact_id = require_string(binding.get("fact_id"), "bound fact ID")
-            if fact_id in fact_owner:
-                raise ContractError(
-                    "coverage_incomplete", f"fact has multiple component owners: {fact_id}"
-                )
-            fact_owner[fact_id] = instance["component_instance_id"]
-
     obligations: list[dict[str, Any]] = []
-    for interaction in interaction_obligations:
-        fact_id = interaction["fact_id"]
-        component_instance_id = fact_owner.get(fact_id)
-        if component_instance_id is None:
-            raise ContractError(
-                "coverage_incomplete", f"interaction fact has no component owner: {fact_id}"
-            )
-        obligations.append(
-            {
-                **interaction,
-                "obligation_id": obligation_id(
-                    "integration",
-                    {
-                        "page_key": interaction["page_key"],
-                        "source_kind": "interaction_description",
-                        "fact_id": fact_id,
-                    },
-                ),
-                "source_kind": "interaction_description",
-                "basis_fact_ids": [fact_id],
-                "component_instance_id": component_instance_id,
-            }
+    for graph in interaction_graphs:
+        page_key = require_string(graph.get("page_key"), "interaction graph page key")
+        member_title = require_string(
+            graph.get("member_title"), "interaction graph member title"
         )
-
-    for page in pages:
-        page_key = page["page_key"]
-        facts_by_id = {
-            fact["fact_id"]: fact
-            for candidate_value in require_list(page.get("candidates"), "page candidates")
-            for candidate in [require_dict(candidate_value, "page candidate")]
-            for fact_value in require_list(candidate.get("facts"), "candidate facts")
-            for fact in [require_dict(fact_value, "candidate fact")]
-        }
-        for fact_id, fact in facts_by_id.items():
-            if fact.get("kind") not in INTERACTION_FIELDS:
-                continue
-            it_refs = [
-                ref
-                for ref_value in require_list(fact.get("source_refs"), "fact source refs")
-                for ref in [require_dict(ref_value, "fact source ref")]
-                if ref.get("clause_id") == "acceptance:1"
-            ]
-            if not it_refs:
-                continue
-            component_instance_id = fact_owner.get(fact_id)
-            if component_instance_id is None:
-                raise ContractError(
-                    "coverage_incomplete", f"IT fact has no component owner: {fact_id}"
-                )
-            obligations.append(
-                {
-                    "obligation_id": obligation_id(
-                        "integration",
-                        {
-                            "page_key": page_key,
-                            "source_kind": "it_description",
-                            "fact_id": fact_id,
-                        },
-                    ),
-                    "source_kind": "it_description",
-                    "page_key": page_key,
-                    "member_title": page["member_title"],
-                    "item_id": "it-" + digest({"fact_id": fact_id})[:20],
-                    "kind": fact["kind"],
-                    "fact_id": fact_id,
-                    "basis_fact_ids": [fact_id],
-                    "component_instance_id": component_instance_id,
-                    "meaning": fact["meaning"],
-                    "source_ref": it_refs[0],
-                }
+        edges = require_list(graph.get("edges"), "interaction graph edges")
+        terminal_outcomes = require_list(
+            graph.get("terminal_outcomes"), "interaction graph terminal outcomes"
+        )
+        for interaction_value in require_list(
+            graph.get("interactions"), "interaction graph interactions"
+        ):
+            interaction = require_dict(
+                interaction_value, "interaction graph interaction"
             )
-
-        for instance in instances_by_page.get(page_key, []):
-            instance_id = instance["component_instance_id"]
-            basis_fact_ids = [
-                require_string(binding.get("fact_id"), "inference basis fact ID")
-                for binding_value in require_list(
-                    instance.get("fact_bindings"), "component fact bindings"
+            interaction_id = require_string(
+                interaction.get("interaction_id"), "interaction ID"
+            )
+            basis_fact_ids: list[str] = []
+            component_instance_ids: list[str] = []
+            bindings = require_dict(
+                interaction.get("component_bindings"),
+                "interaction component bindings",
+            )
+            for field in INTERACTION_FIELDS:
+                part_value = interaction.get(field)
+                if part_value is not None:
+                    part = require_dict(part_value, f"interaction {field}")
+                    for fact_id in require_string_list(
+                        part.get("fact_ids"),
+                        f"interaction {field} fact IDs",
+                        nonempty=False,
+                    ):
+                        if fact_id not in basis_fact_ids:
+                            basis_fact_ids.append(fact_id)
+                for instance_id in require_string_list(
+                    bindings.get(f"{field}_component_instance_ids"),
+                    f"interaction {field} component bindings",
+                    nonempty=False,
+                ):
+                    if instance_id not in component_instance_ids:
+                        component_instance_ids.append(instance_id)
+            if not component_instance_ids:
+                raise ContractError(
+                    "coverage_incomplete",
+                    f"interaction has no component owner: {interaction_id}",
                 )
-                for binding in [require_dict(binding_value, "component fact binding")]
-            ]
+            behavior = interaction.get("behavior")
+            kind = (
+                require_string(
+                    require_dict(behavior, "interaction behavior").get("kind"),
+                    "interaction behavior kind",
+                )
+                if behavior is not None
+                else next(
+                    field
+                    for field in INTERACTION_FIELDS
+                    if interaction.get(field) is not None
+                )
+            )
             obligations.append(
                 {
                     "obligation_id": obligation_id(
-                        "integration",
-                        {
-                            "page_key": page_key,
-                            "source_kind": "model_inference",
-                            "component_instance_id": instance_id,
-                        },
+                        "graph-interaction",
+                        {"page_key": page_key, "interaction_id": interaction_id},
                     ),
-                    "source_kind": "model_inference",
                     "page_key": page_key,
-                    "member_title": page["member_title"],
-                    "item_id": "inferred-" + digest({"component_instance_id": instance_id})[:20],
-                    "kind": "component_contract",
-                    "fact_id": None,
+                    "member_title": member_title,
+                    "item_id": interaction_id,
+                    "interaction_id": interaction_id,
+                    "kind": kind,
+                    "fact_id": basis_fact_ids[0] if len(basis_fact_ids) == 1 else None,
                     "basis_fact_ids": basis_fact_ids,
-                    "component_instance_id": instance_id,
-                    "meaning": (
-                        "Model derives one integration scenario from this component's "
-                        "complete frozen semantic contract and page composition."
-                    ),
-                    "source_ref": None,
+                    "component_instance_id": component_instance_ids[0],
+                    "component_instance_ids": component_instance_ids,
+                    "meaning": f"Implement the complete frozen interaction {interaction_id}.",
+                    "interaction": copy.deepcopy(interaction),
+                    "outgoing_edges": [
+                        copy.deepcopy(edge)
+                        for edge in edges
+                        if require_dict(edge, "interaction edge").get(
+                            "from_interaction_id"
+                        )
+                        == interaction_id
+                    ],
+                    "terminal_outcomes": [
+                        copy.deepcopy(terminal)
+                        for terminal in terminal_outcomes
+                        if require_dict(
+                            terminal, "interaction terminal outcome"
+                        ).get("interaction_id")
+                        == interaction_id
+                    ],
                 }
             )
     return obligations
@@ -515,29 +772,19 @@ def build_integration_obligations(
 def build_coverage_universe(
     project_root: Path, lock: dict[str, Any], bindings: dict[str, Any]
 ) -> dict[str, Any]:
-    extract_dir = project_root / ".icp" / "extract"
-    extract_result = require_dict(
-        read_json(extract_dir / "run-result.json"), "extract run result"
+    contract = require_dict(
+        lock.get("implementation_contract"), "closed implementation contract"
     )
-    design_directories = {
-        require_string(item.get("design_name"), "extract design name"): require_string(
-            item.get("design_dir"), "extract design directory"
+    if contract.get("schema") != "icp.component-design.implementation-contract.v1":
+        raise ContractError(
+            "invalid_component_contract",
+            "Stage 3 requires the closed Stage 2 implementation contract",
         )
-        for value in require_list(extract_result.get("designs"), "extract run designs")
-        for item in [require_dict(value, "extract run design")]
-    }
-    source_context = require_dict(lock.get("source_context"), "source context")
-    modify_members = [
-        require_dict(value, "source member")
-        for value in require_list(source_context.get("members"), "source members")
-        if require_dict(value, "source member").get("change_scope") == "modify"
-    ]
-    page_keys = [require_string(item.get("page_key"), "modify page key") for item in modify_members]
+    page_keys = require_string_list(contract.get("page_keys"), "contract page keys")
     page_key_set = set(page_keys)
     pages = [
-        require_dict(value, "locked page")
-        for value in require_list(lock.get("pages"), "locked pages")
-        if require_dict(value, "locked page").get("page_key") in page_key_set
+        require_dict(value, "contract page")
+        for value in require_list(contract.get("pages"), "contract pages")
     ]
     pages_by_key = {item["page_key"]: item for item in pages}
     if set(pages_by_key) != page_key_set:
@@ -552,15 +799,31 @@ def build_coverage_universe(
             "candidate_ids": instance["candidate_ids"],
             "fact_bindings": instance["fact_bindings"],
         }
-        for value in require_list(lock.get("component_instances"), "component instances")
+        for value in require_list(contract.get("component_instances"), "component instances")
         for instance in [require_dict(value, "component instance")]
         if instance.get("page_key") in page_key_set
     ]
     component_ids = {item["component_id"] for item in component_instances}
     component_definitions = [
         require_dict(value, "component definition")
-        for value in require_list(lock.get("component_definitions"), "component definitions")
+        for value in require_list(contract.get("component_definitions"), "component definitions")
         if require_dict(value, "component definition").get("component_id") in component_ids
+    ]
+    interaction_graphs = [
+        require_dict(value, "locked interaction graph")
+        for value in require_list(contract.get("interaction_graphs"), "interaction graphs")
+        if require_dict(value, "locked interaction graph").get("page_key")
+        in page_key_set
+    ]
+    if {item.get("page_key") for item in interaction_graphs} != page_key_set:
+        raise ContractError(
+            "coverage_incomplete",
+            "every modify page needs one frozen interaction graph",
+        )
+    api_contracts = [
+        require_dict(value, "frozen API contract")
+        for value in require_list(contract.get("api_contracts"), "API contracts")
+        if require_dict(value, "frozen API contract").get("page_key") in page_key_set
     ]
 
     design_elements: list[dict[str, Any]] = []
@@ -608,91 +871,38 @@ def build_coverage_universe(
                 "content_role": content_role,
             }
             assets: list[dict[str, Any]] = []
-            design_dir = design_directories.get(binding["design_name"])
-            if design_dir is None:
-                raise ContractError(
-                    "coverage_incomplete",
-                    f"extract design directory is missing: {binding['design_name']}",
-                )
             for asset_value in require_list(node.get("assets"), "source node assets"):
                 asset = require_dict(asset_value, "source node asset")
-                source_path = (
-                    extract_dir
-                    / design_dir
-                    / require_relative_path(asset.get("local_path"), "source asset path")
+                require_relative_path(
+                    asset.get("source_project_path"), "bound source asset path"
                 )
-                if not source_path.is_file() or file_sha(source_path) != asset.get("sha256"):
-                    raise ContractError(
-                        "asset_source_drift",
-                        f"source asset changed: {binding['design_name']}/{asset.get('asset_id')}",
-                    )
-                assets.append(
-                    {
-                        **asset,
-                        "source_project_path": str(source_path.relative_to(project_root)),
-                    }
-                )
+                assets.append(copy.deepcopy(asset))
+            design_facts = project_design_facts(node.get("source_fact"), assets)
             design_elements.append(
                 {
                     "obligation_id": obligation_id("element", evidence),
                     **evidence,
                     "geometry_basis": node["geometry_basis"],
-                    "source_fact": node["source_fact"],
                     "assets": assets,
+                    "design_facts": design_facts,
                 }
             )
 
-    semantic_facts: list[dict[str, Any]] = []
-    interaction_obligations: list[dict[str, Any]] = []
-    for page in pages:
-        facts_by_id = {
-            fact["fact_id"]: fact
-            for candidate_value in require_list(page.get("candidates"), "page candidates")
-            for candidate in [require_dict(candidate_value, "page candidate")]
-            for fact_value in require_list(candidate.get("facts"), "candidate facts")
-            for fact in [require_dict(fact_value, "candidate fact")]
+    semantic_facts = [
+        {
+            "obligation_id": obligation_id(
+                "fact", {"page_key": fact["page_key"], "fact_id": fact["fact_id"]}
+            ),
+            **fact,
         }
-        for fact in facts_by_id.values():
-            semantic_facts.append(
-                {
-                    "obligation_id": obligation_id(
-                        "fact", {"page_key": page["page_key"], "fact_id": fact["fact_id"]}
-                    ),
-                    "page_key": page["page_key"],
-                    **fact,
-                }
-            )
-        seen_interaction_fact_ids: set[str] = set()
-        for item_value in require_list(page.get("interaction_items"), "interaction items"):
-            item = require_dict(item_value, "interaction item")
-            for field in INTERACTION_FIELDS:
-                value = item.get(field)
-                if value is None:
-                    continue
-                interaction = require_dict(value, f"interaction {field}")
-                fact_id = require_string(interaction.get("fact_id"), "interaction fact ID")
-                if fact_id in seen_interaction_fact_ids or fact_id not in facts_by_id:
-                    raise ContractError("coverage_incomplete", f"invalid interaction fact {fact_id}")
-                seen_interaction_fact_ids.add(fact_id)
-                interaction_obligations.append(
-                    {
-                        "obligation_id": obligation_id(
-                            "interaction",
-                            {"page_key": page["page_key"], "fact_id": fact_id},
-                        ),
-                        "page_key": page["page_key"],
-                        "member_title": page["member_title"],
-                        "item_id": item["item_id"],
-                        "kind": field,
-                        "fact_id": fact_id,
-                        "meaning": interaction["meaning"],
-                        "source_ref": item["source_ref"],
-                    }
-                )
+        for value in require_list(contract.get("semantic_facts"), "semantic facts")
+        for fact in [require_dict(value, "semantic fact")]
+    ]
+    interaction_obligations = build_graph_interaction_obligations(interaction_graphs)
 
     presentation_usages = [
         require_dict(value, "presentation usage")
-        for value in require_list(lock.get("presentation_usages"), "presentation usages")
+        for value in require_list(contract.get("presentation_usages"), "presentation usages")
         if require_dict(value, "presentation usage").get("source_page_key") in page_key_set
     ]
     design_names = list(dict.fromkeys(item["design_name"] for item in blocks))
@@ -705,7 +915,7 @@ def build_coverage_universe(
             "every design state must belong to exactly one page",
         )
     visual_references = []
-    for reference in build_visual_references(project_root, design_names):
+    for reference in build_visual_references(bindings, design_names):
         page_key = next(iter(page_keys_by_design[reference["design_name"]]))
         visual_references.append(
             {
@@ -714,25 +924,88 @@ def build_coverage_universe(
                 "visual_state_id": visual_state_id(page_key, reference["design_name"]),
             }
         )
+    integration_obligations = [
+        copy.deepcopy(require_dict(value, "documented integration obligation"))
+        for value in require_list(
+            contract.get("documented_integration_obligations"),
+            "documented integration obligations",
+        )
+    ]
+    for instance in component_instances:
+        basis_fact_ids = [
+            require_string(binding.get("fact_id"), "inference basis fact ID")
+            for binding_value in require_list(
+                instance.get("fact_bindings"), "component fact bindings"
+            )
+            for binding in [require_dict(binding_value, "component fact binding")]
+        ]
+        instance_id = instance["component_instance_id"]
+        integration_obligations.append(
+            {
+                "obligation_id": obligation_id(
+                    "integration",
+                    {
+                        "page_key": instance["page_key"],
+                        "source_kind": "model_inference",
+                        "component_instance_id": instance_id,
+                    },
+                ),
+                "source_kind": "model_inference",
+                "page_key": instance["page_key"],
+                "member_title": instance["member_title"],
+                "item_id": "inferred-" + digest({"component_instance_id": instance_id})[:20],
+                "kind": "component_contract",
+                "fact_id": None,
+                "basis_fact_ids": basis_fact_ids,
+                "component_instance_id": instance_id,
+                "meaning": (
+                    "Model derives one integration scenario from this component's "
+                    "complete frozen semantic contract and page composition."
+                ),
+            }
+        )
+    layout_inputs = require_list(bindings.get("layout_inputs"), "component layout inputs")
+    layout_selection_inputs: list[dict[str, Any]] = []
+    for value in layout_inputs:
+        layout_input = require_dict(value, "component layout input")
+        if layout_input.get("page_key") not in page_key_set:
+            continue
+        try:
+            layout_selection_inputs.append(
+                prepare_component_layout_selection(layout_input)
+            )
+        except LayoutContractError as exc:
+            raise ContractError(
+                "component_layout_input_invalid",
+                str(exc),
+                details={"design_state_id": layout_input.get("design_state_id")},
+            ) from exc
+    if {item.get("design_state_id") for item in layout_selection_inputs} != set(design_names):
+        raise ContractError(
+            "component_layout_input_invalid",
+            "every frozen design state needs one component-bound layout input",
+        )
     return {
-        "schema": "icp.implementation.coverage-universe.v1",
-        "source_authority": lock["source_authority"],
+        "schema": "icp.implementation.coverage-universe.v3",
+        "source_identity": copy.deepcopy(contract["source_identity"]),
         "page_keys": page_keys,
         "pages": pages,
         "component_definitions": component_definitions,
         "component_instances": component_instances,
+        "interaction_graphs": interaction_graphs,
+        "api_contracts": api_contracts,
         "blocks": blocks,
         "design_elements": design_elements,
         "semantic_facts": semantic_facts,
         "interaction_obligations": interaction_obligations,
-        "integration_obligations": build_integration_obligations(
-            pages, component_instances, interaction_obligations
-        ),
+        "integration_obligations": integration_obligations,
         "presentation_usages": presentation_usages,
         "visual_references": visual_references,
         "reference_viewport_assertions": build_reference_viewport_assertions(
             design_elements
         ),
+        "component_layout_inputs": copy.deepcopy(layout_inputs),
+        "layout_selection_inputs": layout_selection_inputs,
     }
 
 
@@ -744,7 +1017,7 @@ def build_plan_input(
     implementation_prompt: str,
 ) -> dict[str, Any]:
     return {
-        "schema": "icp.implementation.plan.v1",
+        "schema": "icp.implementation.plan.v3",
         "component_lock_sha256": state["component_lock_sha256"],
         "block_component_bindings_sha256": state["block_component_bindings_sha256"],
         "coverage_universe_sha256": state["coverage_universe_sha256"],
@@ -763,16 +1036,20 @@ def build_plan_input(
             "content": implementation_prompt,
         },
         "platform": state["platform"],
-        "source_authority": universe["source_authority"],
         "page_keys": universe["page_keys"],
         "component_definitions": universe["component_definitions"],
+        "runtime_entries": [],
         "pages": [],
         "component_mappings": [],
+        "interaction_mappings": [],
+        "api_contract_mappings": [],
         "design_element_mappings": [],
         "semantic_fact_mappings": [],
         "integration_test_cases": [],
         "presentation_mappings": [],
         "visual_capture_cases": [],
+        "layout_decisions": [],
+        "layout_contracts": [],
         "execution_nodes": [],
         "file_owners": {},
         "verification_commands": {"lint": [], "build": [], "integration": []},
@@ -802,12 +1079,35 @@ def require_string_list(value: object, label: str, *, nonempty: bool = True) -> 
     return items
 
 
+def require_identity_coverage(
+    actual: list[str],
+    expected: list[str],
+    *,
+    code: str,
+    message: str,
+    details: dict[str, Any] | None = None,
+) -> list[str]:
+    """Coverage is an identity set: reject duplicates, diff sorted, keep the authoritative order."""
+
+    actual_ids = set(actual)
+    expected_ids = set(expected)
+    if len(actual) != len(actual_ids) or actual_ids != expected_ids:
+        failure: dict[str, Any] = dict(details or {})
+        failure.setdefault("missing", sorted(expected_ids - actual_ids))
+        failure.setdefault("unexpected", sorted(actual_ids - expected_ids))
+        failure["duplicates"] = sorted(
+            {item for item in actual if actual.count(item) > 1}
+        )
+        raise ContractError(code, message, details=failure)
+    return list(expected)
+
+
 def load_live_stage(project_root: Path) -> tuple[Path, dict[str, Any], dict[str, Any]]:
     stage_dir = implementation_dir(project_root)
     state = require_dict(read_json(stage_dir / "state.json"), "implementation state")
     if state.get("schema") != "icp.implementation.state.v1":
         raise ContractError("invalid_state", "implementation state schema is invalid")
-    component_dir, _lock, _bindings = verify_component_design(project_root)
+    component_dir, _lock, _bindings = load_sealed_component_design(project_root)
     expected_hashes = {
         "component_lock_sha256": file_sha(component_dir / "component-lock.json"),
         "block_component_bindings_sha256": file_sha(
@@ -854,23 +1154,27 @@ def validate_plan(
             "platform_best_practices",
             "implementation_prompt",
             "platform",
-            "source_authority",
             "page_keys",
             "component_definitions",
+            "runtime_entries",
             "pages",
             "component_mappings",
+            "interaction_mappings",
+            "api_contract_mappings",
             "design_element_mappings",
             "semantic_fact_mappings",
             "integration_test_cases",
             "presentation_mappings",
             "visual_capture_cases",
+            "layout_decisions",
+            "layout_contracts",
             "execution_nodes",
             "file_owners",
             "verification_commands",
         },
         "implementation plan",
     )
-    if plan.get("schema") != "icp.implementation.plan.v1":
+    if plan.get("schema") != "icp.implementation.plan.v3":
         raise ContractError("invalid_plan", "implementation plan schema is invalid")
     for field in (
         "component_lock_sha256",
@@ -881,8 +1185,6 @@ def validate_plan(
     ):
         if plan.get(field) != state.get(field):
             raise ContractError("input_drift", f"implementation plan {field} changed")
-    if plan.get("source_authority") != universe.get("source_authority"):
-        raise ContractError("input_drift", "implementation source authority changed")
     common_rules = require_dict(plan.get("common_rules"), "common rules")
     require_exact_keys(
         common_rules, {"project_path", "sha256", "content"}, "common rules"
@@ -931,6 +1233,84 @@ def validate_plan(
     if plan.get("component_definitions") != universe.get("component_definitions"):
         raise ContractError("input_drift", "component definitions changed")
 
+    authored_layouts: dict[str, list[dict[str, Any]]] = {}
+    for index, value in enumerate(
+        require_list(plan.get("layout_decisions"), "layout decisions")
+    ):
+        label = f"layout_decisions[{index}]"
+        item = require_dict(value, label)
+        require_exact_keys(item, {"design_state_id", "decisions"}, label)
+        design_state_id = require_string(
+            item.get("design_state_id"), f"{label}.design_state_id"
+        )
+        if design_state_id in authored_layouts:
+            raise ContractError(
+                "component_layout_decision_invalid",
+                f"duplicate layout decision set: {design_state_id}",
+            )
+        authored_layouts[design_state_id] = [
+            require_dict(decision, f"{label}.decisions")
+            for decision in require_list(item.get("decisions"), f"{label}.decisions")
+        ]
+    layout_inputs = {
+        require_string(item.get("design_state_id"), "layout input design state"): item
+        for value in require_list(
+            universe.get("component_layout_inputs"), "component layout inputs"
+        )
+        for item in [require_dict(value, "component layout input")]
+    }
+    problems: list[dict[str, Any]] = []
+    layout_contracts: list[dict[str, Any]] = []
+    for design_state_id, layout_input in layout_inputs.items():
+        decisions = authored_layouts.get(design_state_id)
+        if decisions is None:
+            problems.append(
+                {
+                    "design_state_id": design_state_id,
+                    "code": "layout_decisions_missing",
+                    "message": "the design state has no authored layout decisions",
+                    "details": {},
+                }
+            )
+            continue
+        try:
+            layout_contracts.append(
+                derive_component_layout(
+                    layout_input,
+                    lambda _selection, frozen=copy.deepcopy(decisions): frozen,
+                )
+            )
+        except LayoutContractError as exc:
+            problems.append(
+                {
+                    "design_state_id": design_state_id,
+                    "code": exc.code,
+                    "message": str(exc),
+                    "details": copy.deepcopy(exc.details),
+                }
+            )
+    unexpected_layouts = sorted(set(authored_layouts) - set(layout_inputs))
+    for design_state_id in unexpected_layouts:
+        problems.append(
+            {
+                "design_state_id": design_state_id,
+                "code": "layout_decisions_unexpected",
+                "message": "the layout decision set targets an unknown design state",
+                "details": {},
+            }
+        )
+    if problems:
+        raise ContractError(
+            "component_layout_decision_invalid",
+            "one or more component pages need new whole-page layout decisions",
+            details={"problems": problems},
+        )
+    submitted_contracts = require_list(
+        plan.get("layout_contracts"), "layout contracts"
+    )
+    if submitted_contracts and submitted_contracts != layout_contracts:
+        raise ContractError("input_drift", "derived layout contracts changed")
+
     expected_instances = {
         item["component_instance_id"]: item for item in universe["component_instances"]
     }
@@ -952,6 +1332,7 @@ def validate_plan(
                 "dto_symbol",
                 "ui_state_symbol",
                 "mock_fixture_path",
+                "api_adapter_file",
                 "api_adapter_symbol",
                 "responsive_strategy",
                 "component_instance_ids",
@@ -965,25 +1346,35 @@ def validate_plan(
         if source_page is None or page_key in seen_pages or page.get("member_title") != source_page.get("member_title"):
             raise ContractError("coverage_incomplete", f"invalid or duplicate page {page_key}")
         seen_pages.add(page_key)
-        source_route = next(
-            item["source_text"]
-            for item in source_page["source_coverage"]
-            if item["clause_id"] == "page:route"
-        )
+        source_route = source_page.get("route")
         if page.get("route") != source_route:
-            raise ContractError("source_authority", f"page route changed: {page_key}")
+            raise ContractError("contract_drift", f"page route changed: {page_key}")
         for field in ("source_file", "dto_file", "mock_fixture_path"):
             require_relative_path(page.get(field), f"{label}.{field}")
         for field in ("root_symbol", "dto_symbol", "ui_state_symbol", "responsive_strategy"):
             require_string(page.get(field), f"{label}.{field}")
         page_has_api_dependency = any(
-            fact.get("page_key") == page_key and fact.get("kind") == "api_dependency"
-            for fact in universe["semantic_facts"]
+            contract.get("page_key") == page_key
+            for contract in universe["api_contracts"]
         )
         if page_has_api_dependency:
+            api_adapter_file = require_relative_path(
+                page.get("api_adapter_file"), f"{label}.api_adapter_file"
+            )
+            if api_adapter_file == page["dto_file"]:
+                raise ContractError(
+                    "api_implementation_boundary",
+                    f"{label} API adapter must be separate from its DTO file",
+                )
             require_string(page.get("api_adapter_symbol"), f"{label}.api_adapter_symbol")
-        elif page.get("api_adapter_symbol") is not None:
-            require_string(page.get("api_adapter_symbol"), f"{label}.api_adapter_symbol")
+        elif (
+            page.get("api_adapter_file") is not None
+            or page.get("api_adapter_symbol") is not None
+        ):
+            raise ContractError(
+                "invalid_plan",
+                f"{label} cannot declare an API adapter without a frozen contract",
+            )
         page_instances = require_string_list(
             page.get("component_instance_ids"), f"{label}.component_instance_ids"
         )
@@ -1012,8 +1403,58 @@ def validate_plan(
         normalized_page["component_instance_ids"] = expected_page_instances
         covered_instances.extend(expected_page_instances)
         pages.append(normalized_page)
-    if [item["page_key"] for item in pages] != universe["page_keys"] or covered_instances != list(expected_instances):
+    if [item["page_key"] for item in pages] != universe["page_keys"] or set(
+        covered_instances
+    ) != set(expected_instances):
         raise ContractError("coverage_incomplete", "every modify page and component instance is required")
+
+    plan_pages_by_key = {page["page_key"]: page for page in pages}
+    frozen_page_designs = {
+        (page["page_key"], design_name)
+        for page in universe["pages"]
+        for design_name in require_string_list(
+            page.get("design_names"), "locked page design names", nonempty=False
+        )
+    }
+    runtime_entries: list[dict[str, Any]] = []
+    seen_entry_ids: set[str] = set()
+    for index, entry_value in enumerate(
+        require_list(plan.get("runtime_entries"), "runtime entries")
+    ):
+        label = f"runtime_entries[{index}]"
+        entry = require_dict(entry_value, label)
+        require_exact_keys(
+            entry,
+            {"entry_id", "source_file", "symbol", "page_key", "design_name"},
+            label,
+        )
+        entry_id = require_string(entry.get("entry_id"), f"{label}.entry_id")
+        entry_page_key = require_string(entry.get("page_key"), f"{label}.page_key")
+        entry_design = require_string(entry.get("design_name"), f"{label}.design_name")
+        entry_page = plan_pages_by_key.get(entry_page_key)
+        if (
+            entry_id in seen_entry_ids
+            or (entry_page_key, entry_design) not in frozen_page_designs
+            or entry_page is None
+        ):
+            raise ContractError(
+                "invalid_plan",
+                f"runtime entry is not a frozen production identity: {entry_id}",
+            )
+        seen_entry_ids.add(entry_id)
+        entry_source_file = require_relative_path(
+            entry.get("source_file"), f"{label}.source_file"
+        )
+        entry_symbol = require_string(entry.get("symbol"), f"{label}.symbol")
+        runtime_entries.append(
+            {
+                **entry,
+                "source_file": entry_source_file,
+                "symbol": entry_symbol,
+            }
+        )
+    if not runtime_entries:
+        raise ContractError("invalid_plan", "one or more runtime entries are required")
 
     blocks_by_instance: dict[str, list[str]] = {}
     for block in universe["blocks"]:
@@ -1049,11 +1490,20 @@ def validate_plan(
         require_relative_path(mapping.get("source_file"), f"{label}.source_file")
         for field in ("symbol", "platform_primitive", "responsive_strategy"):
             require_string(mapping.get(field), f"{label}.{field}")
-        if require_string_list(
-            mapping.get("block_obligation_ids"), f"{label}.block_obligation_ids", nonempty=False
-        ) != blocks_by_instance.get(instance_id, []):
-            raise ContractError("coverage_incomplete", f"component Block coverage changed: {instance_id}")
-        component_mappings.append(mapping.copy())
+        normalized_block_ids = require_identity_coverage(
+            require_string_list(
+                mapping.get("block_obligation_ids"),
+                f"{label}.block_obligation_ids",
+                nonempty=False,
+            ),
+            blocks_by_instance.get(instance_id, []),
+            code="coverage_incomplete",
+            message=f"component Block coverage changed: {instance_id}",
+            details={"component_instance_id": instance_id},
+        )
+        normalized_mapping = mapping.copy()
+        normalized_mapping["block_obligation_ids"] = normalized_block_ids
+        component_mappings.append(normalized_mapping)
     if seen_instances != set(expected_instances):
         raise ContractError("coverage_incomplete", "every component instance needs one implementation mapping")
 
@@ -1172,6 +1622,178 @@ def validate_plan(
         "semantic_fact_mappings", "semantic_facts", include_fact_id=True
     )
 
+    expected_interactions = {
+        (graph["page_key"], interaction["interaction_id"]): interaction
+        for graph in universe["interaction_graphs"]
+        for interaction in graph["interactions"]
+    }
+    component_mapping_by_instance = {
+        mapping["component_instance_id"]: mapping for mapping in component_mappings
+    }
+    interaction_mappings: list[dict[str, Any]] = []
+    seen_interactions: set[tuple[str, str]] = set()
+    for index, mapping_value in enumerate(
+        require_list(plan.get("interaction_mappings"), "interaction mappings")
+    ):
+        label = f"interaction_mappings[{index}]"
+        mapping = require_dict(mapping_value, label)
+        require_exact_keys(
+            mapping,
+            {
+                "interaction_id",
+                "page_key",
+                "component_instance_ids",
+                "source_file",
+                "symbol",
+                "implementation_anchor",
+            },
+            label,
+        )
+        interaction_id = require_string(
+            mapping.get("interaction_id"), f"{label}.interaction_id"
+        )
+        page_key = require_string(mapping.get("page_key"), f"{label}.page_key")
+        key = (page_key, interaction_id)
+        interaction = expected_interactions.get(key)
+        if interaction is None or key in seen_interactions:
+            raise ContractError(
+                "interaction_implementation_coverage",
+                f"invalid or duplicate interaction mapping {page_key}/{interaction_id}",
+            )
+        seen_interactions.add(key)
+        expected_instance_ids: list[str] = []
+        for bound_ids in require_dict(
+            interaction.get("component_bindings"), "interaction component bindings"
+        ).values():
+            for instance_id in require_string_list(
+                bound_ids, "interaction component instance IDs", nonempty=False
+            ):
+                if instance_id not in expected_instance_ids:
+                    expected_instance_ids.append(instance_id)
+        instance_ids = require_string_list(
+            mapping.get("component_instance_ids"),
+            f"{label}.component_instance_ids",
+        )
+        normalized_instance_ids = require_identity_coverage(
+            instance_ids,
+            expected_instance_ids,
+            code="interaction_implementation_coverage",
+            message=f"interaction component coverage changed: {page_key}/{interaction_id}",
+            details={"page_key": page_key, "interaction_id": interaction_id},
+        )
+        source_file = require_relative_path(
+            mapping.get("source_file"), f"{label}.source_file"
+        )
+        symbol = require_string(mapping.get("symbol"), f"{label}.symbol")
+        if not any(
+            component_mapping_by_instance[instance_id]["source_file"] == source_file
+            and component_mapping_by_instance[instance_id]["symbol"] == symbol
+            for instance_id in normalized_instance_ids
+        ):
+            raise ContractError(
+                "interaction_implementation_coverage",
+                f"interaction is not anchored to one bound production component: {interaction_id}",
+            )
+        if mapping.get("implementation_anchor") != "ICP:interaction:" + interaction_id:
+            raise ContractError(
+                "invalid_plan", f"interaction anchor changed: {interaction_id}"
+            )
+        normalized_interaction_mapping = mapping.copy()
+        normalized_interaction_mapping["component_instance_ids"] = normalized_instance_ids
+        interaction_mappings.append(normalized_interaction_mapping)
+    if seen_interactions != set(expected_interactions):
+        raise ContractError(
+            "interaction_implementation_coverage",
+            "every frozen interaction needs one production mapping",
+        )
+
+    pages_by_key = {page["page_key"]: page for page in pages}
+    expected_api_contracts = {
+        (contract["page_key"], contract["api_contract_id"]): contract
+        for contract in universe["api_contracts"]
+    }
+    api_contract_mappings: list[dict[str, Any]] = []
+    seen_api_contracts: set[tuple[str, str]] = set()
+    seen_api_method_symbols: set[tuple[str, str]] = set()
+    for index, mapping_value in enumerate(
+        require_list(plan.get("api_contract_mappings"), "API contract mappings")
+    ):
+        label = f"api_contract_mappings[{index}]"
+        mapping = require_dict(mapping_value, label)
+        require_exact_keys(
+            mapping,
+            {
+                "api_contract_id",
+                "page_key",
+                "source_file",
+                "adapter_symbol",
+                "method_symbol",
+                "implementation_anchor",
+            },
+            label,
+        )
+        contract_id = require_string(
+            mapping.get("api_contract_id"), f"{label}.api_contract_id"
+        )
+        page_key = require_string(mapping.get("page_key"), f"{label}.page_key")
+        key = (page_key, contract_id)
+        page = pages_by_key.get(page_key)
+        if key not in expected_api_contracts or key in seen_api_contracts or page is None:
+            raise ContractError(
+                "api_implementation_coverage",
+                f"invalid or duplicate API mapping {page_key}/{contract_id}",
+            )
+        seen_api_contracts.add(key)
+        source_file = require_relative_path(
+            mapping.get("source_file"), f"{label}.source_file"
+        )
+        adapter_symbol = require_string(
+            mapping.get("adapter_symbol"), f"{label}.adapter_symbol"
+        )
+        method_symbol = require_string(
+            mapping.get("method_symbol"), f"{label}.method_symbol"
+        )
+        if (
+            source_file != page["api_adapter_file"]
+            or adapter_symbol != page["api_adapter_symbol"]
+            or (source_file, method_symbol) in seen_api_method_symbols
+        ):
+            raise ContractError(
+                "api_implementation_coverage",
+                f"API mapping does not use the page adapter boundary: {contract_id}",
+            )
+        seen_api_method_symbols.add((source_file, method_symbol))
+        if mapping.get("implementation_anchor") != "ICP:api:" + contract_id:
+            raise ContractError("invalid_plan", f"API anchor changed: {contract_id}")
+        api_contract_mappings.append(mapping.copy())
+    if seen_api_contracts != set(expected_api_contracts):
+        raise ContractError(
+            "api_implementation_coverage",
+            "every frozen API contract needs one adapter method mapping",
+        )
+    interaction_mapping_by_key = {
+        (mapping["page_key"], mapping["interaction_id"]): mapping
+        for mapping in interaction_mappings
+    }
+    api_mapping_by_key = {
+        (mapping["page_key"], mapping["api_contract_id"]): mapping
+        for mapping in api_contract_mappings
+    }
+    for key, interaction in expected_interactions.items():
+        behavior = interaction.get("behavior")
+        if behavior is None or behavior.get("kind") != "api_call":
+            continue
+        interaction_mapping = interaction_mapping_by_key[key]
+        api_mapping = api_mapping_by_key[
+            (key[0], behavior["api_contract_id"])
+        ]
+        if interaction_mapping["source_file"] == api_mapping["source_file"]:
+            raise ContractError(
+                "api_implementation_boundary",
+                "API adapter must not be declared in its consuming interaction file: "
+                + key[1],
+            )
+
     expected_integrations = {
         item["obligation_id"]: item for item in universe["integration_obligations"]
     }
@@ -1208,17 +1830,31 @@ def validate_plan(
             or case_id in case_ids
             or case.get("fact_id") != expected["fact_id"]
             or case.get("source_kind") != expected["source_kind"]
-            or case.get("basis_fact_ids") != expected["basis_fact_ids"]
             or case.get("component_instance_id") != expected["component_instance_id"]
             or case.get("page_key") != expected["page_key"]
         ):
             raise ContractError("coverage_incomplete", f"invalid integration case {case_id}")
+        normalized_basis_ids = require_identity_coverage(
+            require_string_list(
+                case.get("basis_fact_ids"), f"{label}.basis_fact_ids", nonempty=False
+            ),
+            require_string_list(
+                expected.get("basis_fact_ids"),
+                "integration basis fact IDs",
+                nonempty=False,
+            ),
+            code="coverage_incomplete",
+            message=f"integration basis fact coverage changed: {case_id}",
+            details={"case_id": case_id, "obligation_id": obligation},
+        )
         seen_integrations.add(obligation)
         case_ids.add(case_id)
         require_relative_path(case.get("test_file"), f"{label}.test_file")
         require_string(case.get("test_name"), f"{label}.test_name")
         validate_command(case.get("command"), f"{label}.command")
-        cases.append(case.copy())
+        normalized_case = case.copy()
+        normalized_case["basis_fact_ids"] = normalized_basis_ids
+        cases.append(normalized_case)
     if seen_integrations != set(expected_integrations):
         raise ContractError(
             "coverage_incomplete",
@@ -1247,14 +1883,26 @@ def validate_plan(
     references = {
         item["design_name"]: item for item in universe["visual_references"]
     }
-    visual_index_by_design: dict[str, int] = {}
-    visual_count_by_page: dict[str, int] = {}
-    for reference in universe["visual_references"]:
-        page_key = reference["page_key"]
-        visual_index_by_design[reference["design_name"]] = visual_count_by_page.get(
-            page_key, 0
-        )
-        visual_count_by_page[page_key] = visual_count_by_page.get(page_key, 0) + 1
+    entries_by_id = {entry["entry_id"]: entry for entry in runtime_entries}
+    interactions_by_page: dict[str, dict[str, dict[str, Any]]] = {}
+    edges_by_source: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for graph in universe["interaction_graphs"]:
+        graph_page_key = require_string(graph.get("page_key"), "interaction graph page key")
+        interactions_by_page[graph_page_key] = {
+            require_string(
+                interaction.get("interaction_id"), "interaction ID"
+            ): require_dict(interaction, "interaction graph interaction")
+            for interaction_value in require_list(
+                graph.get("interactions"), "interaction graph interactions"
+            )
+            for interaction in [require_dict(interaction_value, "graph interaction")]
+        }
+        for edge_value in require_list(graph.get("edges"), "interaction graph edges"):
+            edge = require_dict(edge_value, "interaction edge")
+            edge_source = require_string(
+                edge.get("from_interaction_id"), "edge from_interaction_id"
+            )
+            edges_by_source.setdefault((graph_page_key, edge_source), []).append(edge)
     components_by_instance = {
         item["component_instance_id"]: item for item in component_mappings
     }
@@ -1262,6 +1910,7 @@ def validate_plan(
     visual_capture_cases: list[dict[str, Any]] = []
     seen_visuals: set[str] = set()
     seen_root_tags: set[str] = set()
+    unreachable_states: list[dict[str, str]] = []
     for index, value in enumerate(
         require_list(plan.get("visual_capture_cases"), "visual capture cases")
     ):
@@ -1273,6 +1922,7 @@ def validate_plan(
                 "design_name",
                 "visual_state_id",
                 "page_key",
+                "entry_id",
                 "package_name",
                 "locale",
                 "precondition_commands",
@@ -1293,6 +1943,14 @@ def validate_plan(
             raise ContractError(
                 "visual_production_path_unproven",
                 f"visual state page changed: {design_name}",
+            )
+        entry_id = require_string(item.get("entry_id"), f"{label}.entry_id")
+        entry = entries_by_id.get(entry_id)
+        if entry is None:
+            raise ContractError(
+                "invalid_plan",
+                f"visual capture case names an unknown runtime entry: {design_name}",
+                details={"design_name": design_name, "entry_id": entry_id},
             )
         state_id = require_string(
             item.get("visual_state_id"), f"{label}.visual_state_id"
@@ -1326,30 +1984,145 @@ def validate_plan(
                     "visual_production_path_unproven",
                     f"visual precondition may not select a terminal debug state: {design_name}",
                 )
+        current_page_key = entry["page_key"]
+        current_design_name = entry["design_name"]
         trace: list[dict[str, str]] = []
         for trace_index, trace_value in enumerate(
             require_list(item.get("interaction_trace"), f"{label}.interaction_trace")
         ):
             trace_label = f"{label}.interaction_trace[{trace_index}]"
             step = require_dict(trace_value, trace_label)
-            require_exact_keys(step, {"case_id", "action", "target_tag"}, trace_label)
+            require_exact_keys(
+                step,
+                {
+                    "source_page_key",
+                    "case_id",
+                    "interaction_id",
+                    "outcome",
+                    "action",
+                    "target_tag",
+                },
+                trace_label,
+            )
+            source_page_key = require_string(
+                step.get("source_page_key"), f"{trace_label}.source_page_key"
+            )
             case_id = require_string(step.get("case_id"), f"{trace_label}.case_id")
+            interaction_id = require_string(
+                step.get("interaction_id"), f"{trace_label}.interaction_id"
+            )
+            outcome = require_string(step.get("outcome"), f"{trace_label}.outcome")
             target_tag = require_string(
                 step.get("target_tag"), f"{trace_label}.target_tag"
             )
-            case = cases_by_id.get(case_id)
-            if step.get("action") != "click" or case is None or case["page_key"] != page_key:
+            if step.get("action") != "click":
                 raise ContractError(
                     "visual_production_path_unproven",
-                    f"visual interaction is not a same-page production case: {design_name}",
+                    f"visual interaction is not a production click: {design_name}",
+                    details={
+                        "reason": "unsupported_action",
+                        "design_name": design_name,
+                        "step_index": trace_index,
+                    },
+                )
+            if source_page_key != current_page_key:
+                raise ContractError(
+                    "visual_production_path_unproven",
+                    f"visual interaction leaves the entry-rooted path: {design_name}",
+                    details={
+                        "reason": "wrong_source_page",
+                        "design_name": design_name,
+                        "step_index": trace_index,
+                        "expected_source_page_key": current_page_key,
+                        "actual_source_page_key": source_page_key,
+                    },
+                )
+            interaction = interactions_by_page.get(source_page_key, {}).get(
+                interaction_id
+            )
+            case = cases_by_id.get(case_id)
+            case_interaction_id = (
+                expected_integrations.get(case.get("obligation_id"), {}).get(
+                    "interaction_id"
+                )
+                if case is not None
+                else None
+            )
+            if interaction is None or case is None or case["page_key"] != source_page_key or case_interaction_id != interaction_id:
+                raise ContractError(
+                    "visual_production_path_unproven",
+                    f"visual interaction is not the frozen graph interaction case: {design_name}",
+                    details={
+                        "reason": "missing_relation",
+                        "design_name": design_name,
+                        "step_index": trace_index,
+                        "source_page_key": source_page_key,
+                        "interaction_id": interaction_id,
+                    },
+                )
+            outgoing = edges_by_source.get((source_page_key, interaction_id), [])
+            matching_edges = [
+                edge for edge in outgoing if edge.get("outcome") == outcome
+            ]
+            if len(matching_edges) != 1:
+                raise ContractError(
+                    "visual_production_path_unproven",
+                    f"visual interaction outcome does not select one frozen edge: {design_name}",
+                    details={
+                        "reason": "wrong_outcome",
+                        "design_name": design_name,
+                        "step_index": trace_index,
+                        "selected_outcome": outcome,
+                        "available_outcomes": sorted(
+                            {edge.get("outcome") for edge in outgoing}
+                        ),
+                    },
+                )
+            edge_target = require_dict(
+                matching_edges[0].get("target"), "interaction edge target"
+            )
+            if edge_target.get("kind") == "interaction":
+                pass
+            else:
+                current_page_key = require_string(
+                    edge_target.get("page_key"), "edge target page key"
+                )
+                current_design_name = require_string(
+                    edge_target.get("design_name"), "edge target design name"
                 )
             trace.append(
-                {"case_id": case_id, "action": "click", "target_tag": target_tag}
+                {
+                    "source_page_key": source_page_key,
+                    "case_id": case_id,
+                    "interaction_id": interaction_id,
+                    "outcome": outcome,
+                    "action": "click",
+                    "target_tag": target_tag,
+                }
             )
-        if visual_index_by_design[design_name] > 0 and not trace:
+        if not trace and (
+            current_page_key != page_key or current_design_name != design_name
+        ):
+            unreachable_states.append(
+                {"design_name": design_name, "page_key": page_key}
+            )
+        if trace and (current_page_key != page_key or current_design_name != design_name):
             raise ContractError(
                 "visual_production_path_unproven",
-                f"non-primary visual state requires a production interaction trace: {design_name}",
+                f"visual state is not reachable from its runtime entry: {design_name}",
+                details={
+                    "reason": "unreachable_design",
+                    "design_name": design_name,
+                    "step_index": len(trace) - 1,
+                    "expected_target": {
+                        "page_key": page_key,
+                        "design_name": design_name,
+                    },
+                    "reached_target": {
+                        "page_key": current_page_key,
+                        "design_name": current_design_name,
+                    },
+                },
             )
         production = require_dict(
             item.get("production_render"), f"{label}.production_render"
@@ -1396,6 +2169,15 @@ def validate_plan(
     if seen_visuals != set(references):
         raise ContractError(
             "coverage_incomplete", "every design state needs one visual capture case"
+        )
+    if unreachable_states:
+        raise ContractError(
+            "visual_production_path_unproven",
+            "every non-entry visual state needs an entry-rooted production path",
+            details={
+                "entry_ids": sorted(seen_entry_ids),
+                "unreachable": unreachable_states,
+            },
         )
 
     commands = require_dict(plan.get("verification_commands"), "verification commands")
@@ -1523,6 +2305,17 @@ def validate_plan(
             raise ContractError("invalid_execution_plan", f"file owner is unknown: {path}")
         file_owners[path] = owner
 
+    for entry in runtime_entries:
+        if entry["source_file"] not in file_owners:
+            raise ContractError(
+                "file_ownership_mismatch",
+                f"runtime entry source has no owner: {entry['source_file']}",
+                details={
+                    "entry_id": entry["entry_id"],
+                    "path": entry["source_file"],
+                },
+            )
+
     def require_owner(path: str, owner: str, label: str) -> None:
         actual_owner = file_owners.get(path)
         if actual_owner != owner:
@@ -1566,6 +2359,8 @@ def validate_plan(
     for field_name, mappings in (
         ("design element", design_mappings),
         ("semantic fact", fact_mappings),
+        ("interaction", interaction_mappings),
+        ("API contract", api_contract_mappings),
         ("presentation", presentations),
     ):
         for mapping in mappings:
@@ -1582,14 +2377,25 @@ def validate_plan(
                     )
     return {
         **plan,
+        "layout_decisions": [
+            {
+                "design_state_id": design_state_id,
+                "decisions": copy.deepcopy(authored_layouts[design_state_id]),
+            }
+            for design_state_id in layout_inputs
+        ],
+        "layout_contracts": layout_contracts,
         "pages": pages,
         "component_mappings": component_mappings,
+        "interaction_mappings": interaction_mappings,
+        "api_contract_mappings": api_contract_mappings,
         "design_element_mappings": design_mappings,
         "semantic_fact_mappings": fact_mappings,
         "integration_test_cases": cases,
         "execution_nodes": nodes,
         "file_owners": dict(sorted(file_owners.items())),
         "presentation_mappings": presentations,
+        "runtime_entries": runtime_entries,
         "visual_capture_cases": visual_capture_cases,
     }
 
@@ -1611,8 +2417,7 @@ def build_codegen_packet(
         if item["component_instance_id"] in instance_ids
     }
     return {
-        "schema": "icp.implementation.codegen-packet.v1",
-        "source_authority": universe["source_authority"],
+        "schema": "icp.implementation.codegen-packet.v3",
         "common_rules": plan["common_rules"],
         "platform_best_practices": plan["platform_best_practices"],
         "implementation_prompt": plan["implementation_prompt"],
@@ -1626,6 +2431,18 @@ def build_codegen_packet(
         ],
         "component_mappings": [
             item for item in plan["component_mappings"] if item["component_instance_id"] in instance_ids
+        ],
+        "interaction_graph": next(
+            item for item in universe["interaction_graphs"] if item["page_key"] == page_key
+        ),
+        "interaction_mappings": [
+            item for item in plan["interaction_mappings"] if item["page_key"] == page_key
+        ],
+        "api_contracts": [
+            item for item in universe["api_contracts"] if item["page_key"] == page_key
+        ],
+        "api_contract_mappings": [
+            item for item in plan["api_contract_mappings"] if item["page_key"] == page_key
         ],
         "blocks": [item for item in universe["blocks"] if item["component_instance_id"] in instance_ids],
         "design_elements": [
@@ -1662,15 +2479,59 @@ def build_codegen_packet(
                 if block["component_instance_id"] in instance_ids
             }
         ],
+        "layout_contracts": [
+            item
+            for item in plan["layout_contracts"]
+            if item["page_key"] == page_key
+        ],
     }
 
 
 def record_plan(args: argparse.Namespace) -> dict[str, Any]:
     project_root = Path(args.project_root).resolve()
     stage_dir, state, universe = load_live_stage(project_root)
+    implementation_checklist_call(
+        stage_dir, state, universe, "ready", node_id="plan.record"
+    )
     if state.get("state") != "awaiting_plan":
         raise ContractError("invalid_state", f"implementation state is {state.get('state')}")
-    plan = validate_plan(read_json(Path(args.plan)), state, universe)
+    attempts_path = stage_dir / "layout-decision-attempts.json"
+    if attempts_path.is_file():
+        attempt_history = require_dict(
+            read_json(attempts_path), "layout decision attempts"
+        )
+    else:
+        attempt_history = {
+            "schema": "icp.implementation.layout-decision-attempts",
+            "max_attempts": MAX_LAYOUT_DECISION_ATTEMPTS,
+            "attempts": [],
+        }
+    attempts = require_list(attempt_history.get("attempts"), "layout decision attempts")
+    if len(attempts) >= MAX_LAYOUT_DECISION_ATTEMPTS:
+        raise ContractError(
+            "component_layout_retry_exhausted",
+            "component layout needs Stage 1 or Stage 2 repair after repeated whole-page failures",
+            details={"attempts": len(attempts), "max_attempts": MAX_LAYOUT_DECISION_ATTEMPTS},
+        )
+    raw_plan = read_json(Path(args.plan))
+    try:
+        plan = validate_plan(raw_plan, state, universe)
+    except ContractError as exc:
+        if exc.code == "component_layout_decision_invalid":
+            problems = require_list(
+                require_dict(exc.details, "layout decision failure details").get("problems"),
+                "layout decision problems",
+            )
+            attempts.append(
+                {
+                    "attempt": len(attempts) + 1,
+                    "plan_sha256": digest(raw_plan),
+                    "problems": copy.deepcopy(problems),
+                }
+            )
+            attempt_history["attempts"] = attempts
+            atomic_write_json(attempts_path, attempt_history)
+        raise
     plan_path = stage_dir / "implementation-plan.json"
     if plan_path.exists():
         raise ContractError("plan_already_recorded", "implementation plan is append-only")
@@ -1706,6 +2567,14 @@ def record_plan(args: argparse.Namespace) -> dict[str, Any]:
     state["tdd_evidence_sha256"] = file_sha(stage_dir / "tdd-evidence.json")
     state["state"] = "awaiting_red" if plan["integration_test_cases"] else "awaiting_implementation"
     atomic_write_json(stage_dir / "state.json", state)
+    implementation_checklist_call(
+        stage_dir,
+        state,
+        universe,
+        "complete",
+        node_id="plan.record",
+        evidence_sha256=state["implementation_plan_sha256"],
+    )
     return {
         "ok": True,
         "stage": "implementation",
@@ -1744,6 +2613,7 @@ def run_case_locked(
     if planned_case is None or evidence_case is None:
         raise ContractError("unknown_case", f"unknown integration case: {case_id}")
     phase = args.phase
+    checklist_node_id = f"case:{planned_case['obligation_id']}.{phase}"
     if phase == "red":
         if state.get("state") not in {"awaiting_red", "awaiting_implementation"} or evidence_case.get("red") is not None:
             raise ContractError("invalid_state", f"RED is not pending for {case_id}")
@@ -1758,6 +2628,13 @@ def run_case_locked(
             raise ContractError("red_required", f"a fresh RED is required for {case_id}")
     else:
         raise ContractError("invalid_phase", f"unsupported TDD phase: {phase}")
+    implementation_checklist_call(
+        stage_dir,
+        state,
+        universe,
+        "ready",
+        node_id=checklist_node_id,
+    )
     command = validate_command(planned_case.get("command"), "planned test command")
     try:
         completed = subprocess.run(
@@ -1791,6 +2668,14 @@ def run_case_locked(
     else:
         state["state"] = "awaiting_red"
     atomic_write_json(stage_dir / "state.json", state)
+    implementation_checklist_call(
+        stage_dir,
+        state,
+        universe,
+        "complete",
+        node_id=checklist_node_id,
+        evidence_sha256=digest(result),
+    )
     return {
         "ok": True,
         "stage": "implementation",
@@ -2186,33 +3071,12 @@ def validate_measurement_evidence(
         )
         assertion = expected.get(assertion_id)
         actual = measurement.get("actual")
-        adaptive_bounds_valid = (
-            assertion is not None
-            and assertion["mode"] == "adaptive_at_reference"
-            and isinstance(actual, dict)
-            and set(actual) == {"left", "top", "width", "height"}
-            and all(
-                not isinstance(value, bool)
-                and isinstance(value, (int, float))
-                and math.isfinite(float(value))
-                for value in actual.values()
-            )
-            and actual["width"] >= 0
-            and actual["height"] >= 0
-        )
         if (
             assertion is None
             or assertion_id in seen
             or measurement.get("probe_tag") != assertion["probe_tag"]
             or measurement.get("kind") != assertion["kind"]
-            or (
-                assertion["mode"] == "exact_at_reference"
-                and actual != assertion["expected"]
-            )
-            or (
-                assertion["mode"] == "adaptive_at_reference"
-                and not adaptive_bounds_valid
-            )
+            or not evaluate_reference_assertion(assertion, actual)
         ):
             raise ContractError(
                 "reference_viewport_measurement_failed",
@@ -2258,6 +3122,14 @@ def capture_visual(args: argparse.Namespace) -> dict[str, Any]:
     )
     if reference is None or capture_case is None:
         raise ContractError("visual_capture_failed", f"unknown design state: {design_name}")
+    visual_node_id = f"visual:{design_name}.capture"
+    implementation_checklist_call(
+        stage_dir,
+        state,
+        universe,
+        "ready",
+        node_id=visual_node_id,
+    )
     driver = require_string(args.driver, "visual driver")
     package_name = capture_case["package_name"]
     before_result = run_driver(driver, "snapshot", package_name)
@@ -2467,6 +3339,14 @@ def capture_visual(args: argparse.Namespace) -> dict[str, Any]:
         "restore_exact": restored == before,
     }
     atomic_write_json(evidence_path, evidence)
+    implementation_checklist_call(
+        stage_dir,
+        state,
+        universe,
+        "complete",
+        node_id=visual_node_id,
+        evidence_sha256=file_sha(evidence_path),
+    )
     return {
         "ok": True,
         "stage": "implementation",
@@ -2482,6 +3362,79 @@ def read_required_text(project_root: Path, relative: object, label: str) -> tupl
         return path, path.read_text(encoding="utf-8")
     except (OSError, UnicodeError) as exc:
         raise ContractError("code_coverage_missing", f"cannot read {label}: {path}") from exc
+
+
+def source_without_comments_or_literals(source: str) -> str:
+    """Keep executable token positions while removing common source trivia."""
+
+    result = list(source)
+    index = 0
+    length = len(source)
+    while index < length:
+        if source.startswith("<!--", index):
+            end = source.find("-->", index + 4)
+            end = length if end < 0 else end + 3
+        elif source.startswith("//", index):
+            end = source.find("\n", index + 2)
+            end = length if end < 0 else end
+        elif source.startswith("/*", index):
+            end = source.find("*/", index + 2)
+            end = length if end < 0 else end + 2
+        else:
+            delimiter = next(
+                (
+                    token
+                    for token in ('"""', "'''", '"', "'", "`")
+                    if source.startswith(token, index)
+                ),
+                None,
+            )
+            if delimiter is None:
+                index += 1
+                continue
+            cursor = index + len(delimiter)
+            while cursor < length:
+                if source.startswith(delimiter, cursor):
+                    cursor += len(delimiter)
+                    break
+                if len(delimiter) == 1 and source[cursor] == "\\":
+                    cursor += 2
+                else:
+                    cursor += 1
+            end = min(cursor, length)
+        for position in range(index, end):
+            if result[position] != "\n":
+                result[position] = " "
+        index = end
+    return "".join(result)
+
+
+def source_contains_executable_call(source: str, method_symbol: str) -> bool:
+    executable = source_without_comments_or_literals(source)
+    call_pattern = re.compile(
+        rf"(?<![A-Za-z0-9_$]){re.escape(method_symbol)}\s*\("
+    )
+    declaration_keyword = re.compile(r"(?:\b(?:def|fun|func|function)\s*)$")
+    typed_declaration = re.compile(
+        r"^\s*"
+        r"(?:@\w+(?:\([^)]*\))?\s*)*"
+        r"(?:(?:public|private|protected|internal|static|final|open|abstract|"
+        r"override|suspend|async|external|native|mutating|nonmutating|inline|"
+        r"operator|infix|tailrec|constexpr)\s+)*"
+        r"[A-Za-z_$][A-Za-z0-9_$]*(?:\s*<[^;={}()]*>)?(?:\s*[?.\[\]])*\s+$"
+    )
+    control_prefixes = {"await", "new", "return", "throw", "yield"}
+    for match in call_pattern.finditer(executable):
+        line_start = executable.rfind("\n", 0, match.start()) + 1
+        line_prefix = executable[line_start : match.start()]
+        if declaration_keyword.search(line_prefix):
+            continue
+        if typed_declaration.fullmatch(line_prefix):
+            prefix_token = line_prefix.strip().split()[-1]
+            if prefix_token not in control_prefixes:
+                continue
+        return True
+    return False
 
 
 def verify_code_coverage(
@@ -2502,20 +3455,89 @@ def verify_code_coverage(
         for symbol in (page["dto_symbol"], page["ui_state_symbol"]):
             if symbol not in dto_source:
                 raise ContractError("code_coverage_missing", f"page data symbol is missing: {symbol}")
-        if page["api_adapter_symbol"] is not None and page["api_adapter_symbol"] not in dto_source:
-            raise ContractError(
-                "code_coverage_missing",
-                f"page API adapter symbol is missing: {page['api_adapter_symbol']}",
+        if page["api_adapter_symbol"] is not None:
+            _, adapter_source = text_for(
+                page["api_adapter_file"], f"page API adapter {page['page_key']}"
             )
+            if page["api_adapter_symbol"] not in adapter_source:
+                raise ContractError(
+                    "code_coverage_missing",
+                    f"page API adapter symbol is missing: {page['api_adapter_symbol']}",
+                )
         mock_path = project_file(project_root, page["mock_fixture_path"], "page mock fixture")
         try:
             json.loads(mock_path.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             raise ContractError("code_coverage_missing", f"page mock fixture is invalid: {mock_path}") from exc
+    for entry in plan["runtime_entries"]:
+        _, source = text_for(
+            entry["source_file"], f"runtime entry {entry['entry_id']}"
+        )
+        if entry["symbol"] not in source:
+            raise ContractError(
+                "code_coverage_missing",
+                f"runtime entry symbol is missing: {entry['symbol']}",
+            )
     for mapping in plan["component_mappings"]:
         _, source = text_for(mapping["source_file"], f"component {mapping['component_instance_id']}")
         if mapping["symbol"] not in source:
             raise ContractError("code_coverage_missing", f"component symbol is missing: {mapping['symbol']}")
+    for mapping in plan["interaction_mappings"]:
+        _, source = text_for(
+            mapping["source_file"], f"interaction {mapping['interaction_id']}"
+        )
+        if (
+            mapping["symbol"] not in source
+            or mapping["implementation_anchor"] not in source
+        ):
+            raise ContractError(
+                "code_coverage_missing",
+                f"interaction implementation is missing: {mapping['interaction_id']}",
+            )
+    for mapping in plan["api_contract_mappings"]:
+        _, source = text_for(
+            mapping["source_file"], f"API contract {mapping['api_contract_id']}"
+        )
+        if any(
+            token not in source
+            for token in (
+                mapping["adapter_symbol"],
+                mapping["method_symbol"],
+                mapping["implementation_anchor"],
+            )
+        ):
+            raise ContractError(
+                "code_coverage_missing",
+                f"API adapter method is missing: {mapping['api_contract_id']}",
+            )
+    api_mapping_by_key = {
+        (mapping["page_key"], mapping["api_contract_id"]): mapping
+        for mapping in plan["api_contract_mappings"]
+    }
+    graph_interaction_by_key = {
+        (graph["page_key"], interaction["interaction_id"]): interaction
+        for graph in universe["interaction_graphs"]
+        for interaction in graph["interactions"]
+    }
+    for mapping in plan["interaction_mappings"]:
+        interaction = graph_interaction_by_key[
+            (mapping["page_key"], mapping["interaction_id"])
+        ]
+        behavior = interaction.get("behavior")
+        if behavior is None or behavior.get("kind") != "api_call":
+            continue
+        api_mapping = api_mapping_by_key[
+            (mapping["page_key"], behavior["api_contract_id"])
+        ]
+        _, source = text_for(
+            mapping["source_file"], f"API interaction {mapping['interaction_id']}"
+        )
+        if not source_contains_executable_call(source, api_mapping["method_symbol"]):
+            raise ContractError(
+                "api_interaction_not_implemented",
+                "bound API adapter method is not called by interaction: "
+                + mapping["interaction_id"],
+            )
     for field in ("design_element_mappings", "semantic_fact_mappings", "presentation_mappings"):
         for mapping in plan[field]:
             _, source = text_for(mapping["source_file"], f"{field} source")
@@ -2686,7 +3708,6 @@ def validate_runtime_evidence(
         {
             "schema",
             "implementation_plan_sha256",
-            "adaptive_components",
             "responsive_runs",
             "visual_runs",
         },
@@ -2698,55 +3719,6 @@ def validate_runtime_evidence(
     ):
         raise ContractError("invalid_evidence", "runtime evidence targets another implementation plan")
 
-    expected_components = {
-        item["component_instance_id"] for item in universe["component_instances"]
-    }
-    seen_components: set[str] = set()
-    for index, value in enumerate(
-        require_list(evidence.get("adaptive_components"), "adaptive components")
-    ):
-        label = f"adaptive_components[{index}]"
-        item = require_dict(value, label)
-        try:
-            require_exact_keys(
-                item,
-                {
-                    "component_instance_id",
-                    "constraint_driven",
-                    "content_adaptive",
-                    "no_content_specific_geometry",
-                },
-                label,
-            )
-        except ContractError as exc:
-            raise ContractError(
-                "responsive_evidence_invalid",
-                f"{label} must contain the complete adaptive-component contract",
-            ) from exc
-        component_id = item.get("component_instance_id")
-        if component_id not in expected_components or component_id in seen_components:
-            raise ContractError(
-                "responsive_evidence_invalid",
-                f"unexpected adaptive component: {component_id}",
-            )
-        seen_components.add(component_id)
-        if any(
-            item.get(field) is not True
-            for field in (
-                "constraint_driven",
-                "content_adaptive",
-                "no_content_specific_geometry",
-            )
-        ):
-            raise ContractError(
-                "responsive_evidence_invalid",
-                f"component is not adaptive: {component_id}",
-            )
-    if seen_components != expected_components:
-        raise ContractError(
-            "responsive_evidence_invalid",
-            "every component instance needs one adaptive-layout result",
-        )
     responsive_runs = require_list(evidence.get("responsive_runs"), "responsive runs")
     expected_responsive = {
         (page_key, viewport)
@@ -2754,61 +3726,164 @@ def validate_runtime_evidence(
         for viewport in ("compact", "expanded")
     }
     seen_responsive: set[tuple[str, str]] = set()
+    layout_contracts_by_page: dict[str, dict[str, dict[str, Any]]] = {}
+    for contract_value in require_list(plan.get("layout_contracts"), "layout contracts"):
+        contract = require_dict(contract_value, "layout contract")
+        layout_contracts_by_page.setdefault(contract["page_key"], {})[
+            contract["design_state_id"]
+        ] = contract
     for index, value in enumerate(responsive_runs):
         label = f"responsive_runs[{index}]"
         item = require_dict(value, label)
         try:
-            require_exact_keys(
-                item,
-                {
-                    "page_key",
-                    "viewport",
-                    "evaluation_scope",
-                    "width",
-                    "height",
-                    "renders",
-                    "natural_text_reflow",
-                    "no_clip",
-                    "no_overlap",
-                    "no_horizontal_overflow",
-                    "content_reachable",
-                    "controls_operable",
-                    "system_bars_correct",
-                    "insets_safe",
-                },
-                label,
-            )
+            require_exact_keys(item, {"page_key", "viewport", "snapshots"}, label)
         except ContractError as exc:
             raise ContractError(
                 "responsive_evidence_invalid",
-                f"{label} must contain only responsive-behavior evidence",
+                f"{label} must contain raw responsive measurements",
             ) from exc
         key = (item.get("page_key"), item.get("viewport"))
         if key not in expected_responsive or key in seen_responsive:
             raise ContractError("responsive_evidence_invalid", f"unexpected responsive run: {key}")
         seen_responsive.add(key)
-        if (
-            type(item.get("width")) is not int
-            or type(item.get("height")) is not int
-            or item["width"] <= 0
-            or item["height"] <= 0
-            or item.get("evaluation_scope") != "responsive_behavior"
-            or any(
-                item.get(field) is not True
-                for field in (
-                    "renders",
-                    "natural_text_reflow",
-                    "no_clip",
-                    "no_overlap",
-                    "no_horizontal_overflow",
-                    "content_reachable",
-                    "controls_operable",
-                    "system_bars_correct",
-                    "insets_safe",
+        expected_size = (360, 800) if key[1] == "compact" else (840, 1200)
+        contracts = layout_contracts_by_page.get(key[0], {})
+        snapshots = require_list(item.get("snapshots"), f"{label}.snapshots")
+        seen_design_states: set[str] = set()
+        for snapshot_index, snapshot_value in enumerate(snapshots):
+            snapshot_label = f"{label}.snapshots[{snapshot_index}]"
+            snapshot = require_dict(snapshot_value, snapshot_label)
+            try:
+                require_exact_keys(
+                    snapshot,
+                    {
+                        "design_state_id",
+                        "coordinate_space",
+                        "viewport_bounds",
+                        "safe_insets",
+                        "system_bars",
+                        "scroll_metrics",
+                        "components",
+                        "capture",
+                    },
+                    snapshot_label,
                 )
+            except ContractError as exc:
+                raise ContractError(
+                    "responsive_evidence_invalid",
+                    f"{snapshot_label} must contain measurements, not authored pass/fail flags",
+                ) from exc
+            design_state_id = require_string(
+                snapshot.get("design_state_id"), f"{snapshot_label}.design_state_id"
             )
-        ):
-            raise ContractError("responsive_evidence_invalid", f"responsive run failed: {key}")
+            contract = contracts.get(design_state_id)
+            if contract is None or design_state_id in seen_design_states:
+                raise ContractError(
+                    "responsive_evidence_invalid",
+                    f"unexpected responsive design state: {design_state_id}",
+                )
+            seen_design_states.add(design_state_id)
+            viewport_bounds = require_dict(
+                snapshot.get("viewport_bounds"), f"{snapshot_label}.viewport_bounds"
+            )
+            if viewport_bounds != {
+                "left": 0,
+                "top": 0,
+                "width": expected_size[0],
+                "height": expected_size[1],
+            }:
+                raise ContractError(
+                    "responsive_evidence_invalid",
+                    f"responsive viewport measurement changed: {key}",
+                )
+            components = require_list(
+                snapshot.get("components"), f"{snapshot_label}.components"
+            )
+            expected_instance_ids = set(
+                contract["component_tree"]["nodes_by_instance_id"]
+            )
+            occurrence_ids: list[str] = []
+            measured_ids: list[str] = []
+            for component_index, component_value in enumerate(components):
+                component = require_dict(
+                    component_value,
+                    f"{snapshot_label}.components[{component_index}]",
+                )
+                occurrence_id = require_string(
+                    component.get("occurrence_id"), "runtime component occurrence ID"
+                )
+                instance_id = require_string(
+                    component.get("instance_id"), "runtime component instance ID"
+                )
+                if component.get("presence") != "present":
+                    raise ContractError(
+                        "responsive_evidence_invalid",
+                        f"runtime component presence is not measured: {instance_id}",
+                    )
+                occurrence_ids.append(occurrence_id)
+                measured_ids.append(instance_id)
+            if (
+                len(occurrence_ids) != len(set(occurrence_ids))
+                or set(measured_ids) != expected_instance_ids
+                or len(measured_ids) != len(expected_instance_ids)
+            ):
+                raise ContractError(
+                    "responsive_evidence_invalid",
+                    f"runtime component occurrence coverage changed: {design_state_id}",
+                )
+            checked = verify_runtime_layout(contract, snapshot, "responsive")
+            if checked["status"] != "pass":
+                raise ContractError(
+                    "responsive_evidence_invalid",
+                    f"responsive measurements failed: {design_state_id}/{key[1]}",
+                    details={"problems": checked["failures"]},
+                )
+            capture = require_dict(snapshot.get("capture"), f"{snapshot_label}.capture")
+            require_exact_keys(
+                capture,
+                {"screenshot_path", "sha256", "device_configuration"},
+                f"{snapshot_label}.capture",
+            )
+            screenshot_path = project_root / require_relative_path(
+                capture.get("screenshot_path"), f"{snapshot_label}.capture.screenshot_path"
+            )
+            if (
+                not screenshot_path.is_file()
+                or file_sha(screenshot_path) != capture.get("sha256")
+            ):
+                raise ContractError(
+                    "responsive_evidence_invalid",
+                    f"responsive device capture is missing or changed: {design_state_id}",
+                )
+            configuration = require_dict(
+                capture.get("device_configuration"),
+                f"{snapshot_label}.capture.device_configuration",
+            )
+            require_exact_keys(
+                configuration,
+                {"width", "height", "density", "locale", "font_scale", "navigation_mode"},
+                f"{snapshot_label}.capture.device_configuration",
+            )
+            if (
+                configuration.get("width") != expected_size[0]
+                or configuration.get("height") != expected_size[1]
+                or type(configuration.get("density")) is not int
+                or configuration["density"] <= 0
+            ):
+                raise ContractError(
+                    "responsive_evidence_invalid",
+                    f"responsive device geometry changed: {key}",
+                )
+            for field in ("locale", "font_scale", "navigation_mode"):
+                require_string(
+                    configuration.get(field),
+                    f"{snapshot_label}.capture.device_configuration.{field}",
+                )
+        if seen_design_states != set(contracts):
+            raise ContractError(
+                "responsive_evidence_invalid",
+                f"every page design state needs one responsive measurement: {key}",
+            )
     if seen_responsive != expected_responsive:
         raise ContractError("responsive_evidence_invalid", "every page needs compact and expanded runtime evidence")
 
@@ -3054,13 +4129,79 @@ def verify_implementation(args: argparse.Namespace) -> dict[str, Any]:
         if plan["integration_test_cases"] or state.get("state") != "awaiting_implementation":
             raise ContractError("invalid_state", f"implementation state is {state.get('state')}")
     code_manifest = verify_code_coverage(project_root, plan, universe)
+    implementation_checklist_call(
+        stage_dir,
+        state,
+        universe,
+        "complete",
+        node_id="implementation.code-coverage",
+        evidence_sha256=digest(code_manifest),
+    )
     runtime_evidence, visual_results = validate_runtime_evidence(
         project_root, read_json(Path(args.evidence)), state, universe, plan
     )
+    for responsive_run in runtime_evidence["responsive_runs"]:
+        implementation_checklist_call(
+            stage_dir,
+            state,
+            universe,
+            "complete",
+            node_id=(
+                f"responsive:{responsive_run['page_key']}."
+                f"{responsive_run['viewport']}"
+            ),
+            evidence_sha256=digest(responsive_run),
+        )
+    visual_evidence_by_design = {
+        item["design_name"]: item for item in runtime_evidence["visual_runs"]
+    }
+    for visual_result in visual_results:
+        visual_run = visual_evidence_by_design[visual_result["design_name"]]
+        capture_sha256 = file_sha(project_file(
+            project_root,
+            visual_run["capture_evidence"],
+            "visual capture evidence",
+        ))
+        implementation_checklist_call(
+            stage_dir,
+            state,
+            universe,
+            "complete",
+            node_id=f"visual:{visual_result['design_name']}.capture",
+            evidence_sha256=capture_sha256,
+        )
+        implementation_checklist_call(
+            stage_dir,
+            state,
+            universe,
+            "complete",
+            node_id=f"visual:{visual_result['design_name']}.verify",
+            evidence_sha256=digest(
+                {
+                    "capture_sha256": capture_sha256,
+                    "visual_result": visual_result,
+                }
+            ),
+        )
     write_visual_difference_artifacts(
         stage_dir, state, universe, plan, visual_results
     )
     command_results = run_verification_commands(project_root, plan)
+    implementation_checklist_call(
+        stage_dir,
+        state,
+        universe,
+        "complete",
+        node_id="verification.commands",
+        evidence_sha256=digest(command_results),
+    )
+    implementation_checklist_call(
+        stage_dir,
+        state,
+        universe,
+        "require-complete",
+        exclude=("stage.verify",),
+    )
     atomic_write_json(stage_dir / "implementation-manifest.json", code_manifest)
     atomic_write_json(stage_dir / "runtime-evidence.json", runtime_evidence)
     stage_result = {
@@ -3084,6 +4225,19 @@ def verify_implementation(args: argparse.Namespace) -> dict[str, Any]:
     state["stage_result_sha256"] = file_sha(stage_dir / "stage-result.json")
     state["state"] = "complete"
     atomic_write_json(stage_dir / "state.json", state)
+    implementation_checklist_call(
+        stage_dir,
+        state,
+        universe,
+        "complete",
+        node_id="stage.verify",
+        evidence_sha256=state["stage_result_sha256"],
+    )
+    implementation_checklist_call(
+        stage_dir, state, universe, "require-complete"
+    )
+    state["checklist_sha256"] = file_sha(stage_dir / "checklist.json")
+    atomic_write_json(stage_dir / "state.json", state)
     return {
         "ok": True,
         "stage": "implementation",
@@ -3103,7 +4257,7 @@ def begin(args: argparse.Namespace) -> dict[str, Any]:
     stage_dir = implementation_dir(project_root)
     if stage_dir.exists():
         raise ContractError("implementation_exists", f"implementation stage already exists: {stage_dir}")
-    component_dir, lock, bindings = verify_component_design(project_root)
+    component_dir, lock, bindings = load_sealed_component_design(project_root)
     universe = build_coverage_universe(project_root, lock, bindings)
     rules = rules_path.read_bytes()
     platform_rules = rules.decode("utf-8")
@@ -3147,6 +4301,16 @@ def begin(args: argparse.Namespace) -> dict[str, Any]:
             prompt,
         ),
     )
+    try:
+        create_checklist(
+            stage_dir / "checklist.json",
+            stage="implementation",
+            input_sha256=implementation_checklist_input(state, universe),
+            nodes=implementation_checklist_specs(universe),
+            initially_completed=["stage.begin"],
+        )
+    except ChecklistError as exc:
+        raise ContractError(exc.code, exc.message) from exc
     atomic_write_json(stage_dir / "state.json", state)
     return {
         "ok": True,

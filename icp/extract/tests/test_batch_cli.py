@@ -33,6 +33,18 @@ def read_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def canonical_digest(value: object) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
 def source_for(name: str, design_id: str, version_id: str, url: str, node_id: str) -> dict:
     image_id = "image-a" if url == URL_A else "image-b"
     return {
@@ -194,6 +206,22 @@ class BatchCliTest(unittest.TestCase):
                 "The exact JSON artboard node and its assigned page Block agree."
             ]
             item["issues"] = []
+        for item in review["source_group_reviews"]:
+            item["semantic_relation"] = (
+                "matches_block"
+                if len(item["subtree_block_ids"]) == 1
+                else "contains_blocks"
+            )
+            item["visual_semantics_correct"] = True
+            item["json_grouping_reconciled"] = True
+            item["visual_evidence"] = ["The rendered group boundary was inspected first."]
+            item["json_evidence"] = [
+                "The source group hierarchy and subtree Block projection agree."
+            ]
+            item["rationale"] = [
+                "Visual semantics and JSON grouping evidence are explicitly reconciled."
+            ]
+            item["issues"] = []
         cross = review["cross_block_review"]
         cross["relations_correct"] = True
         cross["reading_order_correct"] = True
@@ -253,6 +281,10 @@ class BatchCliTest(unittest.TestCase):
         run_result = read_json(extract_root / "run-result.json")
         self.assertEqual(run_result["status"], "complete")
         self.assertEqual(len(run_result["designs"]), 2)
+        checklist = read_json(extract_root / "checklist.json")
+        self.assertTrue(
+            all(item["status"] == "completed" for item in checklist["nodes"])
+        )
 
         index_path = extract_root / "index.json"
         index = read_json(index_path)
@@ -265,6 +297,43 @@ class BatchCliTest(unittest.TestCase):
         cross_wired = self.run_cli("verify-run", "--project-root", str(self.project))
         self.assertEqual(cross_wired.returncode, 2)
         self.assertIn("batch_stage_mismatch", cross_wired.stderr)
+
+    def test_begin_run_freezes_the_complete_stage_checklist_and_reports_the_first_missing_node(self) -> None:
+        begun = self.begin()
+        self.assertEqual(begun.returncode, 0, begun.stderr)
+
+        checklist = read_json(
+            self.project / ".icp" / "extract" / "checklist.json"
+        )
+        self.assertEqual(checklist["stage"], "extract")
+        self.assertEqual(
+            [item["node_id"] for item in checklist["nodes"]],
+            [
+                "run.freeze",
+                "design:image-a.prepare",
+                "design:image-a.semantic-draft",
+                "design:image-a.bindings",
+                "design:image-a.semantic-review",
+                "design:image-a.verify",
+                "design:image-b.prepare",
+                "design:image-b.semantic-draft",
+                "design:image-b.bindings",
+                "design:image-b.semantic-review",
+                "design:image-b.verify",
+                "run.verify",
+            ],
+        )
+        self.assertEqual(checklist["nodes"][0]["status"], "completed")
+        self.assertTrue(
+            all(item["status"] == "pending" for item in checklist["nodes"][1:])
+        )
+
+        incomplete = self.run_cli(
+            "verify-run", "--project-root", str(self.project)
+        )
+        self.assertEqual(incomplete.returncode, 2)
+        self.assertIn("checklist_incomplete", incomplete.stderr)
+        self.assertIn("resume_from_node=design:image-a.prepare", incomplete.stderr)
 
     def test_ui_context_is_injected_and_complete_blocks_reconstruct_source_facts(self) -> None:
         ui_supplement = "Keep the account summary and primary action in separate visual groups."
@@ -361,6 +430,86 @@ class BatchCliTest(unittest.TestCase):
         )
         self.assertEqual(rejected.returncode, 2)
         self.assertIn("stage_drift", rejected.stderr)
+
+    def test_iole_bundle_is_frozen_once_before_extract_and_binds_every_design(self) -> None:
+        ui_supplement = "Use the account summary only to assist visual grouping."
+        bundle = {
+            "kind": "iole.flow-source-bundle.v2",
+            "schema_version": 2,
+            "source_id": "google-sheets:" + "1" * 64,
+            "role": "client",
+            "root_title": "Login flow",
+            "row_data_columns": [
+                "标题",
+                "Route",
+                "设计稿地址",
+                "UI补充描述",
+                "交互描述",
+                "UT",
+                "IT",
+                "E2E",
+                "接口描述",
+            ],
+            "mapping_digest": "2" * 64,
+            "members": [
+                {
+                    "title": "Login flow",
+                    "change_scope": "modify",
+                    "design_refs": [
+                        {"ordinal": 1, "label": "", "url": URL_A},
+                        {"ordinal": 2, "label": "entered", "url": URL_B},
+                    ],
+                    "row_data": {
+                        "标题": "Login flow",
+                        "Route": "login",
+                        "设计稿地址": URL_A + "\n" + URL_B,
+                        "UI补充描述": ui_supplement,
+                        "交互描述": None,
+                        "UT": None,
+                        "IT": None,
+                        "E2E": None,
+                        "接口描述": None,
+                    },
+                    "source_contract": {"contract_digest": "3" * 64},
+                }
+            ],
+            "relations": [],
+            "source_closure": {},
+        }
+        bundle["bundle_digest"] = canonical_digest(bundle)
+        source_bundle = self.root / "source-bundle.json"
+        source_bundle.write_text(
+            json.dumps(bundle, ensure_ascii=False, separators=(",", ":")),
+            encoding="utf-8",
+        )
+
+        begun = self.run_cli(
+            "begin-run",
+            "--project-root",
+            str(self.project),
+            "--source-bundle",
+            str(source_bundle),
+        )
+
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        frozen_path = self.project / ".icp" / "source" / "source-bundle.json"
+        self.assertEqual(read_json(frozen_path), bundle)
+        manifest = read_json(self.project / ".icp" / "extract" / "run-manifest.json")
+        self.assertEqual(manifest["source_bundle"]["bundle_digest"], bundle["bundle_digest"])
+        self.assertEqual(
+            manifest["source_bundle"]["sha256"],
+            hashlib.sha256(frozen_path.read_bytes()).hexdigest(),
+        )
+        self.assertEqual(
+            [
+                (item["design_url"], item["member_title"], item["contract_digest"], item["ui_supplement"])
+                for item in manifest["designs"]
+            ],
+            [
+                (URL_A, "Login flow", "3" * 64, ui_supplement),
+                (URL_B, "Login flow", "3" * 64, ui_supplement),
+            ],
+        )
 
     def test_batch_rejects_different_designs_with_the_same_safe_name(self) -> None:
         self.assertEqual(self.begin().returncode, 0)

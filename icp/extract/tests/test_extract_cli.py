@@ -230,6 +230,24 @@ class ExtractCliTest(unittest.TestCase):
                 "The exact JSON node, current Block, parent source node, and child source nodes were checked together."
             ]
             item["issues"] = []
+        for item in review["source_group_reviews"]:
+            item["semantic_relation"] = (
+                "matches_block"
+                if len(item["subtree_block_ids"]) == 1
+                else "contains_blocks"
+            )
+            item["visual_semantics_correct"] = True
+            item["json_grouping_reconciled"] = True
+            item["visual_evidence"] = [
+                "The rendered group boundary was inspected before consulting source JSON."
+            ]
+            item["json_evidence"] = [
+                "The complete source group, parent, children, and subtree Block projection were checked."
+            ]
+            item["rationale"] = [
+                "The visual Block hypothesis and JSON grouping evidence are explicitly reconciled."
+            ]
+            item["issues"] = []
         cross = review["cross_block_review"]
         cross["relations_correct"] = True
         cross["reading_order_correct"] = True
@@ -273,6 +291,53 @@ class ExtractCliTest(unittest.TestCase):
         self.assertEqual(recorded.returncode, 0, recorded.stdout + recorded.stderr)
         stage_result = read_json(self.extract_dir / "stage-result.json")
         self.assertTrue(stage_result["content_roles_reviewed"])
+
+    def test_reverse_review_requires_visual_json_reconciliation_for_every_source_group(self) -> None:
+        review = self.prepare_single_block_reverse_review()
+
+        self.assertEqual(
+            [item["source_node_id"] for item in review["source_group_reviews"]],
+            ["root:1", "group:1"],
+        )
+        self.assertEqual(
+            review["source_group_reviews"][0]["subtree_block_ids"], ["page"]
+        )
+        self.assertEqual(
+            review["source_group_reviews"][1]["subtree_block_ids"], ["page"]
+        )
+        self.assertTrue(
+            all(
+                item["semantic_relation"] == "unreviewed"
+                and item["visual_semantics_correct"] is False
+                and item["json_grouping_reconciled"] is False
+                for item in review["source_group_reviews"]
+            )
+        )
+
+        self.fill_passing_semantic_review(review)
+        target = review["source_group_reviews"][1]
+        target["visual_semantics_correct"] = False
+        target["json_grouping_reconciled"] = False
+        target["issues"] = [
+            "The JSON Offer card group is independent evidence that the one-Block visual hypothesis must be revised."
+        ]
+        review["decision"] = "revise"
+        review_path = self.root / "source-group-reconciliation-review.json"
+        write_json(review_path, review)
+
+        revised = self.run_stage_cli("record-review", "--review", str(review_path))
+
+        self.assertEqual(revised.returncode, 0, revised.stdout + revised.stderr)
+        repair = read_json(self.extract_dir / "semantic-repair.json")
+        self.assertEqual(
+            repair["source_group_issues"]["group:1"], target["issues"]
+        )
+        self.assertEqual(
+            repair["source_group_repair_packets"]["group:1"][
+                "source_and_current_block"
+            ]["source_node"]["payload"]["name"],
+            "Offer card",
+        )
 
     def test_prepare_creates_lossless_extract_workspace_and_fails_on_drift(self) -> None:
         result = self.prepare_workspace()
@@ -1432,6 +1497,20 @@ class ExtractCliTest(unittest.TestCase):
         cross["evidence"] = [
             "All source nodes are covered and the task flow is coherent."
         ]
+        for item in review["source_group_reviews"]:
+            item["semantic_relation"] = "matches_block"
+            item["visual_semantics_correct"] = True
+            item["json_grouping_reconciled"] = True
+            item["visual_evidence"] = [
+                "The rendered group boundary was inspected before reading JSON grouping."
+            ]
+            item["json_evidence"] = [
+                "The complete JSON group hierarchy maps to the current page Block."
+            ]
+            item["rationale"] = [
+                "The visual hypothesis and JSON grouping evidence agree in this fixture."
+            ]
+            item["issues"] = []
         write_json(review_path, review)
 
         frozen_source = extract_dir / "source" / "design.json"
@@ -1471,6 +1550,7 @@ class ExtractCliTest(unittest.TestCase):
                 "no_synthetic_source_ids": True,
                 "semantic_blocks_reconstruct_complete_design_json": True,
                 "reverse_json_semantic_audit": True,
+                "visual_json_group_reconciliation": True,
                 "semantic_review_passed": True,
             },
         )

@@ -3,9 +3,11 @@
 ## Outcome
 
 Implement production code from the frozen Stage 1 Blocks and Stage 2 component
-lock. This stage may choose target-platform primitives and file layout, but it may
+lock's closed `implementation_contract`. Stage 3 must not read the IOLE source
+bundle, raw rows, or original UI/interaction/API/UT/IT/E2E prose directly or
+indirectly, and must not repeat Stage 2 semantic interpretation. This stage may choose target-platform primitives and file layout, but it may
 not change component boundaries, page scope, semantic facts, Block ownership,
-presentation relations, or source authority.
+interaction graphs, API contracts, presentation relations, or source authority.
 
 The implementation stage is a prompt plus deterministic scripts:
 
@@ -27,15 +29,18 @@ exact identities, complete sets, command exit status, or boolean runtime checks.
 
 ## Authority order
 
-1. Same-page IOLE UI, interaction, API, UT, IT, and E2E descriptions own business
-   copy, values, validation, behavior, state, navigation outcomes, and APIs.
+1. Stage 2's closed same-page contract, derived from IOLE UI, interaction, API,
+   UT, IT, and E2E descriptions, owns business copy, values, validation, behavior,
+   state, navigation outcomes, APIs, and documented test obligations. Stage 3
+   receives the closed result, never the original prose.
 2. The target project's root `common-rules.md` supplies project-wide policy only
    where the same page is silent or ambiguous. It never overrides an explicit
    same-page clause.
 3. Verified Stage 1 Blocks/source facts own hierarchy, visual treatment, geometry,
    assets, and the static/dynamic/platform content classification.
-4. Frozen Stage 2 definitions, instances, facts, compositions, and presentation
-   usages own component boundaries and behavior/data contracts.
+4. Frozen Stage 2 definitions, instances, facts, compositions, interaction graphs,
+   API contracts, and presentation usages own component boundaries and behavior/
+   data contracts.
 5. [Android Kotlin best practices](references/platform-best-practices/android-kotlin.md)
    fill only platform mechanics left unspecified by 1–4.
 
@@ -47,6 +52,7 @@ limits, success copy, navigation targets, or business states.
 
 ```text
 .icp/implementation/
+├── checklist.json
 ├── coverage-universe.json
 ├── common-rules.md
 ├── platform-best-practices.md
@@ -73,15 +79,25 @@ python3 <icp-skill>/implementation/scripts/implementation.py begin \
   --platform android-kotlin
 ```
 
-`begin` reruns live Component Design verification and freezes only `modify`
-pages. It derives every component instance, Block, rendering source node, semantic
-fact, interaction obligation, presentation usage, and design reference. A source
+`begin` verifies only Stage 2's sealed `state.json`, `stage-result.json`,
+`component-lock.json`, and `block-component-bindings.json` identities and hashes;
+it does not invoke Stage 2, reopen `.icp/source/source-bundle.json`, or reread
+original business prose. Stage 2's full verify already completed before this
+boundary. Stage 3 then freezes only `modify` pages. It derives every component instance, Block, rendering source node, semantic
+fact, component-bound interaction graph, API contract, interaction obligation,
+presentation usage, and design reference. A source
 node without a reviewed Stage 1 `content_role` fails. It also requires and freezes
 the project's UTF-8 `common-rules.md`; later changes fail as stage drift. Every
 codegen packet contains the exact common-rule content and hash before the advisory
 platform practices. It also freezes `implementation-prompt.md`. Codebase search is
 performed live by the implementing model so it can understand current symbols,
 call sites, behavior, and reuse opportunities.
+
+`begin` also freezes the complete Stage-3 checklist from the coverage universe:
+plan, every obligation's RED then GREEN, code/asset coverage, compact and expanded
+responsive evidence, every production visual capture including runtime probes,
+frozen verification commands, and final verify. The script records nodes only
+after their deterministic gate succeeds.
 
 ## 2. Author and record the implementation plan
 
@@ -91,10 +107,29 @@ page declare:
 - one page root and source file;
 - one page DTO and UI-state model;
 - one mock fixture that maps into the DTO;
-- an API adapter symbol whenever the page has an `api_dependency` fact;
+- an API adapter symbol whenever the page has a frozen API contract;
 - constraint-driven responsive strategy;
 - the complete set of frozen component instance IDs. This list is coverage only;
   rendering order comes exclusively from the composition's parent, slot, and order.
+
+`layout_selection_inputs` is a deterministic projection of Stage 2's bound
+`layout_inputs`. Author one complete `layout_decisions` set per design state from
+its decision obligations and evidence. Do not author `layout_contracts`;
+`record-plan` derives them with the position/layout algorithm and freezes the
+result into the plan and each page packet. A failed attempt returns the complete
+structured problem set for every affected design state, so regenerate each
+affected page as a whole. At most three failed whole-page attempts are recorded;
+exhaustion means Stage 1 or Stage 2 must be repaired, not bypassed.
+
+Coverage lists in the implementation plan are identity sets, not storage-order
+contracts: per-page `component_instance_ids`, the lock's global
+`component_instances` storage order, per-component `block_obligation_ids`,
+per-interaction `component_instance_ids`, and per-case `basis_fact_ids` each
+accept the same complete ID set in any order, reject duplicate/missing/unexpected
+IDs with an exact sorted diff, and are normalized to the authoritative expected
+order when the plan is frozen. Order-sensitive contracts — `page_keys` business
+order, interaction traces, command argv, and append-only event history — stay
+strict.
 
 Also declare a topological execution DAG with exactly one `foundation` node, one
 `page` node per modify page, and one final `flow-integration` node. Assign every
@@ -113,6 +148,16 @@ anchors beside the code that implements their obligations; anchors are the
 auditable join, while build/runtime/visual evidence proves they are not enough by
 themselves.
 
+Map every frozen interaction exactly once to all bound component instances and one
+production owner symbol. Map every API contract exactly once to the page adapter
+file and one distinct method symbol. The adapter file is separate from both
+`dto_file` and the consuming interaction/component source so a declaration cannot
+masquerade as a call. An
+`api_call` interaction must contain an executable call form in its production
+interaction source; a declaration, comment, string, or unused method does not
+complete the interaction. Runtime acceptance still comes from the integration
+case observing the exact outbound request.
+
 Before mapping code, query the live codebase once per frozen component definition
 using its responsibility, owned/excluded scope, capabilities, slots, data roles,
 action roles, and visible variations. Reuse a suitable public component when it
@@ -126,15 +171,26 @@ selected source asset ID and SHA-256 must remain exact. Copy the original bytes;
 do not redraw, approximate, or substitute an icon. Final verification requires
 `source asset SHA-256 = target resource SHA-256`.
 
-Declare one `visual_capture_case` per design state: package, locale, page key, the
+Declare the real production runtime entry after querying the codebase, then one
+`visual_capture_case` per design state: entry ID, package, locale, page key, the
 exact collision-resistant `visual_state_id`, environment/data-only
-`precondition_commands`, a same-page `interaction_trace`, and one
+`precondition_commands`, an entry-rooted `interaction_trace`, and one
 `production_render` containing the frozen component instance, source file, symbol,
 and unique root tag. Never use a transliterated display title as state identity.
 Never put a terminal state selector such as `icp_state` in preconditions or cold
-start. A non-primary state must be reached by clicking the real production controls
-named in its frozen integration cases. Test-only code may prepare data or navigate;
+start. Do not assume the IOLE flow root is the application launcher. The trace
+starts at its declared runtime entry and every step must select an exact Stage 2
+interaction result edge; cross-page navigation and modal presentation are followed
+without importing source-page facts into the destination. Only the exact entry
+design may use an empty trace. Every other state must be reached by the real
+production controls named in its frozen integration cases. Test-only code may prepare data or navigate;
 it may not render a duplicate terminal UI.
+
+The entry file/symbol is the actual launcher, deep-link handler, or navigation
+coordinator; it is not required to equal the target page renderer. Declare the
+initial page/design separately, keep the entry file under one execution-node owner,
+and verify that its production symbol exists. A page Composable/View is not a
+surrogate entry unless it truly is the codebase entry.
 
 Each design-element mapping also carries its frozen `runtime_probe_tag` when Stage
 1 contains measurable reference facts. Attach it to the actual production element,
@@ -162,7 +218,8 @@ Freeze every planned integration obligation before production implementation. Th
 obligation set is the exact union of three sources:
 
 1. atomic facts backed by the same page's `IT` description;
-2. atomic condition/state/trigger/behavior facts backed by `交互描述`;
+2. one complete component-bound interaction-graph item assembled from the same
+   page's atomic `交互描述` facts and explicit inference bases;
 3. one model-inferred scenario for every frozen component instance, derived from
    that instance's complete Stage 2 fact bindings, component contract, and page
    composition.
@@ -172,6 +229,13 @@ fact basis. Documented IT and interaction obligations remain separate even when
 their meanings overlap. Model inference fills component-contract coverage but may
 not replace, weaken, or invent a conflict with documented behavior. The test
 command is frozen in the plan and is executed without a shell.
+
+An interaction obligation also carries the complete five-field interaction,
+component-instance bindings, outgoing graph edges, explicit terminal outcomes,
+and any bound API contract.
+Its integration case drives the real trigger and observes the behavior, result, state
+transition, exact outbound request, response-to-DTO mapping, and success/failure
+continuation that are contract-significant.
 
 ```bash
 python3 <icp-skill>/implementation/scripts/implementation.py run-case \
@@ -200,37 +264,59 @@ Each page must render through its DTO/UI state. Remote responses and mocks adapt
 to that DTO; UI code does not render transport response types. Use the frozen
 component composition to choose Compose primitives and responsive placement.
 
-Create runtime evidence with exactly two boolean-responsive runs per page
-(`compact` and `expanded`) and one actual screenshot per design state:
+Implement every `api_call` while implementing its interaction slice: trigger,
+conditions, pending state, adapter method, exact request mapping, response/error
+mapping, DTO update, and the next render/navigation/error interaction. Do not
+defer interfaces to a separate post-page step.
+
+Create runtime evidence with exactly two measured runs per page (`compact` and
+`expanded`) and one actual screenshot per design state. Authored pass/fail flags
+are forbidden:
 
 ```json
 {
   "schema": "icp.implementation.runtime-evidence.v1",
   "implementation_plan_sha256": "<frozen hash>",
-  "adaptive_components": [
-    {
-      "component_instance_id": "<component-instance-id>",
-      "constraint_driven": true,
-      "content_adaptive": true,
-      "no_content_specific_geometry": true
-    }
-  ],
   "responsive_runs": [
     {
       "page_key": "<page-key>",
       "viewport": "compact",
-      "evaluation_scope": "responsive_behavior",
-      "width": 360,
-      "height": 800,
-      "renders": true,
-      "natural_text_reflow": true,
-      "no_clip": true,
-      "no_overlap": true,
-      "no_horizontal_overflow": true,
-      "content_reachable": true,
-      "controls_operable": true,
-      "system_bars_correct": true,
-      "insets_safe": true
+      "snapshots": [
+        {
+          "design_state_id": "<design-state>",
+          "coordinate_space": {"unit": "dp", "origin": "viewport"},
+          "viewport_bounds": {"left": 0, "top": 0, "width": 360, "height": 800},
+          "safe_insets": {"left": 0, "top": 0, "right": 0, "bottom": 0},
+          "system_bars": {
+            "status": {"visible": false, "bounds": null},
+            "navigation": {"visible": true, "bounds": {"left": 0, "top": 776, "width": 360, "height": 24}}
+          },
+          "scroll_metrics": [],
+          "components": [
+            {
+              "instance_id": "<component-instance-id>",
+              "occurrence_id": "<runtime-occurrence-id>",
+              "presence": "present",
+              "parent_instance_id": null,
+              "slot": "root",
+              "order": 0,
+              "bounds": {"left": 0, "top": 0, "width": 360, "height": 800}
+            }
+          ],
+          "capture": {
+            "screenshot_path": ".icp/implementation/runtime/<capture>.png",
+            "sha256": "<sha256>",
+            "device_configuration": {
+              "width": 360,
+              "height": 800,
+              "density": 320,
+              "locale": "ru-RU",
+              "font_scale": "1.0",
+              "navigation_mode": "gesture"
+            }
+          }
+        }
+      ]
     }
   ],
   "visual_runs": [
@@ -275,11 +361,15 @@ from deterministic runtime measurements. Runtime evidence contains only the
 screenshot and generated capture-evidence path; human-authored fidelity booleans
 are invalid.
 It is not a runtime geometry template. Responsive runs use their own compact and
-expanded sizes and must prove natural text reflow, no clipping or overlap, no
-horizontal overflow, reachable scroll content, operable controls, correct system
-bars, and safe insets. Every frozen component instance must independently report
-constraint-driven, content-adaptive measurement with no locale/copy/sample-specific
-geometry. MAE is recorded only as a diagnostic for the reference capture.
+expanded sizes. For every design state they record unique runtime occurrences,
+component topology and bounds, viewport coordinate space, safe insets, actual
+system-bar visibility/bounds, scroll viewport/content extents and observed
+offsets, device configuration, and screenshot bytes. The shared layout executor
+computes clipping, overlap, horizontal overflow, scroll reachability, topology,
+and component presence from those measurements, consuming the frozen horizontal
+scroll scopes including their descendants. It rejects authored `no_clip`,
+`operable`, or similar verdicts. MAE remains diagnostic only for the reference
+capture.
 
 Actual screenshots and generated capture evidence must be project-relative. Then
 run:
@@ -296,6 +386,12 @@ planned lint/build/integration commands, both responsive runs, exact device
 conversion/restoration evidence, the production-path interaction/root attestation,
 complete adaptive-component evidence, and passing Stage 1-bound reference-viewport
 measurements.
+
+The final verifier completes checklist nodes only as their real validations pass.
+If any node is absent or an upstream evidence hash changed, it stops at the
+earliest pending node and requires every dependent node to be revalidated before
+Stage 3 can become complete. The final implementation state binds the completed
+checklist hash.
 
 Reference geometry may fix intrinsically sized visuals and controls, but must not
 be copied into text, card, section, or page heights merely to match one screenshot.

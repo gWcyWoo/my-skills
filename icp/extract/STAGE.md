@@ -33,6 +33,7 @@ The model owns semantic interpretation and classification. The scripts own Lanhu
 ```text
 .icp/extract/
 ├── run-manifest.json
+├── checklist.json
 ├── index.json
 ├── run-result.json
 └── <design-name>/
@@ -58,6 +59,11 @@ The model owns semantic interpretation and classification. The scripts own Lanhu
     ├── revisions/*.json
     └── stage-result.json
 ```
+
+For an IOLE run, the complete source bundle is frozen once at
+`.icp/source/source-bundle.json`; the extract manifest binds each design to its
+member title, component contract digest, change scope, and exact same-row
+`UI补充描述`. Later stages must reuse this artifact rather than make another copy.
 
 Files ending in `.input.json` are model work products. Canonical files without `.input` have passed their corresponding gate. A sanitized design-name collision between different design identities fails visibly; never append an implicit suffix.
 
@@ -85,6 +91,19 @@ python3 <icp-skill>/extract/scripts/extract.py begin-run \
 ```
 
 This freezes the exact batch. A later URL-set change is input drift, not a resume.
+It also creates the complete input-derived Stage-1 checklist and records only
+`run.freeze` as completed. Each design has dependent `prepare`, `semantic-draft`,
+`bindings`, `semantic-review`, and `verify` nodes; `run.verify` depends on every
+design verify node.
+
+For IOLE, do not create a second run-input projection. Pass its complete bundle
+directly to Stage 1 once:
+
+```bash
+python3 <icp-skill>/extract/scripts/extract.py begin-run \
+  --project-root "<project>" \
+  --source-bundle "<iole-flow-source-bundle-v2.json>"
+```
 
 ## 2. Acquire and freeze each design
 
@@ -204,6 +223,24 @@ two mandatory views of the same frozen result:
 
 Review every Block and then traverse every JSON node in exact source order. For each source node, independently decide whether its assigned Block and `content_role` are semantically correct, whether the node or subtree needs its own semantic group, and whether the source parent-child relation is preserved by the Block hierarchy. This is not a node-count check: a node that exists but is swallowed by the wrong Block must fail. Review role, hierarchy, appearance, grouping, source binding, content role, relations, reading order, omissions, and non-rendering classifications. Replace every `TODO`; placeholders cannot pass.
 
+The JSON hierarchy is a second semantic evidence channel, never the first author of
+Blocks. Keep the frozen image-first Block hypothesis, then explicitly reconcile
+every JSON node with children against that visual result. For each source group,
+record exactly one relation:
+
+- `matches_block`: the source group and one visual Block have the same semantic boundary;
+- `contains_blocks`: the source group is a broader container for multiple visual Blocks;
+- `part_of_block`: the source group is only one part of a larger visual Block;
+- `technical_group`: the grouping exists for editing, clipping, export, layout, or another non-semantic design-tool reason.
+
+The review projection freezes the complete source group, parent, children, node
+names/types, and ordered subtree Block IDs. The reviewer must cite separate visual
+and JSON evidence and explain how they reconcile. JSON grouping may challenge and
+repair the visual hypothesis, but it cannot automatically replace it. Missing a
+group, accepting an unexplained mismatch, or declaring `contains_blocks` without
+multiple subtree Blocks fails. After any mismatch, repair the draft/bindings and
+repeat the complete visual/JSON reconciliation from the first source node.
+
 `decision: pass` is valid only when every boolean is true and every issue array is empty.
 
 ```bash
@@ -237,6 +274,11 @@ python3 <icp-skill>/extract/scripts/extract.py verify-run \
 ```
 
 Only exit code zero from `verify-run` makes a multi-design extract deliverable. Report the absolute `run-result.json` path and per-design `stage-result.json` paths, then stop before component design.
+
+`verify-run` also requires every checklist node before `run.verify`. If a node is
+missing or invalidated by changed upstream evidence, it returns the earliest
+`resume_from_node` and all causally downstream `revalidate_nodes`. Complete that
+node and rerun its dependent commands; never carry forward a prior downstream pass.
 
 On a passing review the script writes `semantic-blocks.json`. Every Block embeds
 its complete ordered source-node records, assignments, content roles, and asset

@@ -211,6 +211,20 @@ def complete_extract_design(project: Path, name: str, suffix: str) -> None:
             "The exact JSON node, its source relations, and assigned semantic Block agree."
         ]
         item["issues"] = []
+    for item in review["source_group_reviews"]:
+        item["semantic_relation"] = (
+            "matches_block" if len(item["subtree_block_ids"]) == 1 else "contains_blocks"
+        )
+        item["visual_semantics_correct"] = True
+        item["json_grouping_reconciled"] = True
+        item["visual_evidence"] = ["The rendered group boundary was inspected first."]
+        item["json_evidence"] = [
+            "The source group hierarchy and subtree Block projection agree."
+        ]
+        item["rationale"] = [
+            "Visual semantics and JSON grouping evidence are explicitly reconciled."
+        ]
+        item["issues"] = []
     cross = review["cross_block_review"]
     cross["relations_correct"] = True
     cross["reading_order_correct"] = True

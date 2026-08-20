@@ -2,10 +2,11 @@
 
 ## Outcome
 
-Convert one verified extract batch plus IOLE's exact source bundle into a locked
+Convert one verified extract batch plus Stage 1's single frozen IOLE source bundle into a locked
 component-semantic system for stage 3. Collect component responsibilities,
 boundaries, page-specific facts, states, behaviors, data and API dependencies,
-reuse decisions, component instances, and final design compositions.
+reuse decisions, component instances, final design compositions, same-page
+interaction graphs, and frozen API contracts.
 
 Do not implement components in this stage. Do not emit production code, framework
 types, class names, widget trees, rendering algorithms, validators, reducers,
@@ -25,6 +26,15 @@ every semantic fact = one closed evidence class plus same-page candidate-owned B
 every business-source fact = exact source spans closed by the coverage ledger
 every design-visible fact = visible-only semantics with no business source span
 every source fact segment = one passing atomic semantic review with concrete evidence
+every atomic interaction fact = exactly one same-page interaction-graph field
+every interaction graph item = five nullable fields plus exact component bindings
+every graph edge = one named result to one exact same-page or source-backed external target
+every trigger/behavior/result causal chain = one interaction, never split event-only nodes
+every API success/failure = one outgoing edge or one reasoned terminal outcome
+every non-empty interface description/API directive = exactly one API requirement consumer
+every API contract = one separately recorded acquisition artifact before page facts
+every API contract = one hash-verified Apifox snapshot plus normalized transport shape
+every API contract = used by at least one component-bound api_call interaction
 every page review = hash-bound to the exact draft and candidate projection
 every page = sealed before any group abstraction is recorded
 every candidate = exactly one group disposition and one final component instance
@@ -49,9 +59,13 @@ and semantic grouping. Its copy, sample data, and captured control state are
 placeholders unless the same page's description confirms them.
 
 Keep every atomic `IT` fact and its exact same-page source span in the sealed page
-facts. Stage 3 derives documented integration obligations from those facts,
-separately from the interaction ledger; semantic overlap never permits either
+facts. Stage 2 derives and freezes documented integration obligations before
+closing its `implementation_contract`; Stage 3 consumes those obligations without
+reading their original prose or spans. Semantic overlap never permits either
 source to be dropped.
+Resolve the IT source by its exact source-contract header identity `IT`, never by
+acceptance-section array position or a fixed `acceptance:N` clause ID. Reordered
+or omitted UT/E2E sections cannot change which facts are IT obligations.
 
 Treat every IOLE member/physical row as an independent page scope. Multiple
 designs may be ordered states of one page. A behavior, state, value, validation,
@@ -106,15 +120,24 @@ Require both:
    bindings, and assets into a new visual grouping. Its frozen `ui_supplement`
    must exactly equal the same member's current `UI补充描述` (including `null`),
    otherwise Stage 1 did not group against the authoritative same-row context.
-2. The exact unchanged `iole.flow-source-bundle.v2` from IOLE's closed related-row
-   graph. `row_data_columns` declares the mapping-owned ICP inputs and every member
-   includes exactly that ordered set in `row_data`; non-empty values are exact
-   strings and exactly empty values are JSON `null`. Missing declared columns and
-   empty-string placeholders fail. Unowned Sheet columns are not ICP inputs and do
-   not enter the handoff, its hashes, or its semantic reverse audit. Its hash-bound
-   `source_closure` must cover every member's declared business columns and relation
-   evidence against the complete Sheet title catalog. A missing/stale closure,
-   legacy analysis, failed review, or relation projection mismatch fails.
+ 2. The exact unchanged `.icp/source/source-bundle.json` frozen by Stage 1 from
+    IOLE's closed related-row graph. Stage 2 accepts no external bundle path and
+    creates no second snapshot. `row_data_columns` declares the mapping-owned ICP inputs and every member
+    includes exactly that key set in `row_data`; non-empty values are exact
+    strings and exactly empty values are JSON `null`. JSON object key insertion
+    order is not a contract: Stage 2 requires the declared key set and reads
+    `row_data` in `row_data_columns` order. Missing or unexpected declared
+    columns and empty-string placeholders fail. Unowned Sheet columns are not
+    ICP inputs and do not enter the handoff, its hashes, or its semantic reverse
+    audit. Its hash-bound `source_closure` must cover every member's declared
+    business columns and relation evidence against the complete Sheet title
+    catalog; analyzed columns and `(title, column, source_sha256)` field reviews
+    are exact identity sets (duplicates rejected, sorted missing/unexpected
+    diffs), and relations compare unique `(from_title, to_title)` edges as
+    topology normalized by stable edge identity, never by flow-list, field, or
+    reference traversal order. A missing/stale
+    closure, legacy analysis, failed review, or relation projection mismatch
+    fails.
 
 Optionally accept one read-only project component catalog:
 
@@ -152,8 +175,9 @@ Optionally accept one read-only project component catalog:
 
 The provenance path must be project-relative, exist, and match its declared SHA-256.
 Use `verified-component-lock` only when that file is an
-`icp.component-design.lock.v4`, `icp.component-design.lock.v5`, or
-`icp.component-design.lock.v6` containing the
+`icp.component-design.lock.v4`, `icp.component-design.lock.v5`,
+`icp.component-design.lock.v6`, `icp.component-design.lock.v7`, or
+`icp.component-design.lock.v8` containing the
 exact declared semantic definition.
 Use `code-derived` for model analysis of existing implementation. A code-derived
 entry cannot be `reuse-existing`; it may only support `adapt-existing`, which must
@@ -164,7 +188,7 @@ create a new complete semantic definition with a new ID.
 ```text
 .icp/component-design/
 ├── .write.lock
-├── iole-source-bundle.json
+├── checklist.json
 ├── source-catalog.json
 ├── business-context.json
 ├── mobile-component-patterns.md
@@ -213,7 +237,6 @@ Start only after the complete extract batch exists:
 ```bash
 python3 <icp-skill>/component-design/scripts/component_design.py begin \
   --project-root "<project>" \
-  --source-bundle "<iole-flow-source-bundle-v1.json>" \
   [--project-catalog "<project-component-catalog.json>"]
 ```
 
@@ -231,11 +254,24 @@ source catalog. Each catalog Block is copied from the verified Stage-1
 Do not reinterpret or repair Stage-1 grouping, and do not read another page as
 authority for this page.
 
+`begin` also freezes the complete Stage-2 checklist. Each page has an optional
+`api-contracts` node when its frozen input has API requirements, followed by
+`facts` and `review`; group abstraction depends on every page review and final
+verify depends on abstraction. Page branches may be authored independently, but
+no command may skip its own dependency chain.
+
 `begin` also projects every IOLE `modal|component` reference into the source
 page's immutable `presentation_requirements`. Each requirement retains the exact
 reference ID, column, source clause/span/hash, relation kind, target member, and
 target page key. `navigation|data|reference` edges do not imply rendered component
 usage. The page author cannot remove or rewrite this projection.
+
+`begin` also projects every non-empty `接口描述` and every exact technical
+`API:xxxx` or `API：xxxx` directive in the same page's `交互描述` into immutable
+`api_requirements`. Empty values remain empty and produce no API requirement.
+The directive locator must be one of `METHOD /path`, `METHOD https://...`,
+`/path`, `https://...`, `endpoint_id`, or `project_id/endpoint_id`. `METHOD` is
+uppercase. Natural-language prose after `API:` is not a technical directive.
 
 ### Page candidates
 
@@ -256,7 +292,7 @@ The final definition kind must equal every governed candidate kind. A `page`,
 Each semantic fact declares:
 
 - stable fact ID;
-- `responsibility|condition|state|trigger|behavior|data|api_dependency|component_relation` kind;
+- `responsibility|condition|state|trigger|behavior|result|data|api_dependency|component_relation` kind;
 - semantic meaning, without implementation algorithms;
 - exactly one `business_source|design_visible` evidence class;
 - exact same-page source spans for `business_source`, or no source spans plus a
@@ -325,15 +361,18 @@ exactly the coverage ledger rather than riding into the lock as undeclared evide
 ### Atomic interaction check
 
 After the first page component model exists, independently split only the exact
-same-page `交互描述` into atomic `condition|state|trigger|behavior` items. These
-four fields are the closed interaction-check vocabulary:
+same-page `交互描述` into atomic `condition|state|trigger|behavior|result` items.
+These five fields are the closed interaction-check vocabulary:
 
 - `condition`: an applicability guard or prerequisite;
 - `state`: a current observable business or component state;
 - `trigger`: a user or system event that starts an interaction;
-- `behavior`: the externally observable business outcome after a trigger.
+- `behavior`: the business operation performed after a trigger;
+- `result`: the observable consequence that follows the behavior, including the
+  next state, rendered data, navigation, presentation, success, failure, or an
+  explicit terminal result.
 
-Every item always contains all four keys and at most one non-null value; the other
+Every item always contains all five keys and at most one non-null value; the other
 values are JSON `null`. A non-empty source segment that contains only supporting
 data, structure, or context still gets one same-span all-null item rather than a
 fabricated interaction meaning. Several items may cite the same exact source segment.
@@ -341,15 +380,82 @@ Each non-null value names exactly one same-page `business_source` fact of the sa
 kind and meaning. That fact must cite the identical source span. A non-empty
 interaction description must have at least one atomic item for every fact segment,
 and the interaction item/fact sets must be bidirectionally equal. Do not manufacture
-a missing condition, state, trigger, or behavior merely to populate the structure.
+a missing condition, state, trigger, behavior, or result merely to populate the structure.
 
 When the complete interaction description is empty, preserve one explicit item
-whose source ref and all four fields are `null`. This item is evidence of absence,
+whose source ref and all five fields are `null`. This item is evidence of absence,
 not an error and not a component binding requirement. Empty strings and missing
 keys are not substitutes for `null`.
 
-The generated page review includes these items beside the exact segment and linked
-facts. Review the entire page, collect every missing or wrongly typed item in one
+### Interaction graph and API contracts
+
+After the atomic ledger closes, assemble it into
+`icp.component-design.interaction-graph.v2`. An interaction is the smallest
+causal unit and always carries exactly the five nullable fields `condition`,
+`state`, `trigger`, `behavior`, and `result`. Each non-null field lists its exact fact IDs or
+an explicit inference basis and binds to the candidate components that own or
+consume it. Every source-backed atomic interaction fact appears exactly once.
+
+Every non-null trigger has its behavior in the same interaction; every behavior
+has both its trigger and result there; a result without a behavior is invalid.
+Condition/state-only declarations may remain independent. Edges resolve a named
+result to either a next same-page interaction or an exact page/design target.
+External navigation/presentation targets are legal only when they bind the exact
+IOLE source-analysis `navigation|modal` reference IDs and spans. `component` and
+`reference` relations are never runtime transitions. A cross-page edge remains a
+source-page fact and cannot copy conditions, state, or behavior into the target
+page. A click-triggered `api_call` is one interaction; both its `success` and
+`failure` results must resolve. When a result intentionally has no continuation,
+declare it once in graph-level `terminal_outcomes` with a non-empty inference
+basis. A result cannot have both an edge and a terminal declaration. Do not create
+an event-only node when one trigger, behavior, and result form the causal unit.
+
+The page review receives the immutable navigation and presentation requirements
+beside the graph. Every exact `navigation|modal` requirement must be consumed once
+across external edges, and its source reference must lie inside a source-backed
+`result` fact on the emitting interaction. One edge may cite several exact source
+references, but one reference may not support several edges.
+
+Resolve each immutable API requirement read-only through Apifox. Prefer the exact
+technical locator from `API:xxxx`; use the same-page interface description as the
+business search and interpretation basis when no locator is present. Read the
+unique endpoint through configured Apifox read tools and freeze:
+
+- project ID, endpoint ID, and read method;
+- the complete raw endpoint contract plus canonical SHA-256;
+- method, path, auth, parameters, request body, responses, and errors;
+- every same-page API requirement ID resolved by that contract.
+
+The Apifox read result is not authored inside page facts. Write the complete
+contract payload to a temporary input and seal it first:
+
+```bash
+python3 <icp-skill>/component-design/scripts/component_design.py record-api-contract \
+  --project-root "<project>" \
+  --page-key "<page-key>" \
+  --contract "<exact-apifox-contract.json>"
+```
+
+`record-page-facts` accepts only contracts byte-equivalent to these separately
+hash-bound stage artifacts. Page `api_contracts` are an ID-keyed collection:
+they must cover exactly the sealed artifacts by `api_contract_id` with complete
+unchanged payloads — duplicate, missing, unexpected, or changed contracts fail
+closed — while the acquisition-list order of the declared list is not a contract
+and is normalized to the sealed artifact order. A changed/missing artifact fails
+closed. For a
+technical API directive, the frozen locator and normalized method/path or numeric
+project/endpoint IDs must mechanically match the source directive.
+
+The description owns business behavior and Apifox owns transport shape. Do not
+silently rewrite either on conflict. An unresolved or ambiguous endpoint, changed
+raw hash, duplicate requirement consumer, unused contract, or API call without a
+contract fails closed. If both source channels are empty, keep `api_requirements`
+and `api_contracts` empty. This stage never calls the live business endpoint and
+never writes network-client production code.
+
+The generated page review includes these items, the complete interaction graph,
+and API contracts beside the exact segments and linked facts. Review the entire
+page, collect every missing or wrongly typed item in one
 pass, revise them together, then rerun the complete page review from the first
 segment. Do not repair one phrase by adding a phrase-specific validator.
 
@@ -533,7 +639,11 @@ python3 <icp-skill>/component-design/scripts/component_design.py record-abstract
 The plan must resolve every `presentation_requirement` exactly once in
 `presentation_usages`. Bind it to the source page's semantic host instance and
 all exact source facts that contain the reference, then to the referenced member's
-final root/source-only instance and component ID. Preserve `modal|component` as
+final root/source-only instance and component ID. `source_fact_ids` is an exact
+identity set: duplicates, missing, or unexpected fact IDs fail with a sorted
+diff, the declared order is not a contract, and it is normalized to the
+authoritative matching-fact order before the evidence-derived `usage_id` is
+checked. Preserve `modal|component` as
 the presentation mode. Do not copy target-page business facts into the source
 page, and do not let stage 3 infer a missing drawer, modal, or embedded component.
 
@@ -559,8 +669,12 @@ python3 <icp-skill>/component-design/scripts/component_design.py verify \
 `verify` re-runs live extract/source checks, page hashes, full candidate coverage,
 the abstraction contract, cache fold, replacement projection, and structural
 completion gates. It never treats words such as `TODO` or angle-bracketed text in
-the exact business source as a model placeholder. Success writes
-`icp.component-design.lock.v6` with:
+the exact business source as a model placeholder. Before writing the lock it
+requires every checklist node except its final verify node. Missing work returns
+the earliest node and the dependent nodes that must be revalidated. The locked
+state binds the completed checklist hash, so Stage 3 cannot enter from an
+incomplete or changed execution flow. Success writes
+`icp.component-design.lock.v8` with:
 
 - one `inference_context` reference and hash for the advisory mobile morphology
   snapshot; its full Markdown remains in the stage and is not duplicated into
@@ -568,15 +682,29 @@ the exact business source as a model placeholder. Success writes
 - one compact `source_context` manifest containing source identity, root member,
   ordered member title/page/scope/design/digest joins, and the exact ordered
   relation graph;
+- one self-contained `implementation_contract` containing sanitized page identity,
+  semantic facts, component definitions/instances/compositions, five-part
+  interaction graphs, API contracts, presentation usages, and documented
+  integration obligations. It contains no raw row data, original source prose,
+  quotes, source spans, or source contracts;
 - complete page semantic facts and exact evidence;
 - final component definitions and page instances;
+- complete page-owned interaction graphs, including source-backed cross-page
+  result targets, projected from candidate IDs to final
+  component instance IDs;
+- every raw-hash-bound and normalized API contract used by those interactions,
+  plus its separately sealed acquisition-artifact path and SHA-256;
 - exact source-page-to-target-component `presentation_usages`;
 - abstraction decisions;
 - final per-design composition trees with candidate-to-component replacement;
 - one hash-bound `block-component-bindings.json` projection that embeds every
   verified extract Block with its complete source nodes/assets and binds it to the
   owning design instance, page candidate, semantic component instance, final
-  component, parent design instance, and slot;
+  component, parent design instance, and slot. The same artifact contains one
+  closed `layout_inputs` entry per design state: component tree, contiguous
+  sibling order, Block ownership, source-parent facts, selected geometry basis,
+  coordinate space, root artboard size, and component definitions. This is the
+  only layout input Stage 3 may consume; Stage 3 never rejoins the extract tree;
 - description-empty designless members preserved as exact source context;
 - source-only designless members locked as independent business-semantic pages;
 - append-only cache projection and all frozen hashes.
@@ -618,6 +746,24 @@ component boundaries without reopening component design.
   UTF-8 input.
 - `source_coverage`, `semantic_fact_coverage`, `unresolved_semantic`: source spans
   or semantic facts are incomplete.
+- `interaction_graph_coverage`, `invalid_interaction_component_binding`: atomic
+  interaction facts are missing, duplicated, or not bound to their components.
+- `interaction_causality_missing`, `invalid_interaction_edge_causality`,
+  `api_interaction_trigger_missing`, `api_interaction_outcome_missing`,
+  `invalid_interaction_terminal_outcome`, `interaction_result_missing`,
+  `interaction_result_outcome_unresolved`: trigger/behavior/result chains, graph edges, or
+  API success/failure resolution are not causal and complete.
+- `navigation_requirement_drift`, `invalid_interaction_edge_target`,
+  `interaction_transition_evidence_missing`,
+  `interaction_transition_evidence_duplicate`,
+  `interaction_transition_evidence_unbound`: source navigation/modal evidence is
+  changed, omitted, reused, attached to the wrong result, or points outside the
+  frozen page/design catalog.
+- `api_contract_coverage`, `api_interaction_coverage`, `api_contract_missing`:
+  interface sources, Apifox contracts, or API-call interactions do not close.
+- `invalid_api_acquisition`, `api_acquisition_missing`, `api_acquisition_drift`,
+  `api_locator_mismatch`: the separately recorded Apifox artifact is absent,
+  changed, self-inconsistent, or does not match its technical directive.
 - `cross_page_semantic_leak`: one page supplied evidence, a literal, or a
   capability to another.
 - `semantic_block_coverage`, `semantic_hierarchy_mismatch`,
