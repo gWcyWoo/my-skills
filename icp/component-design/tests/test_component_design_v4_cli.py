@@ -2968,6 +2968,41 @@ class ComponentDesignV4CliTest(unittest.TestCase):
         self.assertNotIn("allowed_paths", manifest_text)
         self.assertNotIn("implementation", manifest_text)
 
+    def test_implementation_contract_projects_only_modify_members(self) -> None:
+        self.bundle_path = self.build_source_bundle(
+            include_designless_context=True,
+            design_b_scope="navigate-only",
+        )
+        self.seal_all_pages()
+        recorded = self.record_abstraction(self.valid_abstraction_plan())
+        self.assertEqual(recorded.returncode, 0, recorded.stdout + recorded.stderr)
+
+        verified = self.verify()
+
+        self.assertEqual(verified.returncode, 0, verified.stdout + verified.stderr)
+        lock = read_json(self.stage_dir / "component-lock.json")
+        source_members = lock["source_context"]["members"]
+        expected_page_keys = [
+            member["page_key"]
+            for member in source_members
+            if member["change_scope"] == "modify"
+        ]
+        contract = lock["implementation_contract"]
+
+        self.assertEqual(contract["page_keys"], expected_page_keys)
+        self.assertEqual(
+            [page["page_key"] for page in contract["pages"]],
+            expected_page_keys,
+        )
+        self.assertEqual(
+            contract["source_identity"]["members"],
+            source_members,
+        )
+        self.assertEqual(
+            {page["page_key"] for page in lock["pages"]},
+            {member["page_key"] for member in source_members},
+        )
+
     def test_begin_rejects_a_relation_outside_the_declared_member_graph(self) -> None:
         bundle = read_json(self.bundle_path)
         bundle["relations"].append(

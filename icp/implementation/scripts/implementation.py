@@ -781,6 +781,26 @@ def build_coverage_universe(
             "Stage 3 requires the closed Stage 2 implementation contract",
         )
     page_keys = require_string_list(contract.get("page_keys"), "contract page keys")
+    source_identity = require_dict(
+        contract.get("source_identity"), "contract source identity"
+    )
+    expected_page_keys = [
+        require_string(member.get("page_key"), "modify member page key")
+        for value in require_list(
+            source_identity.get("members"), "contract source members"
+        )
+        for member in [require_dict(value, "contract source member")]
+        if member.get("change_scope") == "modify"
+    ]
+    if page_keys != expected_page_keys:
+        raise ContractError(
+            "implementation_scope_mismatch",
+            "implementation targets must be exactly the ordered modify members",
+            details={
+                "expected_page_keys": expected_page_keys,
+                "actual_page_keys": page_keys,
+            },
+        )
     page_key_set = set(page_keys)
     pages = [
         require_dict(value, "contract page")
@@ -897,6 +917,7 @@ def build_coverage_universe(
         }
         for value in require_list(contract.get("semantic_facts"), "semantic facts")
         for fact in [require_dict(value, "semantic fact")]
+        if fact.get("page_key") in page_key_set
     ]
     interaction_obligations = build_graph_interaction_obligations(interaction_graphs)
 
@@ -930,6 +951,8 @@ def build_coverage_universe(
             contract.get("documented_integration_obligations"),
             "documented integration obligations",
         )
+        if require_dict(value, "documented integration obligation").get("page_key")
+        in page_key_set
     ]
     for instance in component_instances:
         basis_fact_ids = [
@@ -964,12 +987,17 @@ def build_coverage_universe(
                 ),
             }
         )
-    layout_inputs = require_list(bindings.get("layout_inputs"), "component layout inputs")
+    layout_inputs = [
+        require_dict(value, "component layout input")
+        for value in require_list(
+            bindings.get("layout_inputs"), "component layout inputs"
+        )
+        if require_dict(value, "component layout input").get("page_key")
+        in page_key_set
+    ]
     layout_selection_inputs: list[dict[str, Any]] = []
     for value in layout_inputs:
         layout_input = require_dict(value, "component layout input")
-        if layout_input.get("page_key") not in page_key_set:
-            continue
         try:
             layout_selection_inputs.append(
                 prepare_component_layout_selection(layout_input)
@@ -987,7 +1015,7 @@ def build_coverage_universe(
         )
     return {
         "schema": "icp.implementation.coverage-universe.v3",
-        "source_identity": copy.deepcopy(contract["source_identity"]),
+        "source_identity": copy.deepcopy(source_identity),
         "page_keys": page_keys,
         "pages": pages,
         "component_definitions": component_definitions,

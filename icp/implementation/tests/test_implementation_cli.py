@@ -1263,6 +1263,7 @@ class ImplementationCliTest(unittest.TestCase):
         self.assertTrue(
             all(item["content_role"] for item in universe["design_elements"])
         )
+
         expected_interaction_facts = {
             value["fact_id"]
             for page in lock["pages"]
@@ -1321,6 +1322,83 @@ class ImplementationCliTest(unittest.TestCase):
         self.assertEqual(plan_input["design_element_mappings"], [])
         self.assertEqual(plan_input["integration_test_cases"], [])
         self.assertEqual(plan_input["visual_capture_cases"], [])
+
+    def test_begin_projects_only_modify_page_owned_data_from_a_mixed_scope_lock(self) -> None:
+        self.begin_component_stage(
+            bundle_kwargs={
+                "include_designless_context": True,
+                "design_b_scope": "navigate-only",
+            }
+        )
+
+        universe = read_json(self.stage_dir / "coverage-universe.json")
+        source_members = universe["source_identity"]["members"]
+        expected_page_keys = [
+            member["page_key"]
+            for member in source_members
+            if member["change_scope"] == "modify"
+        ]
+        expected_page_key_set = set(expected_page_keys)
+
+        self.assertEqual(universe["page_keys"], expected_page_keys)
+        self.assertEqual(
+            {member["change_scope"] for member in source_members},
+            {"modify", "context", "navigate-only"},
+        )
+        for collection in (
+            "pages",
+            "component_instances",
+            "interaction_graphs",
+            "api_contracts",
+            "blocks",
+            "design_elements",
+            "semantic_facts",
+            "integration_obligations",
+            "component_layout_inputs",
+            "layout_selection_inputs",
+        ):
+            self.assertTrue(
+                all(
+                    item["page_key"] in expected_page_key_set
+                    for item in universe[collection]
+                ),
+                collection,
+            )
+        self.assertTrue(
+            all(
+                item["source_page_key"] in expected_page_key_set
+                for item in universe["presentation_usages"]
+            )
+        )
+
+    def test_begin_rejects_a_sealed_contract_whose_targets_disagree_with_scope(self) -> None:
+        component_dir = self.project / ".icp" / "component-design"
+        lock_path = component_dir / "component-lock.json"
+        lock = read_json(lock_path)
+        lock["implementation_contract"]["source_identity"]["members"][0][
+            "change_scope"
+        ] = "context"
+        write_json(lock_path, lock)
+        lock_sha256 = hashlib.sha256(lock_path.read_bytes()).hexdigest()
+
+        result_path = component_dir / "stage-result.json"
+        result = read_json(result_path)
+        result["component_lock_sha256"] = lock_sha256
+        result["artifacts"]["component_lock"]["sha256"] = lock_sha256
+        write_json(result_path, result)
+
+        state_path = component_dir / "state.json"
+        state = read_json(state_path)
+        state["component_lock_sha256"] = lock_sha256
+        state["stage_result_sha256"] = hashlib.sha256(
+            result_path.read_bytes()
+        ).hexdigest()
+        write_json(state_path, state)
+
+        begun = self.begin()
+
+        self.assertNotEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        self.assertIn("implementation_scope_mismatch", begun.stderr)
 
     def test_begin_derives_reference_viewport_assertions_from_stage1_facts(self) -> None:
         begun = self.begin()

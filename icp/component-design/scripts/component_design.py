@@ -6698,7 +6698,7 @@ def build_implementation_contract(
                 )
     contract_pages = []
     for member in require_list(source_context.get("members"), "source members"):
-        if member.get("page_key") is None:
+        if member.get("page_key") is None or member.get("change_scope") != "modify":
             continue
         page_key = member["page_key"]
         page = pages_by_key[page_key]
