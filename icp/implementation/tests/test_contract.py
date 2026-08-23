@@ -1,10 +1,15 @@
 """Tests for contract.py — API/interaction extraction."""
+import json
+import subprocess
+import tempfile
 import unittest
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 from contract import extract_interactions, build_contract
+
+SCRIPT = str(Path(__file__).resolve().parent.parent / "scripts" / "contract.py")
 
 
 class TestExtractInteractions(unittest.TestCase):
@@ -64,6 +69,42 @@ class TestBuildContract(unittest.TestCase):
         contract = build_contract({"platform": {}, "apis": [], "components": []})
         self.assertEqual(contract["metrics"]["contract_apis"], 0)
         self.assertEqual(contract["metrics"]["contract_components"], 0)
+
+
+class TestGateStage2Incomplete(unittest.TestCase):
+    def _run_cli(self, binding_data):
+        with tempfile.TemporaryDirectory() as td:
+            bp = Path(td) / "binding.json"
+            bp.write_text(json.dumps(binding_data))
+            out = Path(td) / "contract.json"
+            r = subprocess.run(
+                [sys.executable, SCRIPT, "--binding", str(bp), "--output", str(out)],
+                capture_output=True, text=True,
+            )
+            return r
+
+    def test_stub_rejected(self):
+        r = self._run_cli({"page": "首页", "route": "home", "components_bound": True})
+        self.assertNotEqual(r.returncode, 0)
+        out = json.loads(r.stdout)
+        self.assertEqual(out["error"], "stage2_incomplete")
+
+    def test_empty_components_rejected(self):
+        r = self._run_cli({"platform": {}, "apis": [], "components": []})
+        self.assertNotEqual(r.returncode, 0)
+        out = json.loads(r.stdout)
+        self.assertEqual(out["error"], "stage2_incomplete")
+
+    def test_valid_input_accepted(self):
+        r = self._run_cli({
+            "platform": {"name": "android"},
+            "apis": [],
+            "components": [{"component_name": "X", "component_type": "new",
+                            "group_name": "g", "params": []}],
+        })
+        self.assertEqual(r.returncode, 0)
+        out = json.loads(r.stdout)
+        self.assertTrue(out["ok"])
 
 
 if __name__ == "__main__":

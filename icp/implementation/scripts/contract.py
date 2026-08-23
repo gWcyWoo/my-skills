@@ -88,6 +88,12 @@ def main():
     with open(args.binding) as f:
         binding = json.load(f)
 
+    comps = binding.get("components")
+    if not isinstance(comps, list) or len(comps) == 0:
+        print(json.dumps({"ok": False, "error": "stage2_incomplete",
+              "detail": "component-binding.json has no components[] — Stage 2 未完成"}, ensure_ascii=False))
+        sys.exit(1)
+
     contract = build_contract(binding)
 
     Path(args.output).parent.mkdir(parents=True, exist_ok=True)

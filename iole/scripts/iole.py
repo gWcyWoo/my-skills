@@ -219,22 +219,28 @@ def cmd_next(args):
         return emit(False, {"errors": [dict(code="undiscovered_child", **m) for m in missing]}, 1)
 
     order, _, _ = plan(run)
-    failed = [n for n in order if run["progress"][n]["status"] == "failed"]
-    if failed:
-        return emit(False, {"errors": [{"code": "blocked_by_failure", "where": n,
-                                        "detail": run["progress"][n].get("error")}
-                                       for n in failed]}, 1)
 
+    children = child_map(run["nodes"])
     target = None
     for nid in order:
         st = run["progress"][nid]["status"]
-        if st == "doing":       # 上次中断在这里,续跑同一个
-            target = nid
-            break
-        if st == "pending":
+        if st != "pending":
+            continue
+        if all(run["progress"][k]["status"] == "done" for k in children[nid]):
             target = nid
             break
     if target is None:
+        doing = [n for n in order if run["progress"][n]["status"] == "doing"]
+        failed = [n for n in order if run["progress"][n]["status"] == "failed"]
+        pending = sum(1 for n in order if run["progress"][n]["status"] == "pending")
+        remaining = len(doing) + len(failed) + pending
+        if doing or failed:
+            result = {"done": False, "remaining": remaining}
+            if doing:
+                result["waiting"] = doing
+            if failed:
+                result["failed"] = failed
+            return emit(True, result)
         return emit(True, {"done": True, "remaining": 0})
 
     run["progress"][target]["status"] = "doing"
@@ -244,7 +250,7 @@ def cmd_next(args):
     deps = [{"node_id": k, "title": run["nodes"][k].get("title"),
              "route": run["nodes"][k].get("route"),
              "pr": run["progress"][k].get("pr")}
-            for k in child_map(run["nodes"])[target]]
+            for k in children[target]]
     remaining = sum(1 for n in order if run["progress"][n]["status"] != "done")
     return emit(True, {"node_id": target, "node": node, "depends_on": deps,
                        "remaining": remaining})

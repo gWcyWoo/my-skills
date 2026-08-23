@@ -131,12 +131,14 @@ class TestOneAtATime(Ledger):
         self.mark("a", "done")
         self.assertTrue(self.next()["done"])
 
-    def test_next_marks_doing_and_survives_interruption(self):
-        """进程中途死掉:节点停在 doing,再 next 拿回同一个,不跳过也不重做别的。"""
+    def test_next_skips_doing_and_returns_waiting(self):
+        """doing 节点由对应 agent 负责,next 不重复派发;无可派发节点时返回 waiting。"""
         self.chain()
         self.assertEqual(self.next()["node_id"], "c")
         self.assertEqual(self.status()["counts"]["doing"], 1)
-        self.assertEqual(self.next()["node_id"], "c")   # 续跑,不是 b
+        out = self.next()
+        self.assertFalse(out["done"])
+        self.assertIn("c", out["waiting"])
 
     def test_next_carries_row_data_and_implemented_dependencies(self):
         self.chain()
@@ -158,15 +160,22 @@ class TestOneAtATime(Ledger):
         out = self.next(expect=1)
         self.assertEqual(out["errors"][0]["code"], "undiscovered_child")
 
-    def test_failure_blocks_the_run_until_retried(self):
-        self.chain()
-        self.next()
-        self.mark("c", "failed", error="analyze 失败")
-        out = self.next(expect=1)
-        self.assertEqual(out["errors"][0]["code"], "blocked_by_failure")
-        self.assertEqual(out["errors"][0]["detail"], "analyze 失败")
-        self.mark("c", "pending")
-        self.assertEqual(self.next()["node_id"], "c")
+    def test_failure_blocks_dependents_not_siblings(self):
+        """failed 节点只阻塞依赖它的祖先,无关兄弟仍可派发。"""
+        self.record({"a": node("A", ["b", "c"]),
+                      "b": node("B"), "c": node("C")}, root="a")
+        first = self.next()["node_id"]
+        self.mark(first, "failed", error="analyze 失败")
+        second = self.next()
+        sibling = "c" if first == "b" else "b"
+        self.assertEqual(second["node_id"], sibling)
+        self.assertNotIn("failed", second)
+        self.mark(sibling, "done")
+        out = self.next()
+        self.assertFalse(out["done"])
+        self.assertIn(first, out["failed"])
+        self.mark(first, "pending")
+        self.assertEqual(self.next()["node_id"], first)
 
     def test_mark_failed_requires_a_reason(self):
         self.chain()

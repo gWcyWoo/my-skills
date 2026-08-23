@@ -93,8 +93,11 @@ mark   --run <f> --node <id> --status done|failed|pending [--pr] [--error]
 
 - **重录不回退进度**:`record` 覆盖节点数据,但已 `done` 的节点保持 done 及其 pr。
 - **建树没完不发顺序**:有子节点被引用却未 record → `next` 报 `undiscovered_child` 停机,否则会漏页。
-- **中断即续**:`next` 把节点标 `doing`;进程死掉后再 `next` 拿回**同一个**,不跳过也不重做别的。
-- **失败即停**:`mark --status failed --error <因>` 后,`next` 报 `blocked_by_failure`;
+- **跳过 doing**:`next` 只派发 `pending` 且所有 children 为 `done` 的节点;`doing` 节点由对应 agent 负责,`next` 不重复派发。
+  所有可派发节点用尽但仍有 `doing` 节点 → 返回 `{done: false, waiting: [doing 节点列表]}`。
+  崩溃恢复:`mark --status pending` 显式重置卡住的 `doing` 节点后重新 `next`。
+- **失败隔离**:`mark --status failed --error <因>` 后,该节点的祖先被阻塞(children 未全 done),
+  无关分支不受影响;`next` 返回 `{done: false, failed: [节点列表]}`。
   修好后 `mark --status pending` 重试。标 failed 必须给 `--error`。
 - `next` 随节点一并交出 `depends_on`——已实现子节点的 `route` 与 `pr`,供 icp 绑定跳转。
 
@@ -108,6 +111,18 @@ mark   --run <f> --node <id> --status done|failed|pending [--pr] [--error]
 而每个节点的 route 与实现顺序无关,永远可用。
 `unknown_root` 停机;`unreachable`(从 root 到不了的节点)报出来,不静默丢弃。
 
+### 并行编排
+
+DFS 后序只约束有依赖的节点(子节点先于父节点),同层无依赖兄弟节点可并行。
+
+iole 用 Agent tool 并发派多个 agent,每个 agent 独立跑一个页面的完整 icp 三阶段流程。
+icp 每次只处理一个页面,不接受批量输入——并行粒度在 iole 层,不在 icp 层。
+
+并行条件:节点的所有 `children` 均已 `done`(依赖已满足)。
+`next` 一次只返回一个节点;并行时多次调用 `next` 获取多个就绪节点,各自派 agent。
+任一 agent 失败 → `mark --status failed`,该节点的祖先被阻塞(children 未全 done),无关分支不受影响;
+修好后 `mark --status pending` 重试。
+
 ## 一次 loop
 
 1. `source --link` → 存储 skill
@@ -120,14 +135,19 @@ mark   --run <f> --node <id> --status done|failed|pending [--pr] [--error]
    d. 对每个新取回的行再解析交互描述,重复 b-c 直到 `undiscovered` 为空
    **边建边落盘**,中途断了不用从头重建。
 4. `status --format table` 给人看计划
-5. 循环 `next` → 调 icp 实现该页 →
-   `claim --status review --row-ids <node_row_id> --pr <pr地址>` 改 canonical，
-   再按该 skill 的写回步骤把改动同步回源表（icps 见其 SKILL.md「写回 Google Sheets」）→
-   `mark --status done --pr <pr地址>`,
-   直到 `next` 返回 `done: true`
+5. 循环 `next`:
+   - 返回 `node_id` → 调 icp 实现该页 →
+     `claim --status review --row-ids <node_row_id> --pr <pr地址>` 改 canonical，
+     再按该 skill 的写回步骤把改动同步回源表（icps 见其 SKILL.md「写回 Google Sheets」）→
+     `mark --status done --pr <pr地址>`
+   - 返回 `done: true` → 全部完成,进入交付
+   - 返回 `done: false, waiting: [...]` → 有节点在其他 agent 处理中,等待完成后再 `next`
+   - 返回 `done: false, failed: [...]` → 有失败节点阻塞部分分支;
+     `mark --status pending` 重置后再 `next`,无关分支继续
 6. 按 `mr` 档位交付:0 不提交 / 1 提交当前分支 / 2 提 MR 合入 `dev`
 7. 任一页失败 `mark --status failed --error <因>`,
-   并经 skill `claim --status ready --row-ids <node_row_id> --error <因>` 释放租约后停
+   并经 skill `claim --status ready --row-ids <node_row_id> --error <因>` 释放租约;
+   无关分支继续,全部分支完成或阻塞后进入交付
 
 按 `interval` 重复。Claude Code 用 `/loop <interval>` 驱动。
 
