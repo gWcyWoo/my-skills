@@ -149,7 +149,7 @@ def cmd_record(args):
         if not root:
             return emit(False, {"errors": [{"code": "missing_root",
                                             "detail": "首次 record 须给 --root"}]}, 1)
-        run = {"schema": SCHEMA, "link": args.link, "role": args.role, "mr": args.mr,
+        run = {"schema": SCHEMA, "link": args.link, "role": args.role, "mr": args.mr if args.mr is not None else 0,
                "root": root, "nodes": {}, "progress": {}}
     else:
         conflicts = []
@@ -316,7 +316,7 @@ def main(argv=None):
     rec.add_argument("--root")
     rec.add_argument("--link")
     rec.add_argument("--role")
-    rec.add_argument("--mr", type=int, default=0, choices=(0, 1, 2))
+    rec.add_argument("--mr", type=int, default=None, choices=(0, 1, 2))
     rec.set_defaults(fn=cmd_record)
 
     st = sub.add_parser("status", help="计划 + 进度")
