@@ -34,6 +34,18 @@ def is_system_component(node):
     return False
 
 
+def _member_is_system(member):
+    """判断 bound 输出的 member 是否是系统组件（按 is_system 标记或 name/component_name）。"""
+    if member.get("is_system"):
+        return True
+    name = member.get("name", "").strip()
+    comp = member.get("component_name", "").strip()
+    for pat in SYSTEM_COMPONENT_PATTERNS:
+        if pat.lower() in name.lower() or pat.lower() in comp.lower():
+            return True
+    return False
+
+
 # ---------------------------------------------------------------- 树操作
 
 def build_index(artboard):
@@ -215,13 +227,13 @@ def cmd_prepare(args):
     artboard = design.get("artboard", {})
     meta = design.get("meta", {})
 
-    def summarize_tree(node, depth=0):
+    def summarize_tree(node, depth=0, parent_system=False):
         s = extract_node_summary(node)
         s["depth"] = depth
-        s["is_system"] = is_system_component(node)
+        s["is_system"] = parent_system or is_system_component(node)
         children = []
         for child in node.get("layers", []):
-            children.append(summarize_tree(child, depth + 1))
+            children.append(summarize_tree(child, depth + 1, s["is_system"]))
         if children:
             s["layers"] = children
         return s
@@ -230,15 +242,15 @@ def cmd_prepare(args):
 
     # 扁平列表（无层级，方便模型快速扫描）
     flat = []
-    stack = [(artboard, 0)]
+    stack = [(artboard, 0, False)]
     while stack:
-        node, depth = stack.pop()
+        node, depth, parent_sys = stack.pop()
         entry = extract_node_summary(node)
         entry["depth"] = depth
-        entry["is_system"] = is_system_component(node)
+        entry["is_system"] = parent_sys or is_system_component(node)
         flat.append(entry)
         for child in reversed(node.get("layers", [])):
-            stack.append((child, depth + 1))
+            stack.append((child, depth + 1, entry["is_system"]))
 
     out = {
         "meta": {
@@ -291,6 +303,17 @@ def cmd_bind(args):
     artboard = design.get("artboard", {})
     idx, parent_map = build_index(artboard)
     all_ids = set(idx.keys())
+
+    # 预计算 is_system 集合（含系统节点的所有子孙）
+    system_ids = set()
+    def _mark_system(node, parent_sys=False):
+        nid = node.get("id")
+        is_sys = parent_sys or is_system_component(node)
+        if is_sys and nid:
+            system_ids.add(nid)
+        for child in node.get("layers", []):
+            _mark_system(child, is_sys)
+    _mark_system(artboard)
 
     # 收集所有组的显式 node_ids（用于子树展开时的边界检测）
     all_explicit = {}
@@ -345,7 +368,9 @@ def cmd_bind(args):
         bound_ids.update(group_ids)
 
         for nid in sorted(group_ids):
-            members.append(extract_design_data(idx[nid]))
+            m = extract_design_data(idx[nid])
+            m["is_system"] = nid in system_ids
+            members.append(m)
 
         components.append({
             "name": gname,
@@ -401,25 +426,23 @@ def cmd_bind(args):
 # ---------------------------------------------------------------- cmd: clean
 
 def cmd_clean(args):
-    """从绑定结果中删除系统组件组，输出最终组件规格。
+    """从绑定结果中删除系统组件组。
 
-    只按组名判断——模型分组时应将系统组件(Status Bar、Home Indicator)
-    单独归为独立组，prepare 已为每个节点标记了 is_system 供模型参考。
+    按成员节点的 name/component_name 判断（与 is_system_component 同源）。
+    一个 group 的全部成员都是系统组件时删除该 group。
     """
     bound = json.loads(Path(args.bound_json).read_text(encoding="utf-8"))
     removed = []
     kept = []
 
     for comp in bound.get("components", []):
-        cname = comp.get("name", "")
-        is_system = False
-        for pat in SYSTEM_COMPONENT_PATTERNS:
-            if pat.lower() in cname.lower():
-                is_system = True
-
-        if is_system:
+        members = comp.get("members", [])
+        non_sys = [m for m in members if not _member_is_system(m)]
+        if not non_sys:
             removed.append({"name": comp["name"], "member_count": comp["member_count"]})
         else:
+            comp["members"] = non_sys
+            comp["member_count"] = len(non_sys)
             kept.append(comp)
 
     result = {

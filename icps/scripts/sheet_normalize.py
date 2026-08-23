@@ -61,6 +61,14 @@ def extract_values(doc):
     return None
 
 
+def api_error(doc):
+    """Spot the Sheets/MCP error envelope, bare or wrapped in `result`."""
+    for d in (doc, doc.get("result") if isinstance(doc, dict) else None):
+        if isinstance(d, dict) and isinstance(d.get("error"), dict):
+            return d["error"]
+    return None
+
+
 def norm(v):
     if v is None:
         return ""
@@ -141,12 +149,31 @@ def normalize(values):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="sheet_normalize.py")
-    ap.add_argument("--values", required=True,
-                    help="JSON file holding the raw MCP get_sheet_data result")
+    grp = ap.add_mutually_exclusive_group(required=True)
+    grp.add_argument("--values", help="JSON file holding the raw MCP get_sheet_data result")
+    grp.add_argument("--stdin", action="store_true",
+                     help="read raw MCP JSON from stdin instead of a file")
+    ap.add_argument("--save-raw", metavar="PATH",
+                    help="persist raw input to this path (useful with --stdin)")
     ap.add_argument("--out", required=True, help="canonical backend JSON to write")
     args = ap.parse_args(argv)
 
-    doc = json.loads(Path(args.values).read_text(encoding="utf-8"))
+    if args.stdin:
+        raw_text = sys.stdin.read()
+        doc = json.loads(raw_text)
+        if args.save_raw:
+            Path(args.save_raw).parent.mkdir(parents=True, exist_ok=True)
+            Path(args.save_raw).write_text(raw_text, encoding="utf-8")
+    else:
+        doc = json.loads(Path(args.values).read_text(encoding="utf-8"))
+
+    # 取数失败要当场直呼原因:doc_id 打错(404) 与「文件里没有 values」不是一回事。
+    err = api_error(doc)
+    if err is not None:
+        code = "doc_not_found" if str(err.get("code")) == "404" else "source_error"
+        return emit(False, {"errors": [{"code": code, "where": args.values,
+                                        "detail": err}]}, 1)
+
     values = extract_values(doc)
     if values is None:
         return emit(False, {"errors": [{"code": "no_values", "where": args.values}]}, 1)

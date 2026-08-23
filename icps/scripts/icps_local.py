@@ -166,7 +166,7 @@ def cmd_claim(args):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(prog="icpl.py")
+    ap = argparse.ArgumentParser(prog="icps_local.py")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     ls = sub.add_parser("list-rows")

@@ -44,6 +44,17 @@ def run(values, expect=0):
     return summary, backend
 
 
+def run_raw(doc, expect=0):
+    """Feed an arbitrary raw document (e.g. an API error envelope) to the script."""
+    tmp = Path(tempfile.mkdtemp())
+    src, out = tmp / "raw.json", tmp / "sheet.json"
+    src.write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
+    p = subprocess.run([sys.executable, str(SCRIPT), "--values", str(src), "--out", str(out)],
+                       capture_output=True, text=True)
+    assert p.returncode == expect, f"rc={p.returncode}\n{p.stdout}\n{p.stderr}"
+    return json.loads(p.stdout.strip().splitlines()[-1])
+
+
 class TestSheetNormalize(unittest.TestCase):
 
     def test_non_contiguous_role_columns_map_by_name(self):
@@ -96,6 +107,20 @@ class TestSheetNormalize(unittest.TestCase):
         # Titles are the key interactions resolve against; duplicates are ambiguous.
         summary, _ = run([HEADER, row(title="登录"), row(title="登录")], expect=1)
         self.assertEqual(summary["errors"][0]["code"], "duplicate_title")
+
+    def test_api_error_envelope_404_reports_doc_not_found(self):
+        """MCP/API 返回 404 信封时，必须直呼 doc_not_found，而不是含糊的 no_values。"""
+        summary = run_raw({"error": {"code": 404,
+                                     "message": "Requested entity was not found.",
+                                     "status": "NOT_FOUND"}}, expect=1)
+        self.assertEqual(summary["errors"][0]["code"], "doc_not_found")
+
+    def test_api_error_envelope_other_code_reports_source_error(self):
+        """非 404 的错误信封归 source_error，并带上原始 code 供定位。"""
+        summary = run_raw({"error": {"code": 403, "message": "denied",
+                                     "status": "PERMISSION_DENIED"}}, expect=1)
+        self.assertEqual(summary["errors"][0]["code"], "source_error")
+        self.assertEqual(summary["errors"][0]["detail"]["code"], 403)
 
 
 if __name__ == "__main__":

@@ -151,6 +151,19 @@ def cmd_record(args):
                                             "detail": "首次 record 须给 --root"}]}, 1)
         run = {"schema": SCHEMA, "link": args.link, "role": args.role, "mr": args.mr,
                "root": root, "nodes": {}, "progress": {}}
+    else:
+        conflicts = []
+        if args.root and args.root != run["root"]:
+            conflicts.append(f"root: run={run['root']} vs arg={args.root}")
+        if args.link and args.link != run.get("link"):
+            conflicts.append(f"link: run={run.get('link')} vs arg={args.link}")
+        if args.role and args.role != run.get("role"):
+            conflicts.append(f"role: run={run.get('role')} vs arg={args.role}")
+        if args.mr is not None and str(args.mr) != str(run.get("mr")):
+            conflicts.append(f"mr: run={run.get('mr')} vs arg={args.mr}")
+        if conflicts:
+            return emit(False, {"errors": [{"code": "param_conflict",
+                        "detail": "; ".join(conflicts)}]}, 1)
 
     added, updated = [], []
     for nid, node in incoming.items():

@@ -5,7 +5,10 @@
 ## 流程
 
 ```
-输入: ui_description(可空) + 设计稿 JSON + 设计图
+输入: ui_description(可空) + 蓝湖设计稿 URL
+  ↓
+Step 0  lanhu_fetch: URL → design.json + slices.json + cover.png + assets/
+         (走静态版本数据，不经 lanhu MCP / DDS；详见 ../INPUT.md「取数」)
   ↓
 Step 1  prepare: 读 JSON 生成节点摘要(树+扁平列表,标记系统组件)
   ↓
@@ -26,6 +29,12 @@ Step 6  crop: 按 frame 坐标从整页截图裁切图标 → 写回 asset_path
 核心不变量：JSON 里每个设计元素都必须归属到某个语义 group，一个不能漏。
 
 ## 脚本
+
+`scripts/lanhu_fetch.py` — 取数（Step 0）:
+
+| 命令 | 输入 | 输出 |
+|---|---|---|
+| （无子命令） | `--url` `--out-dir` `--cookie`(可选) `--skip-cover`(可选) | design.json + slices.json + cover.png + assets/ |
 
 `scripts/bind.py` — 6 个子命令:
 
@@ -72,6 +81,8 @@ bind 错误类型: `unknown_node`(分组引用了 JSON 中不存在的 id)、`du
 3. **节点摘要**（数据）：prepare 输出的 id/name/type/size/text/componentName/children，用于：
    - 确定 node_ids：每个 group 引用哪些顶层节点
    - `is_system: true` 的节点**也要分组**（保证全覆盖完整性，clean 步骤再删）
+   - **root artboard（depth 0，整页那个节点）自身也要占一个 group**（如「页面根」）；
+     它的子节点被别的组显式声明不冲突，漏了它必然 `unbound` 一轮
    - 同一个 `componentName` 出现多次 = 复用组件，归同一 group
 
 三者冲突时：设计图 > ui_description > 节点名称。设计图上明显是一个整体的，不因节点名称不同而拆开。

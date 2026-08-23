@@ -80,12 +80,14 @@ link → source(工厂) → 该 skill 读行 → 得到本页数据
 
 ```
 record --run <f> --nodes <f> [--root --link --role --mr]   # 节点+行数据入账
+       # --nodes 文件形状同上：{"root":"<node_id>","nodes":{...}}，
+       # 外层必须有 nodes 键，裸 {node_id:{…}} 报 empty_nodes 停机
 status --run <f> [--format table]                          # 计划 + 进度 + 未录入子节点
 next   --run <f>                                           # 交出下一个待做节点,标记 doing
 mark   --run <f> --node <id> --status done|failed|pending [--pr] [--error]
 ```
 
-台账存放:`~/.claude/runs/iole/<doc_id>.json`。`doc_id` 来自 `source` 返回值。
+台账存放:`{project}/.claude/iole/<doc_id>/run.json`。`doc_id` 来自 `source` 返回值。
 
 结构:`{link, role, mr, root, nodes{...含行数据}, progress{node_id:{status,pr,error}}}`。
 
@@ -119,7 +121,8 @@ mark   --run <f> --node <id> --status done|failed|pending [--pr] [--error]
    **边建边落盘**,中途断了不用从头重建。
 4. `status --format table` 给人看计划
 5. 循环 `next` → 调 icp 实现该页 →
-   `claim --status review --row-ids <node_row_id> --pr <pr地址>` 回写任务表 →
+   `claim --status review --row-ids <node_row_id> --pr <pr地址>` 改 canonical，
+   再按该 skill 的写回步骤把改动同步回源表（icps 见其 SKILL.md「写回 Google Sheets」）→
    `mark --status done --pr <pr地址>`,
    直到 `next` 返回 `done: true`
 6. 按 `mr` 档位交付:0 不提交 / 1 提交当前分支 / 2 提 MR 合入 `dev`
@@ -127,6 +130,83 @@ mark   --run <f> --node <id> --status done|failed|pending [--pr] [--error]
    并经 skill `claim --status ready --row-ids <node_row_id> --error <因>` 释放租约后停
 
 按 `interval` 重复。Claude Code 用 `/loop <interval>` 驱动。
+
+## 过程文件
+
+工作目录: `{project}/.claude/iole/{doc_id}/`
+
+台账(`run.json`)和过程文件同目录，一次 loop 的所有审计数据在一处。
+
+### 文件
+
+| 文件 | 写入时机 | 说明 |
+|---|---|---|
+| run.json | 建树+执行过程 | 运行台账（节点进度，已有） |
+| checklist.md | 每轮 loop 启动时创建，各阶段追加更新 | 复盘记录（不阻塞流程） |
+| tree-snapshot.json | 建树完成时 | 交互树快照（含 cycle_edges） |
+| icps-ops.jsonl | 每次调用 icps 后由 iole 追加 | icps 操作审计 |
+
+### checklist.md
+
+```markdown
+# IOLE Checklist — {doc_id}
+
+## 建树
+- [ ] source_type: 
+- [ ] storage_skill: 
+- [ ] nodes_discovered: 
+- [ ] tree_depth: 
+- [ ] cycle_edges: 
+- [ ] undiscovered_resolved: 
+
+## 执行
+- [ ] execution_order: 
+- [ ] nodes_total: 
+- [ ] nodes_completed: 
+- [ ] nodes_failed: 
+
+## 交付
+- [ ] mr_level: 
+- [ ] delivery_result: 
+```
+
+checklist 是复盘记录，不做 check.py 阻塞验证。建树完填「建树」段，每个节点完成后更新「执行」段计数，loop 结束填「交付」段。
+
+### icps-ops.jsonl 记录格式
+
+iole 每次调用 icps（归一化或 verb）后追加（icps 自身保持无状态，不写日志）：
+
+```json
+{"verb": "normalize", "args": {"doc_id": "1KOL…", "gid": "0"}, "result": {"columns_matched": 8, "columns_total": 10, "columns_missing": [], "rows": 15}, "ok": true}
+{"verb": "inspect", "args": {"status": "ready", "claim": "doing"}, "result": {"row_id": "r1", "title": "登录"}, "ok": true}
+{"verb": "claim", "args": {"row_ids": ["r1"], "status": "review", "pr": "MR-12"}, "result": {}, "ok": true}
+```
+
+### checklist 项说明
+
+| 项 | 填写内容 |
+|---|---|
+| source_type | 链接类型，如 `google-sheet` |
+| storage_skill | 存储 skill 名，如 `icps` |
+| nodes_discovered | 建树发现的节点总数 |
+| tree_depth | 树最大深度 |
+| cycle_edges | 检测到的环边数量和列表 |
+| undiscovered_resolved | 建树中 undiscovered 子节点是否全部补录 |
+| execution_order | 叶优先执行顺序确认 |
+| nodes_total | 需执行的节点总数（去环后） |
+| nodes_completed | 完成节点数 |
+| nodes_failed | 失败节点数和原因摘要 |
+| mr_level | mr 档位 (0/1/2) |
+| delivery_result | 交付结果（本地/提交/MR 地址） |
+
+### 复盘数据点
+
+| 指标 | 来源 | 优化信号 |
+|---|---|---|
+| 建树补录轮数 | undiscovered_resolved | 高 → 交互描述识别能力弱 |
+| 失败率 | nodes_failed / nodes_total | 高 → icp 流程或输入质量问题 |
+| 环边占比 | cycle_edges / nodes_total | 高 → 导航结构复杂，需关注回边绑定 |
+| 每节点 icp 收敛轮数 | icp checklist 聚合 | 跨节点对比可定位系统性问题 |
 
 ## 角色隔离
 
