@@ -521,7 +521,10 @@ class ComponentLayoutDerivationTest(unittest.TestCase):
                 item["bounds"]["top"] += 44
         responsive = verify_runtime_layout(
             result,
-            responsive_snapshot(responsive_components),
+            responsive_snapshot(
+                responsive_components,
+                viewport_bounds=rect(0, 0, 390, 900),
+            ),
             "responsive",
         )
         self.assertEqual(responsive, {"status": "pass", "failures": []})
@@ -529,7 +532,10 @@ class ComponentLayoutDerivationTest(unittest.TestCase):
         responsive_components[0]["slot"] = "wrong"
         failed = verify_runtime_layout(
             result,
-            responsive_snapshot(responsive_components),
+            responsive_snapshot(
+                responsive_components,
+                viewport_bounds=rect(0, 0, 390, 900),
+            ),
             "responsive",
         )
         self.assertEqual(failed["status"], "fail")
@@ -1083,22 +1089,76 @@ class ComponentLayoutDerivationTest(unittest.TestCase):
             for item in result["responsive_assertions"]
             if item["kind"] == "scroll_reachability"
         )
+        forged_offsets = responsive_snapshot(
+            components,
+            scroll_metrics=[
+                {
+                    "decision_id": reachability["decision_id"],
+                    "container_instance_id": reachability["container_instance_id"],
+                    "axis": "horizontal",
+                    "viewport_extent": 390,
+                    "content_extent": 780,
+                    "observed_offsets": [0, 390],
+                }
+            ],
+            driver_observations={
+                "observed_instance_ids": [
+                    item["instance_id"] for item in components
+                ],
+                "scroll_actions": [
+                    {
+                        "axis": "horizontal",
+                        "direction": "forward",
+                        "start_px": {"x": 300, "y": 320},
+                        "end_px": {"x": 100, "y": 320},
+                    }
+                ],
+            },
+        )
+        rejected = verify_runtime_layout(result, forged_offsets, "responsive")
+        self.assertIn(
+            "runtime_scroll_unreachable",
+            {item["code"] for item in rejected["failures"]},
+        )
+
         checked = verify_runtime_layout(
             result,
             responsive_snapshot(
                 components,
-                scroll_metrics=[
-                    {
-                        "decision_id": reachability["decision_id"],
-                        "container_instance_id": reachability["container_instance_id"],
-                        "axis": "horizontal",
-                        "viewport_extent": 390,
-                        "content_extent": 780,
-                        "observed_offsets": [0, 390],
-                    }
-                ],
+                scroll_metrics=forged_offsets["scroll_metrics"],
+                driver_observations={
+                    "observed_instance_ids": [
+                        item["instance_id"] for item in components
+                    ],
+                    "scroll_actions": [
+                        {
+                            "axis": "horizontal",
+                            "direction": "forward",
+                            "start_px": {"x": 300, "y": 320},
+                            "end_px": {"x": 100, "y": 320},
+                        }
+                    ],
+                    "scroll_results": [
+                        {
+                            "decision_id": reachability["decision_id"],
+                            "container_instance_id": reachability[
+                                "container_instance_id"
+                            ],
+                            "axis": "horizontal",
+                            "end_reached": True,
+                            "restored_to_start": True,
+                            "observed_instance_ids": [
+                                item["instance_id"] for item in components
+                            ],
+                        }
+                    ],
+                },
             ),
             "responsive",
+        )
+        self.assertNotIn(
+            "runtime_scroll_unreachable",
+            {item["code"] for item in checked["failures"]},
         )
         self.assertNotIn("runtime_horizontal_overflow", {item["code"] for item in checked["failures"]})
 
@@ -1238,6 +1298,24 @@ class ComponentLayoutDerivationTest(unittest.TestCase):
             "responsive",
         )
         self.assertIn("runtime_horizontal_overflow", {item["code"] for item in checked["failures"]})
+
+    def test_responsive_verifier_detects_unreachable_vertical_clipping(self):
+        result = derive_component_layout(bound_page(), selector)
+        components = runtime_components(result)
+        footer = next(item for item in components if item["instance_id"] == "footer")
+        footer["bounds"]["top"] = 620
+        footer["bounds"]["height"] = 80
+
+        checked = verify_runtime_layout(
+            result,
+            responsive_snapshot(components),
+            "responsive",
+        )
+
+        self.assertIn(
+            "runtime_vertical_clipping",
+            {item["code"] for item in checked["failures"]},
+        )
 
     def test_reference_overflow_is_an_allowance_not_a_whole_component_exemption(self):
         result = derive_component_layout(bound_page(), selector)

@@ -11,23 +11,29 @@ import json
 import math
 import os
 import re
+import shutil
 import struct
 import subprocess
 import sys
 import tempfile
+import time
 import zlib
+import xml.etree.ElementTree as ET
 from contextlib import contextmanager
+from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
 
 STAGE_ROOT = Path(__file__).resolve().parents[1]
 ICP_ROOT = STAGE_ROOT.parent
+DEFAULT_LOCK_TIMEOUT_SECONDS = 30.0
 sys.path.insert(0, str(ICP_ROOT / "scripts"))
 from stage_checklist import (  # noqa: E402
     ChecklistError,
     complete as complete_checklist_node,
     create as create_checklist,
+    load as load_checklist,
     node as checklist_node,
     require_complete as require_checklist_complete,
     require_ready as require_checklist_node_ready,
@@ -46,6 +52,7 @@ PLATFORM_RULES = {
     / "android-kotlin.md"
 }
 IMPLEMENTATION_PROMPT = STAGE_ROOT / "references" / "codegen-prompt.md"
+ANDROID_VISUAL_DRIVER = STAGE_ROOT / "scripts" / "android_visual_driver.py"
 RENDERING_CONTENT_ROLES = {
     "static_visual",
     "static_copy",
@@ -69,6 +76,34 @@ class ContractError(Exception):
 
 def json_bytes(value: object) -> bytes:
     return (json.dumps(value, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+
+
+def logical_scale_density(value: object) -> int:
+    try:
+        scale = Fraction(value)
+    except (TypeError, ValueError, ZeroDivisionError) as exc:
+        raise ContractError(
+            "visual_capture_failed", "reference logical scale is invalid"
+        ) from exc
+    if scale <= 0:
+        raise ContractError(
+            "visual_capture_failed", "reference logical scale is invalid"
+        )
+    return round(160 * scale)
+
+
+def android_test_environment(device_serial: str | None) -> dict[str, str]:
+    environment = os.environ.copy()
+    if device_serial is None:
+        return environment
+    if (
+        not isinstance(device_serial, str)
+        or not device_serial
+        or any(ord(character) < 32 or ord(character) == 127 for character in device_serial)
+    ):
+        raise ContractError("invalid_device_serial", "Android device serial is invalid")
+    environment["ANDROID_SERIAL"] = device_serial
+    return environment
 
 
 def canonical_bytes(value: object) -> bytes:
@@ -132,12 +167,49 @@ def implementation_dir(project_root: Path) -> Path:
     return project_root / ".icp" / "implementation"
 
 
+@contextmanager
+def implementation_stage_lock(project_root: Path, timeout_seconds: float):
+    if timeout_seconds < 0:
+        raise ContractError(
+            "invalid_lock_timeout", "lock timeout must be zero or greater"
+        )
+    deadline = time.monotonic() + timeout_seconds
+    lock_fd = os.open(project_root, os.O_RDONLY)
+    try:
+        while True:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError as exc:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise ContractError(
+                        "stage_busy",
+                        "another implementation command holds the stage write lock",
+                    ) from exc
+                time.sleep(min(0.05, remaining))
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+    finally:
+        os.close(lock_fd)
+
+
 def implementation_checklist_specs(universe: dict[str, Any]) -> list[dict[str, Any]]:
     specs = [
         checklist_node("stage.begin", "Freeze the complete Stage 3 implementation universe."),
         checklist_node("plan.record", "Record the complete implementation plan.", ["stage.begin"]),
+        checklist_node(
+            "build.clean",
+            "Remove prior Gradle APK outputs before the first implementation test.",
+            ["plan.record"],
+        ),
     ]
     green_nodes: list[str] = []
+    green_nodes_by_page: dict[str, list[str]] = {
+        page_key: [] for page_key in universe["page_keys"]
+    }
     for obligation in universe["integration_obligations"]:
         obligation_id = obligation["obligation_id"]
         red_node = f"case:{obligation_id}.red"
@@ -147,7 +219,7 @@ def implementation_checklist_specs(universe: dict[str, Any]) -> list[dict[str, A
                 checklist_node(
                     red_node,
                     f"Observe RED for integration obligation {obligation_id}.",
-                    ["plan.record"],
+                    ["build.clean"],
                 ),
                 checklist_node(
                     green_node,
@@ -157,11 +229,23 @@ def implementation_checklist_specs(universe: dict[str, Any]) -> list[dict[str, A
             ]
         )
         green_nodes.append(green_node)
+        green_nodes_by_page[obligation["page_key"]].append(green_node)
+    page_coverage_nodes: list[str] = []
+    for page_key in universe["page_keys"]:
+        node_id = f"implementation.code-coverage:{page_key}"
+        specs.append(
+            checklist_node(
+                node_id,
+                f"Verify production code, anchors, and assets for page {page_key}.",
+                green_nodes_by_page[page_key] or ["plan.record"],
+            )
+        )
+        page_coverage_nodes.append(node_id)
     specs.append(
         checklist_node(
             "implementation.code-coverage",
             "Verify complete production code, anchors, and assets.",
-            green_nodes or ["plan.record"],
+            page_coverage_nodes or green_nodes or ["plan.record"],
         )
     )
     final_runtime_nodes: list[str] = []
@@ -172,7 +256,7 @@ def implementation_checklist_specs(universe: dict[str, Any]) -> list[dict[str, A
                 checklist_node(
                     node_id,
                     f"Verify {viewport} adaptive behavior for page {page_key}.",
-                    ["implementation.code-coverage"],
+                    [f"implementation.code-coverage:{page_key}"],
                 )
             )
             final_runtime_nodes.append(node_id)
@@ -185,12 +269,12 @@ def implementation_checklist_specs(universe: dict[str, Any]) -> list[dict[str, A
                 checklist_node(
                     capture_node,
                     f"Capture the production path for design {design_name}.",
-                    ["plan.record"],
+                    [f"implementation.code-coverage:{reference['page_key']}"],
                 ),
                 checklist_node(
                     verify_node,
                     f"Verify the production capture and runtime probes for design {design_name}.",
-                    ["implementation.code-coverage", capture_node],
+                    [f"implementation.code-coverage:{reference['page_key']}", capture_node],
                 ),
             ]
         )
@@ -269,6 +353,31 @@ def implementation_checklist_call(
             raise ContractError("invalid_checklist_operation", operation)
     except ChecklistError as exc:
         raise ContractError(exc.code, exc.message) from exc
+
+
+def require_recorded_checklist_evidence(
+    stage_dir: Path,
+    state: dict[str, Any],
+    universe: dict[str, Any],
+    *,
+    node_id: str,
+    evidence_sha256: str,
+) -> None:
+    try:
+        checklist = load_checklist(
+            stage_dir / "checklist.json",
+            stage="implementation",
+            input_sha256=implementation_checklist_input(state, universe),
+            nodes=implementation_checklist_specs(universe),
+        )
+    except ChecklistError as exc:
+        raise ContractError(exc.code, exc.message) from exc
+    node = next(item for item in checklist["nodes"] if item["node_id"] == node_id)
+    if node["status"] != "completed" or node["evidence_sha256"] != evidence_sha256:
+        raise ContractError(
+            "runtime_evidence_not_captured",
+            f"runtime evidence was not produced by its capture command: {node_id}",
+        )
 
 
 @contextmanager
@@ -377,6 +486,12 @@ def load_sealed_component_design(
 
 def obligation_id(prefix: str, evidence: object) -> str:
     return prefix + "-" + digest(evidence)[:20]
+
+
+def apk_typography_resource_name(obligation: str, kind: str) -> str:
+    if kind not in {"font_size", "line_height"}:
+        raise ContractError("invalid_contract", "unsupported APK typography kind")
+    return "icp_" + digest({"obligation_id": obligation})[:20] + "_" + kind
 
 
 def visual_state_id(page_key: str, design_name: str) -> str:
@@ -536,11 +651,77 @@ def reference_color(design_facts: object) -> dict[str, int | float] | None:
     return None
 
 
-def build_reference_viewport_assertions(
+def build_design_element_evidence_channels(
     design_elements: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
+    """Route asset internals to their byte-verified owner instead of fake UI nodes."""
+
+    by_design_and_node = {
+        (element["design_name"], element["source_node_id"]): element
+        for element in design_elements
+    }
+    channels: list[dict[str, Any]] = []
+    for element in design_elements:
+        owner = None
+        ancestor_id = element.get("source_parent_node_id")
+        visited: set[str] = set()
+        while isinstance(ancestor_id, str):
+            if ancestor_id in visited:
+                raise ContractError(
+                    "design_element_identity_invalid",
+                    "source parent relation contains a cycle: "
+                    + element["source_node_id"],
+                )
+            visited.add(ancestor_id)
+            ancestor = by_design_and_node.get(
+                (element["design_name"], ancestor_id)
+            )
+            if ancestor is None:
+                break
+            owner = ancestor if ancestor.get("assets") else None
+            if owner is not None:
+                break
+            ancestor_id = ancestor.get("source_parent_node_id")
+        channels.append(
+            {
+                "obligation_id": element["obligation_id"],
+                "kind": "asset_internal" if owner is not None else "live_node",
+                "owner_obligation_id": (
+                    owner["obligation_id"] if owner is not None else None
+                ),
+            }
+        )
+    return channels
+
+
+def build_reference_viewport_assertions(
+    design_elements: list[dict[str, Any]],
+    layout_selection_inputs: list[dict[str, Any]],
+    evidence_channels: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    frames_by_design: dict[str, dict[str, Any]] = {}
+    for value in layout_selection_inputs:
+        selection = require_dict(value, "layout selection input")
+        design_name = require_string(
+            selection.get("design_state_id"), "layout design state ID"
+        )
+        frames = require_dict(
+            selection.get("artboard_frames_by_source_node_id"),
+            "layout artboard frames",
+        )
+        if design_name in frames_by_design:
+            raise ContractError(
+                "component_layout_input_invalid",
+                f"duplicate component layout input: {design_name}",
+            )
+        frames_by_design[design_name] = frames
+    channel_by_obligation = {
+        item["obligation_id"]: item for item in evidence_channels
+    }
     assertions: list[dict[str, Any]] = []
     for element in design_elements:
+        if channel_by_obligation[element["obligation_id"]]["kind"] != "live_node":
+            continue
         bounds_mode = (
             "adaptive_at_reference"
             if element["content_role"] in {"static_copy", "dynamic_content"}
@@ -553,7 +734,13 @@ def build_reference_viewport_assertions(
             "component_instance_id": element["component_instance_id"],
             "probe_tag": "icp-probe-" + element["obligation_id"],
         }
-        bounds = reference_bounds(element.get("design_facts"))
+        design_name = element["design_name"]
+        if design_name not in frames_by_design:
+            raise ContractError(
+                "component_layout_input_invalid",
+                f"component layout input is missing: {design_name}",
+            )
+        bounds = frames_by_design[design_name].get(element["source_node_id"])
         if bounds is not None:
             assertions.append(
                 {
@@ -586,11 +773,14 @@ def build_reference_viewport_assertions(
                         ),
                         **shared,
                         "kind": kind,
+                        "apk_resource_name": apk_typography_resource_name(
+                            element["obligation_id"], kind
+                        ),
                         "mode": "exact_at_reference",
-                        "expected": {"sp" if kind == "font_size" else "dp": value},
+                        "expected": value,
                         "evaluation": {
                             "operator": "equals",
-                            "expected": {"sp" if kind == "font_size" else "dp": value},
+                            "expected": value,
                         },
                     }
                 )
@@ -612,17 +802,61 @@ def build_reference_viewport_assertions(
                     "evaluation": {"operator": "equals", "expected": color},
                 }
             )
+    asserted_obligations = {item["obligation_id"] for item in assertions}
+    missing_live_obligations = sorted(
+        item["obligation_id"]
+        for item in evidence_channels
+        if item["kind"] == "live_node"
+        and item["obligation_id"] not in asserted_obligations
+    )
+    if missing_live_obligations:
+        raise ContractError(
+            "design_evidence_missing",
+            "live design elements have no executable reference assertion",
+            details={"obligation_ids": missing_live_obligations},
+        )
     return assertions
 
 
-def evaluate_reference_assertion(assertion: object, actual: object) -> bool:
+def evaluate_reference_assertion(
+    assertion: object, actual: object, logical_scale: object
+) -> bool:
     item = assertion if isinstance(assertion, dict) else {}
     evaluation = item.get("evaluation")
     if not isinstance(evaluation, dict):
         return False
     operator = evaluation.get("operator")
     if operator == "equals":
-        return actual == evaluation.get("expected")
+        expected = evaluation.get("expected")
+        if item.get("kind") == "bounds":
+            if (
+                not isinstance(actual, dict)
+                or not isinstance(expected, dict)
+                or set(actual) != {"left", "top", "width", "height"}
+                or set(expected) != set(actual)
+            ):
+                return False
+            try:
+                scale = Fraction(logical_scale)
+            except (TypeError, ValueError, ZeroDivisionError):
+                return False
+            if scale <= 0:
+                return False
+            return all(
+                not isinstance(actual[field], bool)
+                and isinstance(actual[field], (int, float))
+                and math.isfinite(float(actual[field]))
+                and not isinstance(expected[field], bool)
+                and isinstance(expected[field], (int, float))
+                and math.isfinite(float(expected[field]))
+                and abs(
+                    (Fraction(str(actual[field])) - Fraction(str(expected[field])))
+                    * scale
+                )
+                <= 1
+                for field in actual
+            )
+        return actual == expected
     if operator == "finite_nonnegative_rect":
         return (
             isinstance(actual, dict)
@@ -875,6 +1109,15 @@ def build_coverage_universe(
         )
         for node_value in require_list(block.get("source_nodes"), "Block source nodes"):
             node = require_dict(node_value, "Block source node")
+            source_fact = require_dict(node.get("source_fact"), "Block source fact")
+            source_parent_node_id = source_fact.get("parent_id")
+            if source_parent_node_id is not None and not isinstance(
+                source_parent_node_id, str
+            ):
+                raise ContractError(
+                    "design_element_identity_invalid",
+                    "source parent node ID must be a string or null",
+                )
             content_role = node.get("content_role")
             if content_role not in RENDERING_CONTENT_ROLES:
                 raise ContractError(
@@ -902,6 +1145,7 @@ def build_coverage_universe(
                 {
                     "obligation_id": obligation_id("element", evidence),
                     **evidence,
+                    "source_parent_node_id": source_parent_node_id,
                     "geometry_basis": node["geometry_basis"],
                     "assets": assets,
                     "design_facts": design_facts,
@@ -1013,6 +1257,9 @@ def build_coverage_universe(
             "component_layout_input_invalid",
             "every frozen design state needs one component-bound layout input",
         )
+    design_element_evidence_channels = build_design_element_evidence_channels(
+        design_elements
+    )
     return {
         "schema": "icp.implementation.coverage-universe.v3",
         "source_identity": copy.deepcopy(source_identity),
@@ -1024,13 +1271,16 @@ def build_coverage_universe(
         "api_contracts": api_contracts,
         "blocks": blocks,
         "design_elements": design_elements,
+        "design_element_evidence_channels": design_element_evidence_channels,
         "semantic_facts": semantic_facts,
         "interaction_obligations": interaction_obligations,
         "integration_obligations": integration_obligations,
         "presentation_usages": presentation_usages,
         "visual_references": visual_references,
         "reference_viewport_assertions": build_reference_viewport_assertions(
-            design_elements
+            design_elements,
+            layout_selection_inputs,
+            design_element_evidence_channels,
         ),
         "component_layout_inputs": copy.deepcopy(layout_inputs),
         "layout_selection_inputs": layout_selection_inputs,
@@ -1066,6 +1316,7 @@ def build_plan_input(
         "platform": state["platform"],
         "page_keys": universe["page_keys"],
         "component_definitions": universe["component_definitions"],
+        "runtime_probe_provider": None,
         "runtime_entries": [],
         "pages": [],
         "component_mappings": [],
@@ -1166,6 +1417,464 @@ def validate_command(value: object, label: str) -> list[str]:
     return command
 
 
+def count_runtime_canaries(payload: object) -> int:
+    if payload == "__ICP_RUNTIME_CANARY__":
+        return 1
+    if isinstance(payload, dict):
+        return sum(count_runtime_canaries(item) for item in payload.values())
+    if isinstance(payload, list):
+        return sum(count_runtime_canaries(item) for item in payload)
+    return 0
+
+
+def validate_runtime_ui_test_contract(
+    value: object,
+    obligation: dict[str, Any],
+    universe: dict[str, Any],
+) -> dict[str, Any]:
+    """Close one integration obligation over the production Android UI surface."""
+
+    contract = require_dict(value, "runtime UI test contract")
+    required_contract_keys = {"entry_tag", "preconditions", "actions", "assertions"}
+    allowed_contract_keys = required_contract_keys | {
+        "network_expectation",
+        "mock_expectation",
+    }
+    if (
+        not required_contract_keys.issubset(contract)
+        or not set(contract).issubset(allowed_contract_keys)
+    ):
+        raise ContractError(
+            "invalid_plan", "runtime UI test contract fields are invalid"
+        )
+    entry_tag = require_string(contract.get("entry_tag"), "runtime UI entry tag")
+    interaction_id = obligation.get("interaction_id") or obligation.get("item_id")
+    interaction = next(
+        (
+            item
+            for graph in universe["interaction_graphs"]
+            if graph["page_key"] == obligation["page_key"]
+            for item in graph["interactions"]
+            if item["interaction_id"] == interaction_id
+        ),
+        None,
+    )
+    behavior = interaction.get("behavior") if interaction is not None else None
+    direct_api_contract_id = (
+        behavior.get("api_contract_id")
+        if behavior is not None and behavior.get("kind") == "api_call"
+        else None
+    )
+    incoming_api_outcome = None
+    incoming_api_contract_id = None
+    for graph in universe["interaction_graphs"]:
+        if graph["page_key"] != obligation["page_key"]:
+            continue
+        interactions_by_id = {
+            item["interaction_id"]: item for item in graph["interactions"]
+        }
+        for edge in graph.get("edges", []):
+            target = edge.get("target")
+            if (
+                isinstance(target, dict)
+                and target.get("kind") == "interaction"
+                and target.get("to_interaction_id") == interaction_id
+            ):
+                source_interaction = interactions_by_id.get(
+                    edge.get("from_interaction_id")
+                )
+                source_behavior = (
+                    source_interaction.get("behavior")
+                    if source_interaction is not None
+                    else None
+                )
+                if (
+                    source_behavior is not None
+                    and source_behavior.get("kind") == "api_call"
+                ):
+                    incoming_api_outcome = edge.get("outcome")
+                    incoming_api_contract_id = source_behavior.get("api_contract_id")
+    api_contract_id = direct_api_contract_id or incoming_api_contract_id
+    network_expectation_value = contract.get("network_expectation")
+    mock_expectation_value = contract.get("mock_expectation")
+    if network_expectation_value is not None and mock_expectation_value is not None:
+        raise ContractError(
+            "integration_runtime_unproven",
+            "one runtime case cannot substitute API and mock inputs together",
+        )
+    network_expectation = None
+    mock_expectation = None
+    if api_contract_id is not None:
+        if network_expectation_value is None:
+            if incoming_api_outcome == "failure":
+                raise ContractError(
+                    "integration_runtime_unproven",
+                    "API failure result requires runtime disconnect observation",
+                )
+            raise ContractError(
+                "integration_runtime_unproven",
+                "api_call requires runtime network observation",
+            )
+        network_expectation_input = require_dict(
+            network_expectation_value, "runtime network expectation"
+        )
+        if (
+            network_expectation_input.get("mode") == "response"
+            and network_expectation_input.get("response_probe") is None
+        ):
+            raise ContractError(
+                "integration_runtime_unproven",
+                "api_call requires a response-derived UI probe",
+            )
+        require_exact_keys(
+            network_expectation_input,
+            {
+                "api_contract_id",
+                "mode",
+                "method",
+                "path",
+                "request_headers",
+                "request_body",
+                "response_status",
+                "response_headers",
+                "response_body",
+                "response_probe",
+            },
+            "runtime network expectation",
+        )
+        frozen_api = next(
+            (
+                item
+                for item in universe["api_contracts"]
+                if item["page_key"] == obligation["page_key"]
+                and item["api_contract_id"] == api_contract_id
+            ),
+            None,
+        )
+        if frozen_api is None:
+            raise ContractError(
+                "integration_runtime_unproven",
+                "api_call runtime network observation has no frozen API contract",
+            )
+        normalized_api = require_dict(
+            frozen_api.get("normalized"), "frozen normalized API contract"
+        )
+        method = require_string(
+            network_expectation_input.get("method"), "runtime network method"
+        ).upper()
+        path = require_string(
+            network_expectation_input.get("path"), "runtime network path"
+        )
+        mode = require_string(
+            network_expectation_input.get("mode"), "runtime network mode"
+        )
+        if mode not in {"response", "disconnect"}:
+            raise ContractError(
+                "integration_runtime_unproven", "runtime network mode is invalid"
+            )
+        if (
+            network_expectation_input.get("api_contract_id") != api_contract_id
+            or method != normalized_api.get("method")
+            or path != normalized_api.get("path")
+        ):
+            raise ContractError(
+                "integration_runtime_unproven",
+                "runtime network observation does not match the frozen API request",
+            )
+        response_status = network_expectation_input.get("response_status")
+        allowed_statuses = {
+            int(response["status"])
+            for response in require_list(
+                normalized_api.get("responses"), "frozen API responses"
+            )
+            if str(response.get("status", "")).isdigit()
+        }
+        if mode == "response" and (
+            not isinstance(response_status, int)
+            or isinstance(response_status, bool)
+            or response_status not in allowed_statuses
+        ):
+            raise ContractError(
+                "integration_runtime_unproven",
+                "runtime network response status is not frozen by the API contract",
+            )
+        request_headers = require_dict(
+            network_expectation_input.get("request_headers"),
+            "runtime network request headers",
+        )
+        response_headers = require_dict(
+            network_expectation_input.get("response_headers"),
+            "runtime network response headers",
+        )
+        if any(
+            not isinstance(key, str) or not isinstance(header_value, str)
+            for headers in (request_headers, response_headers)
+            for key, header_value in headers.items()
+        ):
+            raise ContractError(
+                "integration_runtime_unproven",
+                "runtime network headers must be string mappings",
+            )
+        response_probe = None
+        if mode == "response":
+            response_probe_input = require_dict(
+                network_expectation_input.get("response_probe"),
+                "runtime network response probe",
+            )
+            require_exact_keys(
+                response_probe_input,
+                {"target_tag", "operator"},
+                "runtime network response probe",
+            )
+            response_probe_operator = require_string(
+                response_probe_input.get("operator"),
+                "runtime network response probe operator",
+            )
+            if response_probe_operator not in {"text_equals", "text_contains"}:
+                raise ContractError(
+                    "integration_runtime_unproven",
+                    "runtime network response probe must observe production text",
+                )
+            response_probe_target = require_string(
+                response_probe_input.get("target_tag"),
+                "runtime network response probe target",
+            )
+            if count_runtime_canaries(network_expectation_input.get("response_body")) != 1:
+                raise ContractError(
+                    "integration_runtime_unproven",
+                    "api_call requires a response-derived UI probe",
+                )
+            response_probe = {
+                "target_tag": response_probe_target,
+                "operator": response_probe_operator,
+            }
+        elif (
+            incoming_api_outcome != "failure"
+            or response_status is not None
+            or network_expectation_input.get("response_body") is not None
+            or network_expectation_input.get("response_probe") is not None
+        ):
+            raise ContractError(
+                "integration_runtime_unproven",
+                "runtime disconnect is only valid for an API failure result",
+            )
+        network_expectation = {
+            "api_contract_id": api_contract_id,
+            "mode": mode,
+            "method": method,
+            "path": path,
+            "request_headers": dict(request_headers),
+            "request_body": network_expectation_input.get("request_body"),
+            "response_status": response_status,
+            "response_headers": dict(response_headers),
+            "response_body": network_expectation_input.get("response_body"),
+            "response_probe": response_probe,
+        }
+    elif network_expectation_value is not None:
+        raise ContractError(
+            "integration_runtime_unproven",
+            "runtime network observation is only valid for api_call",
+        )
+    if mock_expectation_value is not None:
+        mock_expectation_input = require_dict(
+            mock_expectation_value, "runtime mock expectation"
+        )
+        require_exact_keys(
+            mock_expectation_input,
+            {"body", "response_probe"},
+            "runtime mock expectation",
+        )
+        mock_probe_input = require_dict(
+            mock_expectation_input.get("response_probe"),
+            "runtime mock response probe",
+        )
+        require_exact_keys(
+            mock_probe_input,
+            {"target_tag", "operator"},
+            "runtime mock response probe",
+        )
+        mock_probe_operator = require_string(
+            mock_probe_input.get("operator"), "runtime mock response probe operator"
+        )
+        if (
+            mock_probe_operator not in {"text_equals", "text_contains"}
+            or count_runtime_canaries(mock_expectation_input.get("body")) != 1
+        ):
+            raise ContractError(
+                "integration_runtime_unproven",
+                "runtime mock must carry one response-derived DTO value",
+            )
+        mock_expectation = {
+            "body": mock_expectation_input.get("body"),
+            "response_probe": {
+                "target_tag": require_string(
+                    mock_probe_input.get("target_tag"),
+                    "runtime mock response probe target",
+                ),
+                "operator": mock_probe_operator,
+            },
+        }
+    allowed_operators = {
+        "preconditions": {
+            "visible",
+            "absent",
+            "enabled",
+            "disabled",
+            "selected",
+            "unselected",
+            "text_equals",
+            "text_contains",
+        },
+        "actions": {"click", "input_text", "press_back"},
+        "assertions": {
+            "visible",
+            "absent",
+            "enabled",
+            "disabled",
+            "selected",
+            "unselected",
+            "text_equals",
+            "text_contains",
+        },
+    }
+    normalized: dict[str, list[dict[str, Any]]] = {}
+    covered_fact_ids: list[str] = []
+    action_fact_ids: set[str] = set()
+    assertion_fact_ids: set[str] = set()
+    for phase in ("preconditions", "actions", "assertions"):
+        steps: list[dict[str, Any]] = []
+        for index, step_value in enumerate(
+            require_list(contract.get(phase), f"runtime UI {phase}")
+        ):
+            label = f"runtime UI {phase}[{index}]"
+            step = require_dict(step_value, label)
+            require_exact_keys(
+                step,
+                {"operator", "target_tag", "value", "fact_ids"},
+                label,
+            )
+            operator = require_string(step.get("operator"), f"{label}.operator")
+            if operator not in allowed_operators[phase]:
+                raise ContractError(
+                    "integration_runtime_unproven",
+                    f"{label} does not use a closed production UI operator",
+                )
+            target_tag = step.get("target_tag")
+            if operator == "press_back":
+                if target_tag is not None:
+                    raise ContractError(
+                        "integration_runtime_unproven",
+                        f"{label}.target_tag must be null for press_back",
+                    )
+            else:
+                target_tag = require_string(target_tag, f"{label}.target_tag")
+            runtime_value = step.get("value")
+            if operator in {"input_text", "text_equals", "text_contains"}:
+                if not isinstance(runtime_value, str):
+                    raise ContractError(
+                        "integration_runtime_unproven",
+                        f"{label}.value must be a string for {operator}",
+                    )
+            elif runtime_value is not None:
+                raise ContractError(
+                    "integration_runtime_unproven",
+                    f"{label}.value must be null for {operator}",
+                )
+            fact_ids = require_string_list(
+                step.get("fact_ids"), f"{label}.fact_ids", nonempty=False
+            )
+            if len(fact_ids) != len(set(fact_ids)):
+                raise ContractError(
+                    "integration_runtime_unproven",
+                    f"{label}.fact_ids contains duplicates",
+                )
+            covered_fact_ids.extend(fact_ids)
+            if phase == "actions":
+                action_fact_ids.update(fact_ids)
+            elif phase == "assertions":
+                assertion_fact_ids.update(fact_ids)
+            steps.append(
+                {
+                    "operator": operator,
+                    "target_tag": target_tag,
+                    "value": runtime_value,
+                    "fact_ids": fact_ids,
+                }
+            )
+        normalized[phase] = steps
+    if not normalized["assertions"]:
+        raise ContractError(
+            "integration_runtime_unproven",
+            "every integration case needs an observable production UI result",
+        )
+    if (
+        network_expectation is not None
+        and network_expectation["response_probe"] is not None
+        and network_expectation["response_probe"]["target_tag"]
+        not in {step["target_tag"] for step in normalized["assertions"]}
+    ):
+        raise ContractError(
+            "integration_runtime_unproven",
+            "response-derived UI probe must belong to the frozen result surface",
+        )
+    if mock_expectation is not None and mock_expectation["response_probe"][
+        "target_tag"
+    ] not in {step["target_tag"] for step in normalized["assertions"]}:
+        raise ContractError(
+            "integration_runtime_unproven",
+            "mock-derived UI probe must belong to the frozen result surface",
+        )
+    expected_fact_ids = require_string_list(
+        obligation.get("basis_fact_ids"),
+        "integration obligation basis fact IDs",
+        nonempty=False,
+    )
+    if sorted(covered_fact_ids) != sorted(expected_fact_ids):
+        raise ContractError(
+            "integration_runtime_unproven",
+            "runtime UI test does not cover every frozen semantic fact exactly once",
+        )
+    if obligation.get("source_kind") == "interaction_description" and interaction:
+        precondition_ids: set[str] = set()
+        for field in ("condition", "state"):
+            if interaction.get(field) is not None:
+                precondition_ids.update(interaction[field]["fact_ids"])
+        trigger_ids = set(
+            interaction["trigger"]["fact_ids"]
+            if interaction.get("trigger") is not None
+            else []
+        )
+        result_ids: set[str] = set()
+        for field in ("behavior", "result"):
+            if interaction.get(field) is not None:
+                result_ids.update(interaction[field]["fact_ids"])
+        precondition_fact_ids = {
+            fact_id
+            for step in normalized["preconditions"]
+            for fact_id in step["fact_ids"]
+        }
+        if (
+            not precondition_ids.issubset(precondition_fact_ids)
+            or not trigger_ids.issubset(action_fact_ids)
+            or not result_ids.issubset(assertion_fact_ids)
+            or precondition_ids & (action_fact_ids | assertion_fact_ids)
+            or trigger_ids & (precondition_fact_ids | assertion_fact_ids)
+            or result_ids & (precondition_fact_ids | action_fact_ids)
+        ):
+            raise ContractError(
+                "integration_runtime_unproven",
+                "runtime UI preconditions, actions, and assertions do not preserve the frozen interaction causality",
+            )
+    return {
+        "entry_tag": entry_tag,
+        "preconditions": normalized["preconditions"],
+        "actions": normalized["actions"],
+        "assertions": normalized["assertions"],
+        "network_expectation": network_expectation,
+        "mock_expectation": mock_expectation,
+    }
+
+
 def validate_plan(
     value: object, state: dict[str, Any], universe: dict[str, Any]
 ) -> dict[str, Any]:
@@ -1184,6 +1893,7 @@ def validate_plan(
             "platform",
             "page_keys",
             "component_definitions",
+            "runtime_probe_provider",
             "runtime_entries",
             "pages",
             "component_mappings",
@@ -1483,6 +2193,35 @@ def validate_plan(
         )
     if not runtime_entries:
         raise ContractError("invalid_plan", "one or more runtime entries are required")
+
+    provider_value = require_dict(
+        plan.get("runtime_probe_provider"), "runtime probe provider"
+    )
+    require_exact_keys(
+        provider_value,
+        {"source_file", "symbol", "publish_method_symbol", "output_path"},
+        "runtime probe provider",
+    )
+    runtime_probe_provider = {
+        "source_file": require_relative_path(
+            provider_value.get("source_file"), "runtime probe provider source_file"
+        ),
+        "symbol": require_string(
+            provider_value.get("symbol"), "runtime probe provider symbol"
+        ),
+        "publish_method_symbol": require_string(
+            provider_value.get("publish_method_symbol"),
+            "runtime probe provider publish method symbol",
+        ),
+        "output_path": require_relative_path(
+            provider_value.get("output_path"), "runtime probe provider output_path"
+        ),
+    }
+    if runtime_probe_provider["output_path"] != "files/icp-runtime-probes.json":
+        raise ContractError(
+            "invalid_plan",
+            "runtime probe provider must publish the frozen app-private payload path",
+        )
 
     blocks_by_instance: dict[str, list[str]] = {}
     for block in universe["blocks"]:
@@ -1828,6 +2567,8 @@ def validate_plan(
     cases: list[dict[str, Any]] = []
     seen_integrations: set[str] = set()
     case_ids: set[str] = set()
+    android_test_identities: set[str] = set()
+    android_test_files: set[str] = set()
     for index, case_value in enumerate(
         require_list(plan.get("integration_test_cases"), "integration test cases")
     ):
@@ -1845,6 +2586,7 @@ def validate_plan(
                 "page_key",
                 "test_file",
                 "test_name",
+                "runtime_test",
                 "command",
             },
             label,
@@ -1877,16 +2619,79 @@ def validate_plan(
         )
         seen_integrations.add(obligation)
         case_ids.add(case_id)
-        require_relative_path(case.get("test_file"), f"{label}.test_file")
+        test_file = require_relative_path(
+            case.get("test_file"), f"{label}.test_file"
+        )
         require_string(case.get("test_name"), f"{label}.test_name")
-        validate_command(case.get("command"), f"{label}.command")
+        runtime_test = validate_runtime_ui_test_contract(
+            case.get("runtime_test"), expected, universe
+        )
+        command = validate_command(case.get("command"), f"{label}.command")
+        if plan["platform"] == "android-kotlin":
+            test_parts = Path(case["test_file"]).parts
+            gradle_executable = command[0] == "./gradlew"
+            device_tasks = [
+                argument
+                for argument in command[1:]
+                if re.fullmatch(
+                    r"(?::[A-Za-z0-9_.-]+:)?connected[A-Za-z0-9_.-]*AndroidTest",
+                    argument,
+                )
+            ]
+            selectors = [
+                argument.split("=", 1)[1]
+                for argument in command[1:]
+                if argument.startswith(
+                    "-Pandroid.testInstrumentationRunnerArguments.class="
+                )
+            ]
+            exact_case_selected = (
+                len(selectors) == 1
+                and selectors[0].count("#") == 1
+                and selectors[0].split("#", 1)[0] != ""
+                and selectors[0].split("#", 1)[1] == case["test_name"]
+            )
+            test_identity = selectors[0] if selectors else ""
+            expected_selector_argument = (
+                ANDROID_TEST_SELECTOR_PREFIX + selectors[0]
+                if len(selectors) == 1
+                else None
+            )
+            if (
+                "androidTest" not in test_parts
+                or not gradle_executable
+                or len(device_tasks) != 1
+                or len(command) != 3
+                or command[1] != device_tasks[0]
+                or command[2] != expected_selector_argument
+                or not exact_case_selected
+                or test_identity in android_test_identities
+                or test_file in android_test_files
+            ):
+                raise ContractError(
+                    "integration_runtime_unproven",
+                    f"Android integration case must execute its exact androidTest production surface: {case_id}",
+                )
+            android_test_identities.add(test_identity)
+            android_test_files.add(test_file)
         normalized_case = case.copy()
         normalized_case["basis_fact_ids"] = normalized_basis_ids
+        normalized_case["runtime_test"] = runtime_test
         cases.append(normalized_case)
     if seen_integrations != set(expected_integrations):
         raise ContractError(
             "coverage_incomplete",
             "every IT, interaction-description, and model-inference obligation needs one integration test case",
+        )
+    mock_probe_pages = [
+        case["page_key"]
+        for case in cases
+        if case["runtime_test"]["mock_expectation"] is not None
+    ]
+    if sorted(mock_probe_pages) != sorted(universe["page_keys"]):
+        raise ContractError(
+            "integration_runtime_unproven",
+            "every page requires one runtime mock DTO probe",
         )
 
     expected_presentations = {item["usage_id"] for item in universe["presentation_usages"]}
@@ -2007,31 +2812,41 @@ def validate_plan(
             normalized_command = validate_command(
                 command, f"{label}.precondition_commands[{command_index}]"
             )
-            if any("icp_state" in argument.casefold() for argument in normalized_command):
+            if (
+                Path(normalized_command[0]).name == "adb"
+                or any("icp_state" in argument.casefold() for argument in normalized_command)
+            ):
                 raise ContractError(
                     "visual_production_path_unproven",
-                    f"visual precondition may not select a terminal debug state: {design_name}",
+                    f"visual precondition may not manipulate the Android production surface: {design_name}",
                 )
         current_page_key = entry["page_key"]
         current_design_name = entry["design_name"]
-        trace: list[dict[str, str]] = []
+        expected_interaction_id: str | None = None
+        trace: list[dict[str, Any]] = []
         for trace_index, trace_value in enumerate(
             require_list(item.get("interaction_trace"), f"{label}.interaction_trace")
         ):
             trace_label = f"{label}.interaction_trace[{trace_index}]"
             step = require_dict(trace_value, trace_label)
-            require_exact_keys(
-                step,
-                {
-                    "source_page_key",
-                    "case_id",
-                    "interaction_id",
-                    "outcome",
-                    "action",
-                    "target_tag",
-                },
-                trace_label,
-            )
+            base_step_keys = {
+                "source_page_key",
+                "case_id",
+                "interaction_id",
+                "outcome",
+            }
+            legacy_step_keys = base_step_keys | {"action", "target_tag"}
+            canonical_step_keys = base_step_keys | {"actions"}
+            step_keys = frozenset(step)
+            if step_keys not in {
+                frozenset(base_step_keys),
+                frozenset(legacy_step_keys),
+                frozenset(canonical_step_keys),
+            }:
+                raise ContractError(
+                    "invalid_plan",
+                    f"{trace_label} must reference one frozen interaction case",
+                )
             source_page_key = require_string(
                 step.get("source_page_key"), f"{trace_label}.source_page_key"
             )
@@ -2040,17 +2855,19 @@ def validate_plan(
                 step.get("interaction_id"), f"{trace_label}.interaction_id"
             )
             outcome = require_string(step.get("outcome"), f"{trace_label}.outcome")
-            target_tag = require_string(
-                step.get("target_tag"), f"{trace_label}.target_tag"
-            )
-            if step.get("action") != "click":
+            if (
+                expected_interaction_id is not None
+                and interaction_id != expected_interaction_id
+            ):
                 raise ContractError(
                     "visual_production_path_unproven",
-                    f"visual interaction is not a production click: {design_name}",
+                    f"visual interaction trace is disconnected: {design_name}",
                     details={
-                        "reason": "unsupported_action",
+                        "reason": "disconnected_path",
                         "design_name": design_name,
                         "step_index": trace_index,
+                        "expected_interaction_id": expected_interaction_id,
+                        "actual_interaction_id": interaction_id,
                     },
                 )
             if source_page_key != current_page_key:
@@ -2088,6 +2905,49 @@ def validate_plan(
                         "interaction_id": interaction_id,
                     },
                 )
+            runtime_actions = require_list(
+                require_dict(
+                    case.get("runtime_test"), "visual interaction runtime test"
+                ).get("actions"),
+                "visual interaction runtime actions",
+            )
+            if not runtime_actions:
+                raise ContractError(
+                    "visual_production_path_unproven",
+                    f"visual interaction case has no executable action: {design_name}",
+                    details={
+                        "reason": "case_action_missing",
+                        "design_name": design_name,
+                        "step_index": trace_index,
+                        "case_id": case_id,
+                    },
+                )
+            if step_keys == legacy_step_keys and (
+                len(runtime_actions) != 1
+                or runtime_actions[0].get("operator") != step.get("action")
+                or runtime_actions[0].get("target_tag") != step.get("target_tag")
+            ):
+                raise ContractError(
+                    "visual_production_path_unproven",
+                    f"visual interaction differs from its executable case: {design_name}",
+                    details={
+                        "reason": "case_action_mismatch",
+                        "design_name": design_name,
+                        "step_index": trace_index,
+                        "case_id": case_id,
+                    },
+                )
+            if step_keys == canonical_step_keys and step.get("actions") != runtime_actions:
+                raise ContractError(
+                    "visual_production_path_unproven",
+                    f"visual interaction differs from its executable case: {design_name}",
+                    details={
+                        "reason": "case_action_mismatch",
+                        "design_name": design_name,
+                        "step_index": trace_index,
+                        "case_id": case_id,
+                    },
+                )
             outgoing = edges_by_source.get((source_page_key, interaction_id), [])
             matching_edges = [
                 edge for edge in outgoing if edge.get("outcome") == outcome
@@ -2110,8 +2970,12 @@ def validate_plan(
                 matching_edges[0].get("target"), "interaction edge target"
             )
             if edge_target.get("kind") == "interaction":
-                pass
+                expected_interaction_id = require_string(
+                    edge_target.get("to_interaction_id"),
+                    "edge target interaction ID",
+                )
             else:
+                expected_interaction_id = None
                 current_page_key = require_string(
                     edge_target.get("page_key"), "edge target page key"
                 )
@@ -2124,8 +2988,7 @@ def validate_plan(
                     "case_id": case_id,
                     "interaction_id": interaction_id,
                     "outcome": outcome,
-                    "action": "click",
-                    "target_tag": target_tag,
+                    "actions": copy.deepcopy(runtime_actions),
                 }
             )
         if not trace and (
@@ -2353,6 +3216,12 @@ def validate_plan(
                 details={"path": path, "expected_owner": owner, "actual_owner": actual_owner},
             )
 
+    require_owner(
+        runtime_probe_provider["source_file"],
+        foundation_id,
+        "runtime probe provider",
+    )
+
     for page in pages:
         owner = page_node_by_key[page["page_key"]]
         for field in ("source_file", "dto_file", "mock_fixture_path"):
@@ -2424,6 +3293,7 @@ def validate_plan(
         "file_owners": dict(sorted(file_owners.items())),
         "presentation_mappings": presentations,
         "runtime_entries": runtime_entries,
+        "runtime_probe_provider": runtime_probe_provider,
         "visual_capture_cases": visual_capture_cases,
     }
 
@@ -2449,6 +3319,7 @@ def build_codegen_packet(
         "common_rules": plan["common_rules"],
         "platform_best_practices": plan["platform_best_practices"],
         "implementation_prompt": plan["implementation_prompt"],
+        "runtime_probe_provider": plan["runtime_probe_provider"],
         "page": page,
         "locked_page": next(item for item in universe["pages"] if item["page_key"] == page_key),
         "component_definitions": [
@@ -2475,6 +3346,16 @@ def build_codegen_packet(
         "blocks": [item for item in universe["blocks"] if item["component_instance_id"] in instance_ids],
         "design_elements": [
             item for item in universe["design_elements"] if item["component_instance_id"] in instance_ids
+        ],
+        "design_element_evidence_channels": [
+            item
+            for item in universe["design_element_evidence_channels"]
+            if item["obligation_id"]
+            in {
+                value["obligation_id"]
+                for value in universe["design_elements"]
+                if value["component_instance_id"] in instance_ids
+            }
         ],
         "design_element_mappings": [
             item
@@ -2518,11 +3399,14 @@ def build_codegen_packet(
 def record_plan(args: argparse.Namespace) -> dict[str, Any]:
     project_root = Path(args.project_root).resolve()
     stage_dir, state, universe = load_live_stage(project_root)
-    implementation_checklist_call(
-        stage_dir, state, universe, "ready", node_id="plan.record"
-    )
-    if state.get("state") != "awaiting_plan":
+    plan_path = stage_dir / "implementation-plan.json"
+    recovering = plan_path.is_file()
+    if state.get("state") != "awaiting_plan" and not recovering:
         raise ContractError("invalid_state", f"implementation state is {state.get('state')}")
+    if not recovering:
+        implementation_checklist_call(
+            stage_dir, state, universe, "ready", node_id="plan.record"
+        )
     attempts_path = stage_dir / "layout-decision-attempts.json"
     if attempts_path.is_file():
         attempt_history = require_dict(
@@ -2560,18 +3444,23 @@ def record_plan(args: argparse.Namespace) -> dict[str, Any]:
             attempt_history["attempts"] = attempts
             atomic_write_json(attempts_path, attempt_history)
         raise
-    plan_path = stage_dir / "implementation-plan.json"
-    if plan_path.exists():
-        raise ContractError("plan_already_recorded", "implementation plan is append-only")
-    atomic_write_json(plan_path, plan)
+    if recovering:
+        if read_json(plan_path) != plan:
+            raise ContractError(
+                "plan_already_recorded",
+                "implementation plan is append-only and differs from the retry",
+            )
+        materialize_android_test_files(project_root, plan, recovering=True)
+    else:
+        materialize_android_test_files(project_root, plan, recovering=False)
+        atomic_write_json(plan_path, plan)
     for page_key in universe["page_keys"]:
         atomic_write_json(
             stage_dir / "codegen-packets" / f"{page_key}.json",
             build_codegen_packet(page_key, plan, universe),
         )
-    atomic_write_json(
-        stage_dir / "tdd-evidence.json",
-        {
+    tdd_path = stage_dir / "tdd-evidence.json"
+    initial_tdd_evidence = {
             "schema": "icp.implementation.tdd-evidence.v1",
             "implementation_plan_sha256": file_sha(plan_path),
             "cases": [
@@ -2589,11 +3478,66 @@ def record_plan(args: argparse.Namespace) -> dict[str, Any]:
                 }
                 for case in plan["integration_test_cases"]
             ],
-        },
-    )
+        }
+    if tdd_path.is_file():
+        existing_tdd = require_dict(read_json(tdd_path), "TDD evidence")
+        existing_cases = require_list(existing_tdd.get("cases"), "TDD evidence cases")
+        expected_case_identity = [
+            {
+                key: case[key]
+                for key in (
+                    "case_id",
+                    "obligation_id",
+                    "source_kind",
+                    "fact_id",
+                    "basis_fact_ids",
+                    "component_instance_id",
+                    "page_key",
+                    "command",
+                )
+            }
+            for case in initial_tdd_evidence["cases"]
+        ]
+        actual_case_identity = [
+            {key: case.get(key) for key in expected_case_identity[index]}
+            for index, case in enumerate(existing_cases)
+        ] if len(existing_cases) == len(expected_case_identity) else []
+        if (
+            existing_tdd.get("schema") != initial_tdd_evidence["schema"]
+            or existing_tdd.get("implementation_plan_sha256")
+            != initial_tdd_evidence["implementation_plan_sha256"]
+            or actual_case_identity != expected_case_identity
+        ):
+            raise ContractError(
+                "stage_drift", "existing TDD evidence differs from the recorded plan"
+            )
+        validate_tdd_evidence(
+            project_root, plan, existing_tdd, require_complete=False
+        )
+        actual_tdd_sha = file_sha(tdd_path)
+        anchored_tdd_sha = state.get("tdd_evidence_sha256")
+        if anchored_tdd_sha is None:
+            if existing_tdd != initial_tdd_evidence:
+                raise ContractError(
+                    "stage_drift",
+                    "unanchored TDD evidence contains recorded results",
+                )
+        elif actual_tdd_sha != anchored_tdd_sha:
+            validate_case_transaction(
+                stage_dir, state, tdd_path, existing_tdd
+            )
+        tdd_evidence = existing_tdd
+    else:
+        atomic_write_json(tdd_path, initial_tdd_evidence)
+        tdd_evidence = initial_tdd_evidence
     state["implementation_plan_sha256"] = file_sha(plan_path)
-    state["tdd_evidence_sha256"] = file_sha(stage_dir / "tdd-evidence.json")
-    state["state"] = "awaiting_red" if plan["integration_test_cases"] else "awaiting_implementation"
+    state["tdd_evidence_sha256"] = file_sha(tdd_path)
+    if all(case.get("green") is not None for case in tdd_evidence["cases"]):
+        state["state"] = "awaiting_verification"
+    elif all(case.get("red") is not None for case in tdd_evidence["cases"]):
+        state["state"] = "awaiting_implementation"
+    else:
+        state["state"] = "awaiting_red" if plan["integration_test_cases"] else "awaiting_implementation"
     atomic_write_json(stage_dir / "state.json", state)
     implementation_checklist_call(
         stage_dir,
@@ -2618,6 +3562,1448 @@ def run_case(args: argparse.Namespace) -> dict[str, Any]:
         return run_case_locked(args, project_root)
 
 
+ANDROID_TEST_SELECTOR_PREFIX = (
+    "-Pandroid.testInstrumentationRunnerArguments.class="
+)
+
+
+def kotlin_string(value: str) -> str:
+    escaped = (
+        value.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("$", "\\$")
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+        .replace("\t", "\\t")
+    )
+    return f'"{escaped}"'
+
+
+def android_test_identity(planned_case: dict[str, Any]) -> tuple[str, str]:
+    selectors = [
+        argument[len(ANDROID_TEST_SELECTOR_PREFIX) :]
+        for argument in planned_case["command"][1:]
+        if argument.startswith(ANDROID_TEST_SELECTOR_PREFIX)
+    ]
+    if len(selectors) != 1 or selectors[0].count("#") != 1:
+        raise ContractError(
+            "integration_runtime_unproven",
+            f"exact Android test selector is missing: {planned_case['case_id']}",
+        )
+    return tuple(selectors[0].split("#", 1))
+
+
+def render_runtime_ui_step(step: dict[str, Any], *, assertion: bool) -> list[str]:
+    operator = step["operator"]
+    tag = kotlin_string(step["target_tag"]) if step["target_tag"] is not None else None
+    value = kotlin_string(step["value"]) if step["value"] is not None else None
+    if assertion:
+        if operator == "absent":
+            return [f"        assertNull(waitForNode({tag}, false))"]
+        lines = [f"        val node = requireNode({tag})"]
+        if operator == "visible":
+            lines.append("        assertTrue(node.isVisibleToUser)")
+        elif operator == "enabled":
+            lines.append("        assertTrue(node.isEnabled)")
+        elif operator == "disabled":
+            lines.append("        assertFalse(node.isEnabled)")
+        elif operator == "selected":
+            lines.append("        assertTrue(node.isSelected)")
+        elif operator == "unselected":
+            lines.append("        assertFalse(node.isSelected)")
+        elif operator == "text_equals":
+            lines.append(f"        assertEquals({value}, nodeText(node))")
+        elif operator == "text_contains":
+            lines.append(f"        assertTrue(nodeText(node).contains({value}))")
+        return ["        run {", *lines, "        }"]
+    if operator == "press_back":
+        return [
+            "        assertTrue(uiAutomation.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK))",
+            "        instrumentation.waitForIdleSync()",
+        ]
+    lines = [f"        val node = requireNode({tag})"]
+    if operator == "click":
+        lines.append("        assertTrue(node.performAction(AccessibilityNodeInfo.ACTION_CLICK))")
+    elif operator == "input_text":
+        lines.extend(
+            [
+                "        val arguments = Bundle()",
+                (
+                    "        arguments.putCharSequence("
+                    "AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, "
+                    f"{value})"
+                ),
+                "        assertTrue(node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments))",
+            ]
+        )
+    lines.append("        instrumentation.waitForIdleSync()")
+    return ["        run {", *lines, "        }"]
+
+
+def render_runtime_result_observation(step: dict[str, Any]) -> str:
+    tag = kotlin_string(step["target_tag"])
+    operator = step["operator"]
+    if operator == "absent":
+        return f"findNode({tag}) == null"
+    if operator == "visible":
+        return f"findNode({tag})?.isVisibleToUser == true"
+    if operator == "enabled":
+        return f"findNode({tag})?.isEnabled == true"
+    if operator == "disabled":
+        return f"findNode({tag})?.isEnabled == false"
+    if operator == "selected":
+        return f"findNode({tag})?.isSelected == true"
+    if operator == "unselected":
+        return f"findNode({tag})?.isSelected == false"
+    if operator == "text_equals":
+        return f"findNode({tag})?.let(::nodeText) == {kotlin_string(step['value'])}"
+    if operator == "text_contains":
+        return (
+            f"findNode({tag})?.let(::nodeText)?.contains("
+            f"{kotlin_string(step['value'])}) == true"
+        )
+    raise ContractError(
+        "integration_runtime_unproven",
+        f"unsupported result observation operator: {operator}",
+    )
+
+
+def kotlin_string_map(values: dict[str, str]) -> str:
+    if not values:
+        return "emptyMap()"
+    return "mapOf(" + ", ".join(
+        f"{kotlin_string(key)} to {kotlin_string(value)}"
+        for key, value in sorted(values.items())
+    ) + ")"
+
+
+def render_android_network_support(expectation: dict[str, Any]) -> str:
+    response_body = json.dumps(
+        expectation["response_body"],
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return f"""
+    private data class ObservedRequest(
+        val method: String,
+        val path: String,
+        val headers: Map<String, String>,
+        val body: String,
+    )
+
+    private class NetworkRecorder(
+        private val responseStatus: Int,
+        private val responseHeaders: Map<String, String>,
+        private val responseBody: String,
+        private val disconnectAfterRequest: Boolean,
+    ) : AutoCloseable {{
+        private val server = ServerSocket(0)
+        private val requestReceived = CountDownLatch(1)
+        private val responseReleased = CountDownLatch(1)
+        private val completed = CountDownLatch(1)
+        @Volatile private var observedRequest: ObservedRequest? = null
+        @Volatile private var failure: Throwable? = null
+        val baseUrl: String = "http://127.0.0.1:${{server.localPort}}"
+
+        fun start() {{
+            Thread({{
+                try {{
+                    server.accept().use {{ socket ->
+                        val input = socket.getInputStream()
+                        val headerBuffer = ByteArrayOutputStream()
+                        var suffix = 0
+                        while (suffix != 0x0d0a0d0a) {{
+                            val value = input.read()
+                            if (value < 0) error("network request ended before headers")
+                            headerBuffer.write(value)
+                            suffix = (suffix shl 8) or value
+                        }}
+                        val headerText = headerBuffer.toString(Charsets.ISO_8859_1.name())
+                        val lines = headerText.removeSuffix("\\r\\n\\r\\n").split("\\r\\n")
+                        val requestLine = lines.first().split(" ")
+                        if (requestLine.size < 2) error("invalid HTTP request line")
+                        val headers = lines.drop(1).associate {{ line ->
+                            val separator = line.indexOf(':')
+                            if (separator <= 0) error("invalid HTTP request header")
+                            line.substring(0, separator).trim().lowercase() to
+                                line.substring(separator + 1).trim()
+                        }}
+                        val contentLength = headers["content-length"]?.toIntOrNull() ?: 0
+                        val bodyBytes = ByteArray(contentLength)
+                        var offset = 0
+                        while (offset < bodyBytes.size) {{
+                            val count = input.read(bodyBytes, offset, bodyBytes.size - offset)
+                            if (count < 0) error("network request body ended early")
+                            offset += count
+                        }}
+                        observedRequest = ObservedRequest(
+                            method = requestLine[0],
+                            path = requestLine[1],
+                            headers = headers,
+                            body = bodyBytes.toString(Charsets.UTF_8),
+                        )
+                        requestReceived.countDown()
+                        if (!responseReleased.await(10, TimeUnit.SECONDS)) {{
+                            error("production API response was not released")
+                        }}
+                        if (disconnectAfterRequest) return@use
+                        val responseBytes = responseBody.toByteArray(Charsets.UTF_8)
+                        val output = socket.getOutputStream()
+                        val headersText = buildString {{
+                            append("HTTP/1.1 $responseStatus ICP\\r\\n")
+                            responseHeaders.forEach {{ (name, value) ->
+                                append(name).append(": ").append(value).append("\\r\\n")
+                            }}
+                            append("Content-Length: ").append(responseBytes.size).append("\\r\\n")
+                            append("Connection: close\\r\\n\\r\\n")
+                        }}
+                        output.write(headersText.toByteArray(Charsets.ISO_8859_1))
+                        output.write(responseBytes)
+                        output.flush()
+                    }}
+                }} catch (error: Throwable) {{
+                    failure = error
+                }} finally {{
+                    requestReceived.countDown()
+                    completed.countDown()
+                }}
+            }}, "icp-network-recorder").start()
+        }}
+
+        fun awaitRequest(): ObservedRequest {{
+            assertTrue("production API request was not observed", requestReceived.await(10, TimeUnit.SECONDS))
+            failure?.let {{ throw AssertionError("production API observation failed", it) }}
+            return observedRequest ?: throw AssertionError("production API request was not recorded")
+        }}
+
+        fun releaseResponse() {{
+            responseReleased.countDown()
+        }}
+
+        override fun close() {{
+            responseReleased.countDown()
+            server.close()
+            completed.await(1, TimeUnit.SECONDS)
+        }}
+    }}
+
+    private fun canonicalJson(raw: String): String {{
+        fun canonical(value: Any?): String = when (value) {{
+            null, JSONObject.NULL -> "null"
+            is JSONObject -> value.keys().asSequence().toList().sorted().joinToString(
+                prefix = "{{", postfix = "}}"
+            ) {{ key -> JSONObject.quote(key) + ":" + canonical(value.get(key)) }}
+            is JSONArray -> (0 until value.length()).joinToString(
+                prefix = "[", postfix = "]"
+            ) {{ index -> canonical(value.get(index)) }}
+            is String -> JSONObject.quote(value)
+            is Number, is Boolean -> value.toString()
+            else -> error("unsupported JSON value")
+        }}
+        return canonical(JSONTokener(raw).nextValue())
+    }}
+"""
+
+
+def render_android_test_source(planned_case: dict[str, Any]) -> bytes:
+    class_name, method_name = android_test_identity(planned_case)
+    simple_class = class_name.rsplit(".", 1)[-1]
+    package_name = class_name.rsplit(".", 1)[0] if "." in class_name else ""
+    runtime_test = require_dict(
+        planned_case.get("runtime_test"), "runtime UI test contract"
+    )
+    network_expectation = runtime_test.get("network_expectation")
+    mock_expectation = runtime_test.get("mock_expectation")
+    response_probe = (
+        network_expectation["response_probe"]
+        if network_expectation is not None
+        else (
+            mock_expectation["response_probe"]
+            if mock_expectation is not None
+            else None
+        )
+    )
+    body = [
+        f"        assertTrue(requireNode({kotlin_string(runtime_test['entry_tag'])}).isVisibleToUser)"
+    ]
+    for step in runtime_test["preconditions"]:
+        body.extend(render_runtime_ui_step(step, assertion=True))
+    result_observations = [
+        render_runtime_result_observation(step)
+        for step in runtime_test["assertions"]
+    ]
+    if runtime_test["actions"]:
+        body.extend(
+            [
+                "        val beforeResultObservations = listOf("
+                + ", ".join(result_observations)
+                + ")",
+                (
+                    '        assertFalse("production result already satisfied before trigger", '
+                    "beforeResultObservations.any { it })"
+                ),
+            ]
+        )
+    for step in runtime_test["actions"]:
+        body.extend(render_runtime_ui_step(step, assertion=False))
+    if network_expectation is not None:
+        expected_request_body = network_expectation["request_body"]
+        body.extend(
+            [
+                "        val observedRequest = networkRecorder.awaitRequest()",
+                "        assertEquals("
+                + kotlin_string(network_expectation["method"])
+                + ", observedRequest.method)",
+                "        assertEquals("
+                + kotlin_string(network_expectation["path"])
+                + ", observedRequest.path)",
+            ]
+        )
+        for name, value in sorted(network_expectation["request_headers"].items()):
+            body.append(
+                "        assertEquals("
+                + kotlin_string(value)
+                + ", observedRequest.headers["
+                + kotlin_string(name.lower())
+                + "])"
+            )
+        if expected_request_body is None:
+            body.append("        assertTrue(observedRequest.body.isEmpty())")
+        else:
+            expected_body = json.dumps(
+                expected_request_body,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+            body.append(
+                "        assertEquals(canonicalJson("
+                + kotlin_string(expected_body)
+                + "), canonicalJson(observedRequest.body))"
+            )
+        body.extend(
+            [
+                "        val beforeApiResponseObservations = listOf("
+                + ", ".join(result_observations)
+                + ")",
+                (
+                    '        assertFalse("production result appeared before API '
+                    + (
+                        "failure"
+                        if network_expectation["mode"] == "disconnect"
+                        else "response"
+                    )
+                    + '", '
+                    "beforeApiResponseObservations.any { it })"
+                ),
+                "        networkRecorder.releaseResponse()",
+            ]
+        )
+    for step in runtime_test["assertions"]:
+        body.extend(render_runtime_ui_step(step, assertion=True))
+    if response_probe is not None:
+        probe_source = "API response" if network_expectation is not None else "mock DTO"
+        body.append(
+            f'        assertTrue("production UI did not render the {probe_source} value", '
+            "waitForResponseValue("
+            + kotlin_string(response_probe["target_tag"])
+            + ", responseCanary, "
+            + ("true" if response_probe["operator"] == "text_contains" else "false")
+            + "))"
+        )
+    if runtime_test["actions"]:
+        body.extend(
+            [
+                "        val afterResultObservations = listOf("
+                + ", ".join(result_observations)
+                + ")",
+                (
+                    '        assertTrue("production result was not satisfied after trigger", '
+                    "afterResultObservations.all { it })"
+                ),
+            ]
+        )
+    network_imports = "" if network_expectation is None else """
+import java.io.ByteArrayOutputStream
+import java.net.ServerSocket
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import org.json.JSONArray
+import org.json.JSONObject
+import org.json.JSONTokener
+import org.junit.After
+"""
+    canary_import = "" if response_probe is None else "import java.util.UUID\n"
+    network_field = (
+        "    private lateinit var networkRecorder: NetworkRecorder\n"
+        if network_expectation is not None
+        else ""
+    )
+    canary_field = (
+        "    private val responseCanary: String = UUID.randomUUID().toString()\n"
+        if response_probe is not None
+        else ""
+    )
+    network_setup = ""
+    mock_setup = ""
+    mock_intent = ""
+    network_teardown = ""
+    network_support = ""
+    if network_expectation is not None:
+        disconnect_after_request = network_expectation["mode"] == "disconnect"
+        response_body = (
+            ""
+            if disconnect_after_request
+            else json.dumps(
+                network_expectation["response_body"],
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+        )
+        rendered_response_body = kotlin_string(response_body)
+        if response_probe is not None:
+            rendered_response_body += '.replace("__ICP_RUNTIME_CANARY__", responseCanary)'
+        network_setup = f"""        networkRecorder = NetworkRecorder(
+            responseStatus = {network_expectation['response_status'] or 0},
+            responseHeaders = {kotlin_string_map(network_expectation['response_headers'])},
+            responseBody = {rendered_response_body},
+            disconnectAfterRequest = {str(disconnect_after_request).lower()},
+        )
+        networkRecorder.start()
+"""
+        network_teardown = """
+    @After
+    fun stopNetworkRecorder() {
+        networkRecorder.close()
+    }
+"""
+        network_support = render_android_network_support(network_expectation)
+    if mock_expectation is not None:
+        mock_body = json.dumps(
+            mock_expectation["body"],
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        mock_setup = (
+            "        val mockPayload = "
+            + kotlin_string(mock_body)
+            + '.replace("__ICP_RUNTIME_CANARY__", responseCanary)\n'
+        )
+        mock_intent = 'intent.putExtra("icp_mock_payload", mockPayload)'
+    source = f"""package {package_name}
+
+import android.accessibilityservice.AccessibilityService
+import android.app.Instrumentation
+import android.app.UiAutomation
+import android.content.Intent
+import android.os.Bundle
+import android.view.accessibility.AccessibilityNodeInfo
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
+import java.util.ArrayDeque
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Test
+import org.junit.runner.RunWith
+{network_imports}
+{canary_import}
+
+@RunWith(AndroidJUnit4::class)
+class {simple_class} {{
+    private lateinit var instrumentation: Instrumentation
+    private lateinit var uiAutomation: UiAutomation
+    private lateinit var productionPackage: String
+{network_field}
+{canary_field}
+
+    @Before
+    fun launchProductionApp() {{
+        instrumentation = InstrumentationRegistry.getInstrumentation()
+        uiAutomation = instrumentation.uiAutomation
+{network_setup}{mock_setup}        val context = instrumentation.targetContext
+        productionPackage = context.packageName
+        val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)
+        assertNotNull("production launcher activity is missing", intent)
+        intent!!.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+        {"intent.putExtra(\"icp_api_base_url\", networkRecorder.baseUrl)" if network_expectation is not None else ""}
+        {mock_intent}
+        instrumentation.startActivitySync(intent)
+        instrumentation.waitForIdleSync()
+    }}
+{network_teardown}
+{network_support}
+
+    private fun matches(node: AccessibilityNodeInfo, tag: String): Boolean {{
+        val belongsToProductionPackage =
+            node.packageName?.toString() == productionPackage
+        if (!belongsToProductionPackage) return false
+        val resource = node.viewIdResourceName.orEmpty()
+        val descriptions = node.contentDescription?.toString().orEmpty()
+            .split(Regex("\\\\s+"))
+        return resource == tag || resource.endsWith("/$tag") || tag in descriptions
+    }}
+
+    private fun matchingNodes(tag: String): List<AccessibilityNodeInfo> {{
+        val root = uiAutomation.rootInActiveWindow ?: return emptyList()
+        val matches = mutableListOf<AccessibilityNodeInfo>()
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(root)
+        while (queue.isNotEmpty()) {{
+            val node = queue.removeFirst()
+            if (matches(node, tag)) matches.add(node)
+            repeat(node.childCount) {{ index ->
+                node.getChild(index)?.let(queue::addLast)
+            }}
+        }}
+        return matches
+    }}
+
+    private fun findNode(tag: String): AccessibilityNodeInfo? {{
+        val nodes = matchingNodes(tag)
+        assertTrue("production UI tag is not unique: $tag", nodes.size <= 1)
+        return nodes.singleOrNull()
+    }}
+
+    private fun waitForNode(tag: String, present: Boolean): AccessibilityNodeInfo? {{
+        repeat(50) {{
+            val node = findNode(tag)
+            if ((node != null) == present) return node
+            Thread.sleep(100)
+        }}
+        return findNode(tag)
+    }}
+
+    private fun requireNode(tag: String): AccessibilityNodeInfo {{
+        val node = waitForNode(tag, true)
+        assertNotNull("production UI tag is not reachable: $tag", node)
+        return node!!
+    }}
+
+    private fun nodeText(node: AccessibilityNodeInfo): String =
+        node.text?.toString() ?: node.contentDescription?.toString().orEmpty()
+
+    private fun waitForResponseValue(
+        tag: String,
+        expected: String,
+        contains: Boolean,
+    ): Boolean {{
+        repeat(50) {{
+            val actual = findNode(tag)?.let(::nodeText)
+            if (actual != null && (if (contains) actual.contains(expected) else actual == expected)) {{
+                return true
+            }}
+            Thread.sleep(100)
+        }}
+        return false
+    }}
+
+    @Test
+    fun {method_name}() {{
+{chr(10).join(body)}
+    }}
+}}
+"""
+    return source.encode("utf-8")
+
+
+def materialize_android_test_files(
+    project_root: Path, plan: dict[str, Any], *, recovering: bool
+) -> None:
+    if plan.get("platform") != "android-kotlin":
+        return
+    for planned_case in plan["integration_test_cases"]:
+        path = project_file(
+            project_root, planned_case["test_file"], "integration test file"
+        )
+        expected = render_android_test_source(planned_case)
+        if recovering:
+            if not path.is_file() or path.read_bytes() != expected:
+                raise ContractError(
+                    "test_contract_changed",
+                    "frozen test differs from its ICP-generated real UI contract: "
+                    + planned_case["case_id"],
+                )
+        else:
+            atomic_write(path, expected)
+
+
+def kotlin_class_declares_method(
+    source: str, class_name: str, method_name: str
+) -> bool:
+    executable = source_without_comments_or_literals(source)
+    for class_match in re.finditer(
+        rf"\bclass\s+{re.escape(class_name)}\b", executable
+    ):
+        body_start = executable.find("{", class_match.end())
+        if body_start < 0:
+            continue
+        depth = 0
+        body_end = None
+        for position in range(body_start, len(executable)):
+            token = executable[position]
+            if token == "{":
+                depth += 1
+            elif token == "}":
+                depth -= 1
+                if depth == 0:
+                    body_end = position
+                    break
+        if body_end is None:
+            continue
+        for method_match in re.finditer(
+            rf"\bfun\s+{re.escape(method_name)}\s*\(",
+            executable[body_start + 1 : body_end],
+        ):
+            prefix = executable[body_start + 1 : body_start + 1 + method_match.start()]
+            if prefix.count("{") == prefix.count("}"):
+                return True
+    return False
+
+
+def exact_android_test_contract(
+    project_root: Path, planned_case: dict[str, Any]
+) -> dict[str, str]:
+    class_name, method_name = android_test_identity(planned_case)
+    if not class_name or method_name != planned_case["test_name"]:
+        raise ContractError(
+            "integration_runtime_unproven",
+            f"Android test selector does not match the planned case: {planned_case['case_id']}",
+        )
+    test_path = project_file(
+        project_root, planned_case["test_file"], "integration test file"
+    )
+    if not test_path.is_file():
+        raise ContractError(
+            "integration_test_missing",
+            f"integration test file does not exist: {planned_case['test_file']}",
+        )
+    if test_path.read_bytes() != render_android_test_source(planned_case):
+        raise ContractError(
+            "test_contract_changed",
+            "frozen test differs from its ICP-generated real UI contract: "
+            + planned_case["case_id"],
+        )
+    runner_path = project_file(
+        project_root, planned_case["command"][0], "Gradle wrapper"
+    )
+    if not runner_path.is_file() or not os.access(runner_path, os.X_OK):
+        raise ContractError(
+            "integration_runtime_unproven", "the frozen Gradle wrapper is unavailable"
+        )
+    repository = subprocess.run(
+        ["git", "-C", str(project_root), "rev-parse", "--show-toplevel"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if repository.returncode == 0:
+        repository_root = Path(repository.stdout.strip()).resolve()
+        try:
+            runner_relative = runner_path.resolve().relative_to(repository_root)
+        except ValueError as exc:
+            raise ContractError(
+                "integration_runtime_unproven",
+                "the Gradle wrapper is outside the project repository",
+            ) from exc
+        baseline = subprocess.run(
+            ["git", "-C", str(repository_root), "show", f"HEAD:{runner_relative.as_posix()}"],
+            check=False,
+            capture_output=True,
+        )
+        if (
+            baseline.returncode != 0
+            or hashlib.sha256(baseline.stdout).hexdigest() != file_sha(runner_path)
+        ):
+            raise ContractError(
+                "integration_runtime_unproven",
+                "the Gradle wrapper differs from its committed repository version",
+            )
+    source = test_path.read_text(encoding="utf-8")
+    package_match = re.search(r"(?m)^\s*package\s+([A-Za-z_][\w.]*)\s*$", source)
+    simple_class = class_name.rsplit(".", 1)[-1]
+    expected_package = class_name.rsplit(".", 1)[0] if "." in class_name else ""
+    if (
+        (package_match.group(1) if package_match else "") != expected_package
+        or not kotlin_class_declares_method(source, simple_class, method_name)
+    ):
+        raise ContractError(
+            "integration_test_mismatch",
+            f"planned Android test is not declared by its test file: {planned_case['case_id']}",
+        )
+    return {
+        "class_name": class_name,
+        "method_name": method_name,
+        "test_file_sha256": file_sha(test_path),
+        "test_runner_sha256": file_sha(runner_path),
+        "device_task_path": android_device_task_path(planned_case),
+    }
+
+
+def android_device_task_path(planned_case: dict[str, Any]) -> str:
+    test_parts = Path(
+        require_relative_path(
+            planned_case.get("test_file"), "integration test file"
+        )
+    ).parts
+    try:
+        source_index = test_parts.index("src")
+    except ValueError as exc:
+        raise ContractError(
+            "integration_runtime_unproven",
+            "Android integration test is outside a Gradle module",
+        ) from exc
+    module_parts = test_parts[:source_index]
+    if not module_parts:
+        raise ContractError(
+            "integration_runtime_unproven",
+            "Android integration test module is missing",
+        )
+    command = validate_command(
+        planned_case.get("command"), "planned Android test command"
+    )
+    device_tasks = [
+        argument
+        for argument in command[1:]
+        if re.fullmatch(
+            r"(?::[A-Za-z0-9_.-]+:)?connected[A-Za-z0-9_.-]*AndroidTest",
+            argument,
+        )
+    ]
+    if len(device_tasks) != 1:
+        raise ContractError(
+            "integration_runtime_unproven", "Android device task is ambiguous"
+        )
+    simple_task = device_tasks[0].rsplit(":", 1)[-1]
+    task_path = ":" + ":".join((*module_parts, simple_task))
+    if device_tasks[0].startswith(":") and device_tasks[0] != task_path:
+        raise ContractError(
+            "integration_runtime_unproven",
+            "Android device task targets another Gradle module",
+        )
+    return task_path
+
+
+def validate_android_device_task_output(
+    stdout: str, contract: dict[str, str]
+) -> None:
+    task_path = re.escape(contract["device_task_path"])
+    path_observed = re.search(rf"(?m)^Path\s*\n\s*{task_path}\s*$", stdout)
+    type_observed = re.search(
+        r"(?m)^Type\s*\n\s*DeviceProviderInstrumentTestTask "
+        r"\(com\.android\.build\.gradle\.internal\.tasks\."
+        r"DeviceProviderInstrumentTestTask\)\s*$",
+        stdout,
+    )
+    if path_observed is None or type_observed is None:
+        raise ContractError(
+            "android_device_task_unproven",
+            "Gradle did not attest the selected task as AGP's device provider test task",
+        )
+
+
+def attest_android_runtime_installation(
+    project_root: Path,
+    plan: dict[str, Any],
+    page_key: str,
+    *,
+    device_serial: str | None,
+) -> dict[str, Any]:
+    planned_case = next(
+        (
+            case
+            for case in plan["integration_test_cases"]
+            if case["page_key"] == page_key
+        ),
+        None,
+    )
+    if planned_case is None:
+        raise ContractError(
+            "android_runtime_install_unproven",
+            f"page has no device test able to install its production APK: {page_key}",
+        )
+    contract = exact_android_test_contract(project_root, planned_case)
+    command = validate_command(
+        planned_case.get("command"), "planned Android test command"
+    )
+    build_clean = clean_android_build_outputs(
+        project_root,
+        command[0],
+        device_serial=device_serial,
+    )
+    executed_command = [
+        command[0],
+        "help",
+        "--task",
+        contract["device_task_path"],
+        contract["device_task_path"],
+    ]
+    executed_command.append(command[2])
+    clear_android_test_reports(project_root)
+    started_ns = time.time_ns()
+    try:
+        completed = subprocess.run(
+            executed_command,
+            cwd=project_root,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=1200,
+            env=android_test_environment(device_serial),
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ContractError(
+            "android_runtime_install_unproven",
+            f"cannot build, install, and test the production APK: {exc}",
+        ) from exc
+    validate_android_device_task_output(completed.stdout, contract)
+    test_result = exact_android_test_result(project_root, contract, started_ns)
+    if (
+        completed.returncode != 0
+        or test_result is None
+        or test_result["status"] != "passed"
+        or test_result["device"] not in completed.stdout
+    ):
+        raise ContractError(
+            "android_runtime_install_unproven",
+            f"AGP did not install and test the current production APK: {page_key}",
+        )
+    built_apks = android_build_apk_inventory(project_root)
+    if not built_apks:
+        raise ContractError(
+            "android_runtime_install_unproven",
+            "the clean AGP transaction produced no APK",
+        )
+    return {
+        "case_id": planned_case["case_id"],
+        "device_task_path": contract["device_task_path"],
+        "test_file_sha256": contract["test_file_sha256"],
+        "test_runner_sha256": contract["test_runner_sha256"],
+        "stdout_sha256": hashlib.sha256(completed.stdout.encode("utf-8")).hexdigest(),
+        "stderr_sha256": hashlib.sha256(completed.stderr.encode("utf-8")).hexdigest(),
+        "device_test_result": test_result,
+        "build_clean": build_clean,
+        "built_apks": built_apks,
+    }
+
+
+def validate_android_runtime_installation(
+    value: object,
+    project_root: Path,
+    plan: dict[str, Any],
+    page_key: str,
+) -> dict[str, Any]:
+    receipt = require_dict(value, "Android runtime installation receipt")
+    require_exact_keys(
+        receipt,
+        {
+            "case_id",
+            "device_task_path",
+            "test_file_sha256",
+            "test_runner_sha256",
+            "stdout_sha256",
+            "stderr_sha256",
+            "device_test_result",
+            "build_clean",
+            "built_apks",
+        },
+        "Android runtime installation receipt",
+    )
+    planned_case = next(
+        (
+            case
+            for case in plan["integration_test_cases"]
+            if case["case_id"] == receipt.get("case_id")
+            and case["page_key"] == page_key
+        ),
+        None,
+    )
+    if planned_case is None:
+        raise ContractError(
+            "android_runtime_install_unproven",
+            f"runtime installation targets another page: {page_key}",
+        )
+    contract = exact_android_test_contract(project_root, planned_case)
+    device_result = require_dict(
+        receipt.get("device_test_result"), "runtime installation device result"
+    )
+    if (
+        receipt.get("device_task_path") != contract["device_task_path"]
+        or receipt.get("test_file_sha256") != contract["test_file_sha256"]
+        or receipt.get("test_runner_sha256") != contract["test_runner_sha256"]
+        or device_result.get("class_name") != contract["class_name"]
+        or device_result.get("test_name") != contract["method_name"]
+        or device_result.get("status") != "passed"
+        or any(
+            not isinstance(receipt.get(field), str)
+            or not re.fullmatch(r"[0-9a-f]{64}", receipt[field])
+            for field in ("stdout_sha256", "stderr_sha256")
+        )
+    ):
+        raise ContractError(
+            "android_runtime_install_unproven",
+            f"runtime installation is not bound to current production code: {page_key}",
+        )
+    command = validate_command(
+        planned_case.get("command"), "planned Android test command"
+    )
+    clean = require_dict(receipt.get("build_clean"), "Android build clean receipt")
+    require_exact_keys(
+        clean,
+        {
+            "command",
+            "exit_code",
+            "stdout_sha256",
+            "stderr_sha256",
+            "stale_apk_paths",
+            "stale_apks_absent_after_clean",
+        },
+        "Android build clean receipt",
+    )
+    stale_paths = require_string_list(
+        clean.get("stale_apk_paths"), "stale APK paths", nonempty=False
+    )
+    if (
+        clean.get("command") != [command[0], "clean"]
+        or clean.get("exit_code") != 0
+        or clean.get("stale_apks_absent_after_clean") is not True
+        or stale_paths != sorted(set(stale_paths))
+        or any(
+            not isinstance(clean.get(field), str)
+            or re.fullmatch(r"[0-9a-f]{64}", clean[field]) is None
+            for field in ("stdout_sha256", "stderr_sha256")
+        )
+    ):
+        raise ContractError(
+            "android_clean_build_unproven",
+            "runtime installation did not begin from a clean Android build",
+        )
+    built_apks = validate_android_build_apk_inventory(
+        receipt.get("built_apks"), project_root
+    )
+    return {**receipt, "build_clean": clean.copy(), "built_apks": built_apks}
+
+
+def android_build_apk_inventory(project_root: Path) -> list[dict[str, Any]]:
+    result = []
+    for path in sorted(
+        (
+            path
+            for path in project_root.rglob("*.apk")
+            if "build" in path.relative_to(project_root).parts
+        ),
+        key=lambda value: value.relative_to(project_root).as_posix(),
+    ):
+        payload = path.read_bytes()
+        result.append(
+            {
+                "path": path.relative_to(project_root).as_posix(),
+                "size": len(payload),
+                "sha256": hashlib.sha256(payload).hexdigest(),
+            }
+        )
+    return result
+
+
+def validate_android_build_apk_inventory(
+    value: object, project_root: Path
+) -> list[dict[str, Any]]:
+    entries = require_list(value, "Android build APK inventory")
+    normalized: list[dict[str, Any]] = []
+    for index, raw in enumerate(entries):
+        label = f"Android build APK inventory[{index}]"
+        item = require_dict(raw, label)
+        require_exact_keys(item, {"path", "size", "sha256"}, label)
+        path = project_file(project_root, item.get("path"), label)
+        relative = path.relative_to(project_root)
+        if (
+            path.suffix != ".apk"
+            or "build" not in relative.parts
+            or type(item.get("size")) is not int
+            or item["size"] <= 0
+            or path.stat().st_size != item["size"]
+            or not isinstance(item.get("sha256"), str)
+            or file_sha(path) != item["sha256"]
+        ):
+            raise ContractError(
+                "android_runtime_install_unproven",
+                "built APK inventory changed or is invalid",
+            )
+        normalized.append(item.copy())
+    paths = [item["path"] for item in normalized]
+    if not normalized or paths != sorted(paths) or len(paths) != len(set(paths)):
+        raise ContractError(
+            "android_runtime_install_unproven",
+            "built APK inventory is empty, unordered, or ambiguous",
+        )
+    return normalized
+
+
+def validate_android_execution_transaction(
+    installation_value: object,
+    package_identity_value: object,
+    project_root: Path,
+    plan: dict[str, Any],
+    page_key: str,
+) -> dict[str, Any]:
+    installation = validate_android_runtime_installation(
+        installation_value, project_root, plan, page_key
+    )
+    package_names = {
+        capture["package_name"]
+        for capture in plan["visual_capture_cases"]
+        if capture["page_key"] == page_key
+    }
+    if len(package_names) != 1:
+        raise ContractError(
+            "android_runtime_identity_unproven",
+            f"one page targets multiple Android packages: {page_key}",
+        )
+    identity = validate_android_package_identity(
+        package_identity_value, next(iter(package_names))
+    )
+    built_by_sha: dict[str, list[str]] = {}
+    for item in installation["built_apks"]:
+        built_by_sha.setdefault(item["sha256"], []).append(item["path"])
+    unmatched = []
+    ambiguous = []
+    installed_apk_matches: list[dict[str, str]] = []
+    for installed in identity["apks"]:
+        matches = built_by_sha.get(installed["sha256"], [])
+        if not matches:
+            unmatched.append(installed["name"])
+        elif len(matches) != 1:
+            ambiguous.append({"name": installed["name"], "paths": matches})
+        else:
+            installed_apk_matches.append(
+                {
+                    "installed_name": installed["name"],
+                    "built_path": matches[0],
+                    "sha256": installed["sha256"],
+                }
+            )
+    if unmatched or ambiguous:
+        raise ContractError(
+            "android_runtime_identity_unproven",
+            "installed production APKs do not uniquely match this clean build",
+            details={"unmatched": unmatched, "ambiguous": ambiguous},
+        )
+    return {
+        "installation": installation,
+        "package_identity": identity,
+        "installed_apk_matches": installed_apk_matches,
+    }
+
+
+def clean_build_base_apk(
+    transaction: dict[str, Any], project_root: Path
+) -> tuple[Path, str]:
+    matches = [
+        item
+        for item in transaction.get("installed_apk_matches", [])
+        if isinstance(item, dict) and item.get("installed_name") == "base.apk"
+    ]
+    if len(matches) != 1:
+        raise ContractError(
+            "android_runtime_identity_unproven",
+            "installed base APK does not uniquely match the clean build",
+        )
+    path = project_file(project_root, matches[0].get("built_path"), "clean-build APK")
+    sha256 = matches[0].get("sha256")
+    if path.suffix != ".apk" or not isinstance(sha256, str) or file_sha(path) != sha256:
+        raise ContractError(
+            "android_runtime_identity_unproven",
+            "clean-build base APK changed before visual measurement",
+        )
+    return path, sha256
+
+
+def clean_android_build_outputs(
+    project_root: Path,
+    gradle_executable: str,
+    *,
+    device_serial: str | None,
+) -> dict[str, Any]:
+    stale_apks = sorted(
+        str(path.relative_to(project_root))
+        for path in project_root.rglob("*.apk")
+        if "build" in path.relative_to(project_root).parts
+    )
+    clean_command = [gradle_executable, "clean"]
+    try:
+        clean_result = subprocess.run(
+            clean_command,
+            cwd=project_root,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=1200,
+            env=android_test_environment(device_serial),
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ContractError(
+            "build_clean_failed", f"cannot clean prior build outputs: {exc}"
+        ) from exc
+    remaining_apks = [
+        path
+        for path in project_root.rglob("*.apk")
+        if "build" in path.relative_to(project_root).parts
+    ]
+    if clean_result.returncode != 0 or remaining_apks:
+        raise ContractError(
+            "build_clean_failed",
+            "prior Gradle APK outputs were not removed before Android execution",
+        )
+    return {
+        "command": clean_command,
+        "exit_code": clean_result.returncode,
+        "stdout_sha256": hashlib.sha256(
+            clean_result.stdout.encode("utf-8")
+        ).hexdigest(),
+        "stderr_sha256": hashlib.sha256(
+            clean_result.stderr.encode("utf-8")
+        ).hexdigest(),
+        "stale_apk_paths": stale_apks,
+        "stale_apks_absent_after_clean": True,
+    }
+
+
+def validate_android_package_identity(
+    value: object, expected_package_name: str
+) -> dict[str, Any]:
+    identity = require_dict(value, "installed Android package identity")
+    require_exact_keys(
+        identity,
+        {"package_name", "apks", "sha256"},
+        "installed Android package identity",
+    )
+    apks = require_list(identity.get("apks"), "installed Android APK identities")
+    normalized: list[dict[str, Any]] = []
+    names: list[str] = []
+    for index, value in enumerate(apks):
+        item = require_dict(value, f"installed Android APK identities[{index}]")
+        require_exact_keys(
+            item,
+            {"name", "size", "sha256"},
+            f"installed Android APK identities[{index}]",
+        )
+        name = require_string(item.get("name"), "installed Android APK name")
+        size = item.get("size")
+        sha256 = item.get("sha256")
+        if (
+            not name.endswith(".apk")
+            or type(size) is not int
+            or size <= 0
+            or not isinstance(sha256, str)
+            or re.fullmatch(r"[0-9a-f]{64}", sha256) is None
+        ):
+            raise ContractError(
+                "android_runtime_identity_unproven",
+                "installed Android APK identity is invalid",
+            )
+        names.append(name)
+        normalized.append(item.copy())
+    if (
+        identity.get("package_name") != expected_package_name
+        or not normalized
+        or names != sorted(names)
+        or len(names) != len(set(names))
+        or identity.get("sha256") != digest(normalized)
+    ):
+        raise ContractError(
+            "android_runtime_identity_unproven",
+            "installed Android package identity is not deterministic",
+        )
+    return {
+        "package_name": expected_package_name,
+        "apks": normalized,
+        "sha256": identity["sha256"],
+    }
+
+
+def validate_android_package_reset(
+    value: object, expected_package_name: str
+) -> dict[str, Any]:
+    reset = require_dict(value, "Android package reset evidence")
+    require_exact_keys(
+        reset,
+        {"package_name", "was_installed", "absent_after_reset"},
+        "Android package reset evidence",
+    )
+    if (
+        reset.get("package_name") != expected_package_name
+        or type(reset.get("was_installed")) is not bool
+        or reset.get("absent_after_reset") is not True
+    ):
+        raise ContractError(
+            "android_clean_install_unproven",
+            "previous Android production package was not cleanly removed",
+        )
+    return reset.copy()
+
+
+def clear_android_test_reports(project_root: Path) -> None:
+    for report in project_root.glob("**/build/outputs/androidTest-results/**/TEST-*.xml"):
+        if report.is_file():
+            report.unlink()
+
+
+def exact_android_test_result(
+    project_root: Path, contract: dict[str, str], not_before_ns: int
+) -> dict[str, Any] | None:
+    matches: list[tuple[Path, ET.Element, str]] = []
+    for report in project_root.glob("**/build/outputs/androidTest-results/**/TEST-*.xml"):
+        if not report.is_file():
+            continue
+        if report.stat().st_mtime_ns < not_before_ns:
+            continue
+        try:
+            root = ET.parse(report).getroot()
+        except (ET.ParseError, OSError):
+            continue
+        for suite in root.iter("testsuite"):
+            property_devices = {
+                property_node.get("value")
+                for property_node in suite.findall("./properties/property")
+                if property_node.get("name") == "device"
+                and isinstance(property_node.get("value"), str)
+                and property_node.get("value")
+            }
+            attribute_device = suite.get("device") or root.get("device")
+            if len(property_devices) > 1 or (
+                property_devices
+                and isinstance(attribute_device, str)
+                and attribute_device
+                and attribute_device not in property_devices
+            ):
+                continue
+            device = (
+                next(iter(property_devices))
+                if property_devices
+                else attribute_device
+            )
+            if not isinstance(device, str) or not device:
+                report_name = re.fullmatch(
+                    r"TEST-(.+)-_[^/]+-", report.stem
+                )
+                device = report_name.group(1) if report_name else None
+            timestamp = suite.get("timestamp") or root.get("timestamp")
+            if not timestamp or not isinstance(device, str) or not device:
+                continue
+            for testcase in suite.findall("testcase"):
+                if (
+                    testcase.get("classname") == contract["class_name"]
+                    and testcase.get("name") == contract["method_name"]
+                ):
+                    matches.append((report, testcase, device))
+    if not matches:
+        return None
+    outcomes = {
+        (
+            device,
+            "skipped"
+            if testcase.find("skipped") is not None
+            else (
+                "failed"
+                if testcase.find("failure") is not None
+                or testcase.find("error") is not None
+                else "passed"
+            ),
+        )
+        for _report, testcase, device in matches
+    }
+    if len(outcomes) != 1:
+        return None
+    report, _testcase, device = max(
+        matches, key=lambda item: item[0].stat().st_mtime_ns
+    )
+    status = next(iter(outcomes))[1]
+    return {
+        "report_path": str(report.relative_to(project_root)),
+        "report_sha256": file_sha(report),
+        "class_name": contract["class_name"],
+        "test_name": contract["method_name"],
+        "device": device,
+        "status": status,
+    }
+
+
+def validate_tdd_evidence(
+    project_root: Path,
+    plan: dict[str, Any],
+    evidence: dict[str, Any],
+    *,
+    require_complete: bool,
+) -> None:
+    if (
+        evidence.get("schema") != "icp.implementation.tdd-evidence.v1"
+        or evidence.get("implementation_plan_sha256")
+        != hashlib.sha256(json_bytes(plan)).hexdigest()
+    ):
+        raise ContractError("stage_drift", "TDD evidence targets another plan")
+    evidence_cases = require_list(evidence.get("cases"), "TDD evidence cases")
+    if len(evidence_cases) != len(plan["integration_test_cases"]):
+        raise ContractError("stage_drift", "TDD evidence case coverage changed")
+    identity_fields = (
+        "case_id",
+        "obligation_id",
+        "source_kind",
+        "fact_id",
+        "basis_fact_ids",
+        "component_instance_id",
+        "page_key",
+        "command",
+    )
+    build_baselines: list[dict[str, Any]] = []
+    for planned_case, evidence_value in zip(
+        plan["integration_test_cases"], evidence_cases, strict=True
+    ):
+        evidence_case = require_dict(evidence_value, "TDD evidence case")
+        if any(evidence_case.get(key) != planned_case.get(key) for key in identity_fields):
+            raise ContractError(
+                "stage_drift",
+                f"TDD evidence identity changed: {planned_case['case_id']}",
+            )
+        for phase, expected_status in (("red", "failed"), ("green", "passed")):
+            result_value = evidence_case.get(phase)
+            if result_value is None:
+                if require_complete:
+                    raise ContractError(
+                        "tdd_incomplete",
+                        "every integration case needs RED and GREEN evidence",
+                    )
+                continue
+            result = require_dict(result_value, f"{phase} TDD result")
+            exit_code = result.get("exit_code")
+            if not isinstance(exit_code, int) or isinstance(exit_code, bool):
+                raise ContractError("tdd_evidence_invalid", "TDD exit code is invalid")
+            if (phase == "red" and exit_code == 0) or (
+                phase == "green" and exit_code != 0
+            ):
+                raise ContractError(
+                    "tdd_evidence_invalid",
+                    f"{phase.upper()} command outcome is invalid: {planned_case['case_id']}",
+                )
+            baseline_value = result.get("build_baseline")
+            if baseline_value is not None:
+                if phase != "red":
+                    raise ContractError(
+                        "tdd_evidence_invalid",
+                        "the clean build baseline may only be attached to RED evidence",
+                    )
+                baseline = require_dict(
+                    baseline_value, "clean build baseline"
+                )
+                require_exact_keys(
+                    baseline,
+                    {
+                        "command",
+                        "exit_code",
+                        "stdout_sha256",
+                        "stderr_sha256",
+                        "stale_apk_paths",
+                        "stale_apks_absent_after_clean",
+                    },
+                    "clean build baseline",
+                )
+                stale_paths = require_string_list(
+                    baseline.get("stale_apk_paths"),
+                    "stale APK paths",
+                    nonempty=False,
+                )
+                if (
+                    baseline.get("command") != ["./gradlew", "clean"]
+                    or baseline.get("exit_code") != 0
+                    or not isinstance(baseline.get("stdout_sha256"), str)
+                    or not isinstance(baseline.get("stderr_sha256"), str)
+                    or baseline.get("stale_apks_absent_after_clean") is not True
+                    or stale_paths != sorted(set(stale_paths))
+                ):
+                    raise ContractError(
+                        "tdd_evidence_invalid", "clean build baseline is invalid"
+                    )
+                build_baselines.append(baseline)
+            if plan["platform"] != "android-kotlin":
+                continue
+            test_contract = exact_android_test_contract(project_root, planned_case)
+            device_result = require_dict(
+                result.get("device_test_result"), f"{phase} device test result"
+            )
+            if (
+                result.get("test_file_sha256")
+                != test_contract["test_file_sha256"]
+                or result.get("test_runner_sha256")
+                != test_contract["test_runner_sha256"]
+                or result.get("device_task_path")
+                != test_contract["device_task_path"]
+                or device_result.get("class_name") != test_contract["class_name"]
+                or device_result.get("test_name") != test_contract["method_name"]
+                or device_result.get("status") != expected_status
+            ):
+                raise ContractError(
+                    "test_contract_changed",
+                    f"frozen device test differs at final verification: {planned_case['case_id']}",
+                )
+    recorded_reds = [
+        item
+        for item in evidence_cases
+        if isinstance(item, dict) and item.get("red") is not None
+    ]
+    if recorded_reds and len(build_baselines) != 1:
+        raise ContractError(
+            "tdd_evidence_invalid",
+            "exactly one clean build baseline is required before the first RED",
+        )
+
+
+def validate_case_transaction(
+    stage_dir: Path,
+    state: dict[str, Any],
+    evidence_path: Path,
+    evidence: dict[str, Any],
+) -> None:
+    transaction_path = stage_dir / "case-transaction.json"
+    transaction = (
+        require_dict(read_json(transaction_path), "case transaction")
+        if transaction_path.is_file()
+        else {}
+    )
+    actual_evidence_sha = file_sha(evidence_path)
+    evidence_cases = require_list(evidence.get("cases"), "TDD evidence cases")
+    recovered_case = next(
+        (
+            item
+            for item in evidence_cases
+            if isinstance(item, dict)
+            and item.get("case_id") == transaction.get("case_id")
+        ),
+        None,
+    )
+    phase = transaction.get("phase")
+    recovered_result = (
+        recovered_case.get(phase)
+        if isinstance(recovered_case, dict) and phase in {"red", "green"}
+        else None
+    )
+    if (
+        transaction.get("schema") != "icp.implementation.case-transaction"
+        or transaction.get("implementation_plan_sha256")
+        != state.get("implementation_plan_sha256")
+        or transaction.get("previous_evidence_sha256")
+        != state.get("tdd_evidence_sha256")
+        or transaction.get("next_evidence_sha256") != actual_evidence_sha
+        or not isinstance(recovered_result, dict)
+        or digest(recovered_result) != transaction.get("result_sha256")
+    ):
+        raise ContractError("stage_drift", "TDD evidence changed")
+
+
 def run_case_locked(
     args: argparse.Namespace, project_root: Path
 ) -> dict[str, Any]:
@@ -2627,9 +5013,43 @@ def run_case_locked(
         raise ContractError("stage_drift", "implementation plan changed")
     plan = validate_plan(read_json(plan_path), state, universe)
     evidence_path = stage_dir / "tdd-evidence.json"
-    if not evidence_path.is_file() or file_sha(evidence_path) != state.get("tdd_evidence_sha256"):
-        raise ContractError("stage_drift", "TDD evidence changed")
+    transaction_path = stage_dir / "case-transaction.json"
+    if not evidence_path.is_file():
+        raise ContractError("stage_drift", "TDD evidence is missing")
+    actual_evidence_sha = file_sha(evidence_path)
+    if actual_evidence_sha != state.get("tdd_evidence_sha256"):
+        recovered_evidence = require_dict(read_json(evidence_path), "TDD evidence")
+        validate_case_transaction(
+            stage_dir, state, evidence_path, recovered_evidence
+        )
+        transaction = require_dict(read_json(transaction_path), "case transaction")
+        recovered_cases = require_list(
+            recovered_evidence.get("cases"), "TDD evidence cases"
+        )
+        recovered_case = next(
+            (
+                item
+                for item in recovered_cases
+                if isinstance(item, dict)
+                and item.get("case_id") == transaction.get("case_id")
+            ),
+            None,
+        )
+        recovered_result = (
+            recovered_case.get(transaction.get("phase"))
+            if isinstance(recovered_case, dict)
+            else None
+        )
+        state["tdd_evidence_sha256"] = actual_evidence_sha
+        if all(item.get("green") is not None for item in recovered_cases):
+            state["state"] = "awaiting_verification"
+        elif all(item.get("red") is not None for item in recovered_cases):
+            state["state"] = "awaiting_implementation"
+        else:
+            state["state"] = "awaiting_red"
+        atomic_write_json(stage_dir / "state.json", state)
     evidence = require_dict(read_json(evidence_path), "TDD evidence")
+    validate_tdd_evidence(project_root, plan, evidence, require_complete=False)
     case_id = args.case_id
     planned_case = next(
         (item for item in plan["integration_test_cases"] if item["case_id"] == case_id),
@@ -2642,6 +5062,50 @@ def run_case_locked(
         raise ContractError("unknown_case", f"unknown integration case: {case_id}")
     phase = args.phase
     checklist_node_id = f"case:{planned_case['obligation_id']}.{phase}"
+    recorded_result = evidence_case.get(phase)
+    if recorded_result is not None:
+        recorded_result = require_dict(recorded_result, f"recorded {phase} result")
+        if plan["platform"] == "android-kotlin":
+            test_contract = exact_android_test_contract(project_root, planned_case)
+            device_result = require_dict(
+                recorded_result.get("device_test_result"),
+                f"recorded {phase} device test result",
+            )
+            expected_status = "failed" if phase == "red" else "passed"
+            if (
+                recorded_result.get("test_file_sha256")
+                != test_contract["test_file_sha256"]
+                or recorded_result.get("test_runner_sha256")
+                != test_contract["test_runner_sha256"]
+                or recorded_result.get("device_task_path")
+                != test_contract["device_task_path"]
+                or device_result.get("class_name") != test_contract["class_name"]
+                or device_result.get("test_name") != test_contract["method_name"]
+                or device_result.get("status") != expected_status
+            ):
+                raise ContractError(
+                    "stage_drift",
+                    f"recorded {phase} result differs from its frozen device test: {case_id}",
+                )
+        implementation_checklist_call(
+            stage_dir,
+            state,
+            universe,
+            "complete",
+            node_id=checklist_node_id,
+            evidence_sha256=digest(recorded_result),
+        )
+        if transaction_path.is_file():
+            transaction_path.unlink()
+        return {
+            "ok": True,
+            "stage": "implementation",
+            "state": state["state"],
+            "case_id": case_id,
+            "phase": phase,
+            "exit_code": recorded_result.get("exit_code"),
+            "recovered": True,
+        }
     if phase == "red":
         if state.get("state") not in {"awaiting_red", "awaiting_implementation"} or evidence_case.get("red") is not None:
             raise ContractError("invalid_state", f"RED is not pending for {case_id}")
@@ -2656,6 +5120,54 @@ def run_case_locked(
             raise ContractError("red_required", f"a fresh RED is required for {case_id}")
     else:
         raise ContractError("invalid_phase", f"unsupported TDD phase: {phase}")
+    command = validate_command(planned_case.get("command"), "planned test command")
+    android_test_contract = (
+        exact_android_test_contract(project_root, planned_case)
+        if plan["platform"] == "android-kotlin"
+        else None
+    )
+    if (
+        phase == "green"
+        and android_test_contract is not None
+        and (
+            evidence_case["red"].get("test_file_sha256")
+            != android_test_contract["test_file_sha256"]
+            or evidence_case["red"].get("test_runner_sha256")
+            != android_test_contract["test_runner_sha256"]
+        )
+    ):
+        raise ContractError(
+            "test_contract_changed",
+            f"integration test changed between RED and GREEN: {case_id}",
+        )
+    if android_test_contract is not None:
+        clear_android_test_reports(project_root)
+    build_baseline = None
+    if phase == "red" and all(item.get("red") is None for item in evidence["cases"]):
+        implementation_checklist_call(
+            stage_dir,
+            state,
+            universe,
+            "ready",
+            node_id="build.clean",
+        )
+        build_baseline = clean_android_build_outputs(
+            project_root,
+            command[0],
+            device_serial=(
+                getattr(args, "device_serial", None)
+                if android_test_contract is not None
+                else None
+            ),
+        )
+        implementation_checklist_call(
+            stage_dir,
+            state,
+            universe,
+            "complete",
+            node_id="build.clean",
+            evidence_sha256=digest(build_baseline),
+        )
     implementation_checklist_call(
         stage_dir,
         state,
@@ -2663,15 +5175,30 @@ def run_case_locked(
         "ready",
         node_id=checklist_node_id,
     )
-    command = validate_command(planned_case.get("command"), "planned test command")
+    command_started_ns = time.time_ns()
+    executed_command = command
+    if android_test_contract is not None:
+        executed_command = [
+            command[0],
+            "help",
+            "--task",
+            android_test_contract["device_task_path"],
+            android_test_contract["device_task_path"],
+            command[2],
+        ]
     try:
         completed = subprocess.run(
-            command,
+            executed_command,
             cwd=project_root,
             check=False,
             capture_output=True,
             text=True,
             timeout=1200,
+            env=android_test_environment(
+                getattr(args, "device_serial", None)
+                if android_test_contract is not None
+                else None
+            ),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise ContractError("test_command_failed", f"cannot execute {case_id}: {exc}") from exc
@@ -2682,11 +5209,55 @@ def run_case_locked(
         "stdout_tail": completed.stdout[-4000:],
         "stderr_tail": completed.stderr[-4000:],
     }
-    if phase == "red" and completed.returncode == 0:
+    if build_baseline is not None:
+        result["build_baseline"] = build_baseline
+    if android_test_contract is not None:
+        validate_android_device_task_output(completed.stdout, android_test_contract)
+        test_result = exact_android_test_result(
+            project_root, android_test_contract, command_started_ns
+        )
+        if test_result is None:
+            raise ContractError(
+                f"{phase}_result_unproven",
+                f"exact Android device test result is missing: {case_id}",
+            )
+        if test_result["device"] not in completed.stdout:
+            raise ContractError(
+                f"{phase}_result_unproven",
+                f"Android device identity is absent from the Gradle execution: {case_id}",
+            )
+        result["test_file_sha256"] = android_test_contract["test_file_sha256"]
+        result["test_runner_sha256"] = android_test_contract[
+            "test_runner_sha256"
+        ]
+        result["device_task_path"] = android_test_contract["device_task_path"]
+        result["device_test_result"] = test_result
+        expected_status = "failed" if phase == "red" else "passed"
+        expected_exit = completed.returncode != 0 if phase == "red" else completed.returncode == 0
+        if test_result["status"] != expected_status or not expected_exit:
+            code = "red_not_observed" if phase == "red" else "green_not_observed"
+            raise ContractError(
+                code,
+                f"exact Android device test did not {expected_status}: {case_id}",
+            )
+    elif phase == "red" and completed.returncode == 0:
         raise ContractError("red_not_observed", f"test already passes before implementation: {case_id}")
-    if phase == "green" and completed.returncode != 0:
+    elif phase == "green" and completed.returncode != 0:
         raise ContractError("green_not_observed", f"test still fails after implementation: {case_id}")
     evidence_case[phase] = result
+    next_evidence_sha = hashlib.sha256(json_bytes(evidence)).hexdigest()
+    atomic_write_json(
+        transaction_path,
+        {
+            "schema": "icp.implementation.case-transaction",
+            "implementation_plan_sha256": state["implementation_plan_sha256"],
+            "case_id": case_id,
+            "phase": phase,
+            "previous_evidence_sha256": state["tdd_evidence_sha256"],
+            "next_evidence_sha256": next_evidence_sha,
+            "result_sha256": digest(result),
+        },
+    )
     atomic_write_json(evidence_path, evidence)
     state["tdd_evidence_sha256"] = file_sha(evidence_path)
     if all(item.get("green") is not None for item in evidence["cases"]):
@@ -2704,6 +5275,7 @@ def run_case_locked(
         node_id=checklist_node_id,
         evidence_sha256=digest(result),
     )
+    transaction_path.unlink(missing_ok=True)
     return {
         "ok": True,
         "stage": "implementation",
@@ -2861,6 +5433,191 @@ def image_mae(reference: Path, actual: Path) -> tuple[int, int, float]:
     return width, height, mae
 
 
+def validate_color_pixel_evidence(
+    reference_screenshot: Path,
+    screenshot: Path,
+    assertions: list[dict[str, Any]],
+    measurements: dict[str, Any],
+    logical_scale: object,
+) -> list[dict[str, Any]]:
+    """Bind opaque colors to the reference footprint and production screenshot."""
+
+    try:
+        scale = Fraction(logical_scale)
+    except (TypeError, ValueError, ZeroDivisionError) as exc:
+        raise ContractError(
+            "reference_viewport_measurement_failed",
+            "captured production pixel scale is invalid",
+        ) from exc
+    if scale <= 0:
+        raise ContractError(
+            "reference_viewport_measurement_failed",
+            "captured production pixel scale is invalid",
+        )
+    reference_width, reference_height, reference_pixels = read_png_rgba(
+        reference_screenshot
+    )
+    width, height, pixels = read_png_rgba(screenshot)
+    if (reference_width, reference_height) != (width, height):
+        raise ContractError(
+            "reference_viewport_measurement_failed",
+            "reference and production color evidence sizes differ",
+        )
+    measured = require_list(
+        measurements.get("measurements"), "reference viewport measurements"
+    )
+    by_probe_and_kind = {
+        (item.get("probe_tag"), item.get("kind")): item.get("actual")
+        for value in measured
+        for item in [require_dict(value, "reference viewport measurement")]
+    }
+    assertions_by_probe_and_kind = {
+        (item.get("probe_tag"), item.get("kind")): item for item in assertions
+    }
+
+    def pixel_bounds(
+        bounds: dict[str, Any], assertion_id: str
+    ) -> tuple[int, int, int, int]:
+        try:
+            left = max(0, math.floor(float(Fraction(str(bounds["left"])) * scale)))
+            top = max(0, math.floor(float(Fraction(str(bounds["top"])) * scale)))
+            right = min(
+                width,
+                math.ceil(
+                    float(
+                        (Fraction(str(bounds["left"])) + Fraction(str(bounds["width"])))
+                        * scale
+                    )
+                ),
+            )
+            bottom = min(
+                height,
+                math.ceil(
+                    float(
+                        (Fraction(str(bounds["top"])) + Fraction(str(bounds["height"])))
+                        * scale
+                    )
+                ),
+            )
+        except (KeyError, TypeError, ValueError, ZeroDivisionError) as exc:
+            raise ContractError(
+                "reference_viewport_measurement_failed",
+                f"color pixel bounds are invalid: {assertion_id}",
+            ) from exc
+        if right <= left or bottom <= top:
+            raise ContractError(
+                "reference_viewport_measurement_failed",
+                f"color pixel bounds are empty: {assertion_id}",
+            )
+        return left, top, right, bottom
+
+    def matching_pixels(
+        image_pixels: list[tuple[int, int, int, int]],
+        region: tuple[int, int, int, int],
+        target: tuple[int, int, int],
+    ) -> list[tuple[int, int, tuple[int, int, int, int]]]:
+        left, top, right, bottom = region
+        return [
+            (x, y, image_pixels[y * width + x])
+            for y in range(top, bottom)
+            for x in range(left, right)
+            if image_pixels[y * width + x][3] >= 250
+            and max(
+                abs(image_pixels[y * width + x][index] - target[index])
+                for index in range(3)
+            )
+            <= 8
+        ]
+
+    observations: list[dict[str, Any]] = []
+    for assertion in assertions:
+        if assertion.get("kind") != "color":
+            continue
+        expected = assertion.get("expected")
+        if not isinstance(expected, dict) or expected.get("a") != 255:
+            continue
+        probe_tag = assertion["probe_tag"]
+        bounds = by_probe_and_kind.get((probe_tag, "bounds"))
+        if (
+            not isinstance(bounds, dict)
+            or set(bounds) != {"left", "top", "width", "height"}
+        ):
+            raise ContractError(
+                "reference_viewport_measurement_failed",
+                f"color has no hierarchy-bound pixel region: {assertion['assertion_id']}",
+            )
+        bounds_assertion = assertions_by_probe_and_kind.get((probe_tag, "bounds"))
+        reference_bounds = (
+            bounds_assertion.get("expected")
+            if isinstance(bounds_assertion, dict)
+            else None
+        )
+        if (
+            not isinstance(reference_bounds, dict)
+            or set(reference_bounds) != {"left", "top", "width", "height"}
+        ):
+            raise ContractError(
+                "reference_viewport_measurement_failed",
+                f"color has no frozen reference region: {assertion['assertion_id']}",
+            )
+        target = tuple(expected[channel] for channel in ("r", "g", "b"))
+        reference_matches = matching_pixels(
+            reference_pixels,
+            pixel_bounds(reference_bounds, assertion["assertion_id"]),
+            target,
+        )
+        actual_matches = matching_pixels(
+            pixels,
+            pixel_bounds(bounds, assertion["assertion_id"]),
+            target,
+        )
+        if not reference_matches:
+            raise ContractError(
+                "reference_viewport_measurement_failed",
+                "claimed color is absent from its frozen reference region: "
+                + assertion["assertion_id"],
+            )
+        if not actual_matches:
+            raise ContractError(
+                "reference_viewport_measurement_failed",
+                "claimed color is absent from captured production pixels: "
+                + assertion["assertion_id"],
+            )
+        exact_footprint = (
+            isinstance(bounds_assertion, dict)
+            and bounds_assertion.get("mode") == "exact_at_reference"
+        )
+        if exact_footprint and len(actual_matches) < len(reference_matches):
+            raise ContractError(
+                "reference_viewport_measurement_failed",
+                "captured production pixels do not cover the frozen reference color footprint: "
+                + assertion["assertion_id"],
+                details={
+                    "reference_pixel_count": len(reference_matches),
+                    "actual_pixel_count": len(actual_matches),
+                },
+            )
+        x, y, pixel = actual_matches[0]
+        observations.append(
+            {
+                "assertion_id": assertion["assertion_id"],
+                "probe_tag": probe_tag,
+                "source": "captured_production_pixels",
+                "pixel": {
+                    "x": x,
+                    "y": y,
+                    "r": pixel[0],
+                    "g": pixel[1],
+                    "b": pixel[2],
+                    "a": pixel[3],
+                },
+                "reference_pixel_count": len(reference_matches),
+                "actual_pixel_count": len(actual_matches),
+            }
+        )
+    return observations
+
+
 def write_png_rgba(
     path: Path, width: int, height: int, pixels: list[tuple[int, int, int, int]]
 ) -> None:
@@ -2954,10 +5711,50 @@ def validate_device_configuration(value: object, label: str) -> dict[str, Any]:
     return config.copy()
 
 
+def frozen_device_baseline(
+    stage_dir: Path,
+    state: dict[str, Any],
+    baseline_key: str,
+    baseline_path: Path,
+    observed: dict[str, Any],
+) -> dict[str, Any]:
+    baselines = state.setdefault("device_baselines", {})
+    if not isinstance(baselines, dict):
+        raise ContractError("stage_drift", "device baseline registry changed")
+    if baseline_path.is_file():
+        expected_sha = baselines.get(baseline_key)
+        if not isinstance(expected_sha, str) or file_sha(baseline_path) != expected_sha:
+            raise ContractError("stage_drift", "frozen device baseline changed")
+        frozen = validate_device_configuration(
+            read_json(baseline_path), "frozen device baseline"
+        )
+        current = validate_device_configuration(
+            observed, "observed device baseline"
+        )
+        if current != frozen:
+            raise ContractError(
+                "visual_baseline_drift",
+                "device configuration drifted from the first frozen baseline",
+                details={"frozen": frozen, "observed": current},
+            )
+        return frozen
+    atomic_write_json(baseline_path, observed)
+    baselines[baseline_key] = file_sha(baseline_path)
+    atomic_write_json(stage_dir / "state.json", state)
+    return observed
+
+
 def run_driver(
-    driver: str, operation: str, package_name: str, **paths: Path
+    driver: str,
+    operation: str,
+    package_name: str,
+    *,
+    device_serial: str | None = None,
+    **paths: Path,
 ) -> subprocess.CompletedProcess[str]:
     command = [driver, operation, "--package", package_name]
+    if device_serial is not None:
+        command.extend(["--serial", device_serial])
     for field, path in paths.items():
         command.extend(["--" + field.replace("_", "-"), str(path)])
     try:
@@ -2972,6 +5769,36 @@ def run_driver(
         raise ContractError(
             "visual_capture_failed", f"cannot run visual driver {operation}: {exc}"
         ) from exc
+
+
+def require_trusted_android_driver(value: object) -> str:
+    driver = Path(require_string(value, "visual driver")).resolve()
+    if driver != ANDROID_VISUAL_DRIVER.resolve():
+        raise ContractError(
+            "untrusted_runtime_driver",
+            "runtime evidence must be produced by ICP's Android driver",
+        )
+    return str(driver)
+
+
+def complete_code_coverage_preflight(
+    project_root: Path,
+    stage_dir: Path,
+    state: dict[str, Any],
+    universe: dict[str, Any],
+    plan: dict[str, Any],
+    page_key: str,
+) -> dict[str, Any]:
+    manifest = verify_code_coverage(project_root, plan, universe, page_key)
+    implementation_checklist_call(
+        stage_dir,
+        state,
+        universe,
+        "complete",
+        node_id=f"implementation.code-coverage:{page_key}",
+        evidence_sha256=digest(manifest),
+    )
+    return manifest
 
 
 def validate_cold_start_evidence(value: object) -> dict[str, Any]:
@@ -3030,14 +5857,28 @@ def validate_interaction_evidence(
     value: object, expected_steps: list[dict[str, str]]
 ) -> dict[str, Any]:
     evidence = require_dict(value, "visual interaction evidence")
-    require_exact_keys(evidence, {"schema", "steps"}, "visual interaction evidence")
+    require_exact_keys(
+        evidence,
+        {
+            "schema",
+            "steps",
+            "initial_state_absent",
+            "terminal_state_present",
+        },
+        "visual interaction evidence",
+    )
     steps = require_list(evidence.get("steps"), "visual interaction steps")
-    if evidence.get("schema") != "icp.visual-interaction.v1" or steps != expected_steps:
+    if (
+        evidence.get("schema") != "icp.visual-interaction.v1"
+        or steps != expected_steps
+        or evidence.get("initial_state_absent") is not bool(expected_steps)
+        or evidence.get("terminal_state_present") is not True
+    ):
         raise ContractError(
             "visual_production_path_unproven",
             "visual driver did not execute the frozen production interaction trace",
         )
-    return {"schema": evidence["schema"], "steps": steps}
+    return evidence.copy()
 
 
 def validate_production_state_evidence(
@@ -3067,6 +5908,8 @@ def validate_measurement_evidence(
     expected_visual_state_id: str,
     expected_root_tag: str,
     assertions: list[dict[str, Any]],
+    logical_scale: object,
+    expected_apk_sha256: str | None = None,
 ) -> dict[str, Any]:
     evidence = require_dict(value, "reference viewport measurements")
     require_exact_keys(
@@ -3091,20 +5934,53 @@ def validate_measurement_evidence(
     ):
         label = f"reference viewport measurements[{index}]"
         measurement = require_dict(raw, label)
-        require_exact_keys(
-            measurement, {"assertion_id", "probe_tag", "kind", "actual"}, label
-        )
         assertion_id = require_string(
             measurement.get("assertion_id"), f"{label}.assertion_id"
         )
         assertion = expected.get(assertion_id)
+        typography_from_apk = (
+            assertion is not None
+            and assertion.get("kind") in {"font_size", "line_height"}
+            and expected_apk_sha256 is not None
+        )
+        require_exact_keys(
+            measurement,
+            {"assertion_id", "probe_tag", "kind", "actual"}
+            | ({"source", "apk_sha256"} if typography_from_apk else set()),
+            label,
+        )
         actual = measurement.get("actual")
+        color_payload_shape_valid = (
+            assertion is not None
+            and assertion.get("kind") == "color"
+            and isinstance(assertion.get("expected"), dict)
+            and assertion["expected"].get("a") == 255
+            and isinstance(actual, dict)
+            and set(actual) == {"r", "g", "b", "a"}
+            and all(
+                not isinstance(value, bool)
+                and isinstance(value, (int, float))
+                and math.isfinite(float(value))
+                and 0 <= float(value) <= 255
+                for value in actual.values()
+            )
+        )
         if (
             assertion is None
             or assertion_id in seen
             or measurement.get("probe_tag") != assertion["probe_tag"]
             or measurement.get("kind") != assertion["kind"]
-            or not evaluate_reference_assertion(assertion, actual)
+            or (
+                typography_from_apk
+                and (
+                    measurement.get("source") != "clean_build_apk"
+                    or measurement.get("apk_sha256") != expected_apk_sha256
+                )
+            )
+            or (
+                not color_payload_shape_valid
+                and not evaluate_reference_assertion(assertion, actual, logical_scale)
+            )
         ):
             raise ContractError(
                 "reference_viewport_measurement_failed",
@@ -3130,6 +6006,37 @@ def validate_measurement_evidence(
     }
 
 
+def runtime_scroll_obligations(layout_contract: dict[str, Any]) -> list[dict[str, Any]]:
+    nodes = layout_contract["component_tree"]["nodes_by_instance_id"]
+    obligations: list[dict[str, Any]] = []
+    for assertion in layout_contract["responsive_assertions"]:
+        if assertion.get("kind") != "scroll_reachability":
+            continue
+        container_id = assertion["container_instance_id"]
+        required_ids: list[str] = []
+        for instance_id in nodes:
+            current_id: str | None = instance_id
+            while current_id is not None:
+                if current_id == container_id:
+                    required_ids.append(instance_id)
+                    break
+                current = nodes.get(current_id)
+                current_id = (
+                    current.get("parent_instance_id")
+                    if isinstance(current, dict)
+                    else None
+                )
+        obligations.append(
+            {
+                "decision_id": assertion["decision_id"],
+                "container_instance_id": container_id,
+                "axis": assertion["axis"],
+                "required_instance_ids": sorted(required_ids),
+            }
+        )
+    return obligations
+
+
 def capture_visual(args: argparse.Namespace) -> dict[str, Any]:
     project_root = Path(args.project_root).resolve()
     stage_dir, state, universe = load_live_stage(project_root)
@@ -3139,6 +6046,7 @@ def capture_visual(args: argparse.Namespace) -> dict[str, Any]:
     ):
         raise ContractError("stage_drift", "implementation plan changed")
     plan = validate_plan(read_json(plan_path), state, universe)
+    driver = require_trusted_android_driver(args.driver)
     design_name = args.design_name
     reference = next(
         (item for item in universe["visual_references"] if item["design_name"] == design_name),
@@ -3150,6 +6058,12 @@ def capture_visual(args: argparse.Namespace) -> dict[str, Any]:
     )
     if reference is None or capture_case is None:
         raise ContractError("visual_capture_failed", f"unknown design state: {design_name}")
+    reference_path = project_file(project_root, reference["path"], "visual reference")
+    if file_sha(reference_path) != reference["sha256"]:
+        raise ContractError("stage_drift", f"visual reference changed: {design_name}")
+    complete_code_coverage_preflight(
+        project_root, stage_dir, state, universe, plan, capture_case["page_key"]
+    )
     visual_node_id = f"visual:{design_name}.capture"
     implementation_checklist_call(
         stage_dir,
@@ -3158,9 +6072,44 @@ def capture_visual(args: argparse.Namespace) -> dict[str, Any]:
         "ready",
         node_id=visual_node_id,
     )
-    driver = require_string(args.driver, "visual driver")
     package_name = capture_case["package_name"]
-    before_result = run_driver(driver, "snapshot", package_name)
+    device_serial = getattr(args, "device_serial", None)
+
+    def call_driver(operation: str, **paths: Path) -> subprocess.CompletedProcess[str]:
+        return run_driver(
+            driver,
+            operation,
+            package_name,
+            device_serial=device_serial,
+            **paths,
+        )
+
+    package_reset = validate_android_package_reset(
+        driver_json(call_driver("reset-package"), "reset-package"),
+        package_name,
+    )
+    runtime_installation = attest_android_runtime_installation(
+        project_root,
+        plan,
+        capture_case["page_key"],
+        device_serial=device_serial,
+    )
+    package_identity = validate_android_package_identity(
+        driver_json(call_driver("package-identity"), "package-identity"),
+        package_name,
+    )
+    execution_transaction = validate_android_execution_transaction(
+        runtime_installation,
+        package_identity,
+        project_root,
+        plan,
+        capture_case["page_key"],
+    )
+    clean_apk_path, clean_apk_sha256 = clean_build_base_apk(
+        execution_transaction, project_root
+    )
+
+    before_result = call_driver("snapshot")
     if before_result.returncode != 0:
         raise ContractError(
             "visual_capture_failed",
@@ -3181,21 +6130,8 @@ def capture_visual(args: argparse.Namespace) -> dict[str, Any]:
         for field in ("width", "height")
     ):
         raise ContractError("visual_capture_failed", "reference pixel size is invalid")
-    try:
-        logical_scale = float(reference["logical_scale"])
-    except (KeyError, TypeError, ValueError) as exc:
-        raise ContractError("visual_capture_failed", "reference logical scale is invalid") from exc
-    if logical_scale <= 0:
-        raise ContractError("visual_capture_failed", "reference logical scale is invalid")
-    applied = {
-        "size": {"width": pixel_size["width"], "height": pixel_size["height"]},
-        "size_override": True,
-        "density": round(160 * logical_scale),
-        "density_override": True,
-        "locale": capture_case["locale"],
-        "font_scale": before["font_scale"],
-        "navigation_mode": before["navigation_mode"],
-    }
+    logical_scale = reference.get("logical_scale")
+    logical_density = logical_scale_density(logical_scale)
     runtime_dir = stage_dir / "runtime"
     runtime_dir.mkdir(parents=True, exist_ok=True)
     stem = digest({"design_name": design_name})[:20]
@@ -3206,7 +6142,19 @@ def capture_visual(args: argparse.Namespace) -> dict[str, Any]:
     evidence_path = runtime_dir / f"{stem}.capture.json"
     trace_path = runtime_dir / f"{stem}.interaction.json"
     measurement_contract_path = runtime_dir / f"{stem}.measurements.contract.json"
-    atomic_write_json(before_path, before)
+    layout_contract_path = runtime_dir / f"{stem}.layout.contract.json"
+    before = frozen_device_baseline(
+        stage_dir, state, f"visual:{stem}", before_path, before
+    )
+    applied = {
+        "size": {"width": pixel_size["width"], "height": pixel_size["height"]},
+        "size_override": True,
+        "density": logical_density,
+        "density_override": True,
+        "locale": capture_case["locale"],
+        "font_scale": before["font_scale"],
+        "navigation_mode": before["navigation_mode"],
+    }
     atomic_write_json(applied_path, applied)
     atomic_write_json(
         trace_path,
@@ -3227,7 +6175,34 @@ def capture_visual(args: argparse.Namespace) -> dict[str, Any]:
             "schema": "icp.visual-measurement-contract.v1",
             "visual_state_id": capture_case["visual_state_id"],
             "root_tag": capture_case["production_render"]["root_tag"],
+            "logical_scale": logical_scale,
             "assertions": assertions,
+        },
+    )
+    layout_contract = next(
+        item
+        for item in plan["layout_contracts"]
+        if item["design_state_id"] == design_name
+    )
+    atomic_write_json(
+        layout_contract_path,
+        {
+            "schema": "icp.runtime-layout-contract",
+            "design_state_id": design_name,
+            "visual_state_id": capture_case["visual_state_id"],
+            "root_tag": capture_case["production_render"]["root_tag"],
+            "logical_scale": logical_scale,
+            "require_device_window_insets": True,
+            "component_instance_ids": list(
+                layout_contract["component_tree"]["nodes_by_instance_id"]
+            ),
+            "occurrence_ids_by_instance_id": {
+                instance_id: instance_id
+                for instance_id in layout_contract["component_tree"][
+                    "nodes_by_instance_id"
+                ]
+            },
+            "scroll_obligations": runtime_scroll_obligations(layout_contract),
         },
     )
     failure: ContractError | None = None
@@ -3237,14 +6212,37 @@ def capture_visual(args: argparse.Namespace) -> dict[str, Any]:
     interaction: dict[str, Any] | None = None
     production_state: dict[str, Any] | None = None
     measurements: dict[str, Any] | None = None
+    layout: dict[str, Any] | None = None
+    restore_failure: ContractError | None = None
     try:
-        applied_result = run_driver(
-            driver, "apply", package_name, config=applied_path
-        )
+        applied_result = call_driver("apply", config=applied_path)
         if applied_result.returncode != 0:
             raise ContractError(
                 "visual_capture_failed",
                 "visual driver apply failed: " + applied_result.stderr[-2000:],
+            )
+        applied_snapshot_result = call_driver("snapshot")
+        if applied_snapshot_result.returncode != 0:
+            raise ContractError(
+                "visual_capture_failed",
+                "visual applied configuration snapshot failed: "
+                + applied_snapshot_result.stderr[-2000:],
+            )
+        try:
+            applied_snapshot = validate_device_configuration(
+                json.loads(applied_snapshot_result.stdout),
+                "device configuration after visual apply",
+            )
+        except (json.JSONDecodeError, ContractError) as exc:
+            raise ContractError(
+                "visual_capture_failed",
+                "visual applied configuration snapshot is invalid",
+            ) from exc
+        if applied_snapshot != applied:
+            raise ContractError(
+                "visual_configuration_mismatch",
+                "device did not apply the frozen reference configuration",
+                details={"expected": applied, "actual": applied_snapshot},
             )
         for command in capture_case["precondition_commands"]:
             completed = subprocess.run(
@@ -3260,7 +6258,39 @@ def capture_visual(args: argparse.Namespace) -> dict[str, Any]:
                     "visual_capture_failed",
                     "visual state setup failed: " + completed.stderr[-2000:],
                 )
-        cold_start_result = run_driver(driver, "cold-start", package_name)
+        postcondition_snapshot_result = call_driver("snapshot")
+        if postcondition_snapshot_result.returncode != 0:
+            raise ContractError(
+                "visual_capture_failed",
+                "visual postcondition configuration snapshot failed: "
+                + postcondition_snapshot_result.stderr[-2000:],
+            )
+        try:
+            postcondition_snapshot = validate_device_configuration(
+                json.loads(postcondition_snapshot_result.stdout),
+                "device configuration after visual preconditions",
+            )
+        except (json.JSONDecodeError, ContractError) as exc:
+            raise ContractError(
+                "visual_capture_failed",
+                "visual postcondition configuration snapshot is invalid",
+            ) from exc
+        if postcondition_snapshot != applied:
+            raise ContractError(
+                "visual_configuration_mismatch",
+                "visual preconditions changed the frozen reference configuration",
+                details={"expected": applied, "actual": postcondition_snapshot},
+            )
+        postcondition_package_identity = validate_android_package_identity(
+            driver_json(call_driver("package-identity"), "package-identity"),
+            package_name,
+        )
+        if postcondition_package_identity != package_identity:
+            raise ContractError(
+                "android_runtime_identity_changed",
+                "visual preconditions replaced the AGP-tested production APK",
+            )
+        cold_start_result = call_driver("cold-start")
         try:
             cold_start = validate_cold_start_evidence(
                 driver_json(cold_start_result, "cold-start")
@@ -3271,18 +6301,19 @@ def capture_visual(args: argparse.Namespace) -> dict[str, Any]:
             raise
         interaction = validate_interaction_evidence(
             driver_json(
-                run_driver(driver, "interact", package_name, trace=trace_path),
+                call_driver("interact", trace=trace_path),
                 "interact",
             ),
             capture_case["interaction_trace"],
         )
+        validate_cold_start_evidence(
+            driver_json(call_driver("health"), "health")
+        )
         root_tag = capture_case["production_render"]["root_tag"]
         production_state = validate_production_state_evidence(
             driver_json(
-                run_driver(
-                    driver,
+                call_driver(
                     "attest",
-                    package_name,
                     state_id=capture_case["visual_state_id"],
                     root_tag=root_tag,
                 ),
@@ -3293,21 +6324,22 @@ def capture_visual(args: argparse.Namespace) -> dict[str, Any]:
         )
         measurements = validate_measurement_evidence(
             driver_json(
-                run_driver(
-                    driver,
+                call_driver(
                     "measure",
-                    package_name,
                     contract=measurement_contract_path,
                     state_id=capture_case["visual_state_id"],
                     root_tag=root_tag,
+                    apk=clean_apk_path,
                 ),
                 "measure",
             ),
             capture_case["visual_state_id"],
             root_tag,
             assertions,
+            reference["logical_scale"],
+            clean_apk_sha256,
         )
-        captured = run_driver(driver, "capture", package_name, output=raw_path)
+        captured = call_driver("capture", output=raw_path)
         if captured.returncode != 0:
             raise ContractError(
                 "visual_capture_failed",
@@ -3316,16 +6348,43 @@ def capture_visual(args: argparse.Namespace) -> dict[str, Any]:
         raw_size = resize_png(
             (pixel_size["width"], pixel_size["height"]), raw_path, actual_path
         )
+        validate_color_pixel_evidence(
+            reference_path,
+            actual_path,
+            assertions,
+            measurements,
+            logical_scale,
+        )
+        layout = require_dict(
+            driver_json(
+                call_driver("read-layout", contract=layout_contract_path),
+                "read-layout",
+            ),
+            "production reference layout",
+        )
+        if (
+            layout.pop("visual_state_id", None) != capture_case["visual_state_id"]
+            or layout.pop("root_tag", None) != root_tag
+        ):
+            raise ContractError(
+                "reference_viewport_layout_failed",
+                f"runtime layout targets another state: {design_name}",
+            )
+        checked_layout = verify_runtime_layout(layout_contract, layout, "reference")
+        if checked_layout["status"] != "pass":
+            raise ContractError(
+                "reference_viewport_layout_failed",
+                f"reference runtime layout failed: {design_name}",
+                details={"problems": checked_layout["failures"]},
+            )
     except ContractError as exc:
         failure = exc
     except (OSError, subprocess.TimeoutExpired) as exc:
         failure = ContractError("visual_capture_failed", f"visual capture failed: {exc}")
     finally:
-        restored_result = run_driver(
-            driver, "restore", package_name, config=before_path
-        )
+        restored_result = call_driver("restore", config=before_path)
         if restored_result.returncode == 0:
-            snapshot_result = run_driver(driver, "snapshot", package_name)
+            snapshot_result = call_driver("snapshot")
             if snapshot_result.returncode == 0:
                 try:
                     restored = validate_device_configuration(
@@ -3335,12 +6394,19 @@ def capture_visual(args: argparse.Namespace) -> dict[str, Any]:
                 except (json.JSONDecodeError, ContractError):
                     restored = None
         if restored != before:
-            raise ContractError(
+            restore_failure = ContractError(
                 "visual_restore_failed",
                 "device size, density, locale, font scale, or navigation mode was not restored",
             )
     if failure is not None:
+        if restore_failure is not None:
+            failure.details = {
+                **(failure.details or {}),
+                "restore_error": restore_failure.message,
+            }
         raise failure
+    if restore_failure is not None:
+        raise restore_failure
     if raw_size is None or not actual_path.is_file():
         raise ContractError("visual_capture_failed", "visual capture produced no screenshot")
     evidence = {
@@ -3354,10 +6420,14 @@ def capture_visual(args: argparse.Namespace) -> dict[str, Any]:
         "logical_scale": reference["logical_scale"],
         "capture_strategy": "extended-viewport-full-page",
         "visual_state_id": capture_case["visual_state_id"],
+        "package_reset": package_reset,
+        "runtime_installation": runtime_installation,
+        "package_identity": package_identity,
         "cold_start": cold_start,
         "interaction": interaction,
         "production_state": production_state,
         "measurements": measurements,
+        "layout": layout,
         "before": before,
         "applied": applied,
         "raw_pixel_size": list(raw_size),
@@ -3381,6 +6451,397 @@ def capture_visual(args: argparse.Namespace) -> dict[str, Any]:
         "design_name": design_name,
         "actual_screenshot": str(actual_path.relative_to(project_root)),
         "capture_evidence": str(evidence_path.relative_to(project_root)),
+    }
+
+
+def capture_responsive(args: argparse.Namespace) -> dict[str, Any]:
+    project_root = Path(args.project_root).resolve()
+    stage_dir, state, universe = load_live_stage(project_root)
+    plan_path = stage_dir / "implementation-plan.json"
+    if not plan_path.is_file() or file_sha(plan_path) != state.get(
+        "implementation_plan_sha256"
+    ):
+        raise ContractError("stage_drift", "implementation plan changed")
+    plan = validate_plan(read_json(plan_path), state, universe)
+    driver = require_trusted_android_driver(args.driver)
+    page_key = require_string(args.page_key, "responsive page key")
+    if page_key not in universe["page_keys"]:
+        raise ContractError(
+            "responsive_evidence_invalid", f"unknown responsive page: {page_key}"
+        )
+    viewport = require_string(args.viewport, "responsive viewport")
+    sizes = {"compact": (360, 800), "expanded": (840, 1200)}
+    if viewport not in sizes:
+        raise ContractError(
+            "responsive_evidence_invalid", f"unknown responsive viewport: {viewport}"
+        )
+    node_id = f"responsive:{page_key}.{viewport}"
+    complete_code_coverage_preflight(
+        project_root, stage_dir, state, universe, plan, page_key
+    )
+    implementation_checklist_call(
+        stage_dir, state, universe, "ready", node_id=node_id
+    )
+    contracts = [
+        item for item in plan["layout_contracts"] if item["page_key"] == page_key
+    ]
+    captures = {item["design_name"]: item for item in plan["visual_capture_cases"]}
+    if not contracts or any(item["design_state_id"] not in captures for item in contracts):
+        raise ContractError(
+            "responsive_evidence_invalid",
+            f"responsive states have no production capture path: {page_key}",
+        )
+    device_serial = getattr(args, "device_serial", None)
+
+    def call_driver(
+        operation: str, package_name: str, **paths: Path
+    ) -> subprocess.CompletedProcess[str]:
+        return run_driver(
+            driver,
+            operation,
+            package_name,
+            device_serial=device_serial,
+            **paths,
+        )
+
+    package_names = {
+        captures[contract["design_state_id"]]["package_name"]
+        for contract in contracts
+    }
+    if len(package_names) != 1:
+        raise ContractError(
+            "android_runtime_identity_unproven",
+            f"one page targets multiple Android packages: {page_key}",
+        )
+    page_package_name = next(iter(package_names))
+    package_reset = validate_android_package_reset(
+        driver_json(
+            call_driver("reset-package", page_package_name),
+            "reset-package",
+        ),
+        page_package_name,
+    )
+    runtime_installation = attest_android_runtime_installation(
+        project_root,
+        plan,
+        page_key,
+        device_serial=device_serial,
+    )
+    package_identity = validate_android_package_identity(
+        driver_json(
+            call_driver("package-identity", page_package_name),
+            "package-identity",
+        ),
+        page_package_name,
+    )
+    validate_android_execution_transaction(
+        runtime_installation,
+        package_identity,
+        project_root,
+        plan,
+        page_key,
+    )
+
+    before_result = call_driver("snapshot", page_package_name)
+    if before_result.returncode != 0:
+        raise ContractError(
+            "responsive_capture_failed",
+            "responsive device snapshot failed: " + before_result.stderr[-2000:],
+        )
+    try:
+        before = validate_device_configuration(
+            json.loads(before_result.stdout), "device configuration before responsive capture"
+        )
+    except (json.JSONDecodeError, ContractError) as exc:
+        raise ContractError(
+            "responsive_capture_failed",
+            "responsive device snapshot returned invalid data",
+        ) from exc
+    width, height = sizes[viewport]
+    runtime_dir = stage_dir / "runtime" / "responsive"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    before_path = runtime_dir / f"{page_key}-{viewport}.before.json"
+    before = frozen_device_baseline(
+        stage_dir,
+        state,
+        f"responsive:{page_key}:{viewport}",
+        before_path,
+        before,
+    )
+    snapshots: list[dict[str, Any]] = []
+    failure: ContractError | None = None
+    restore_failure: ContractError | None = None
+    try:
+        for contract in contracts:
+            design_state_id = contract["design_state_id"]
+            capture_case = captures[design_state_id]
+            package_name = capture_case["package_name"]
+            applied = {
+                "size": {"width": width, "height": height},
+                "size_override": True,
+                "density": 160,
+                "density_override": True,
+                "locale": capture_case["locale"],
+                "font_scale": before["font_scale"],
+                "navigation_mode": before["navigation_mode"],
+            }
+            stem = digest(
+                {
+                    "page_key": page_key,
+                    "viewport": viewport,
+                    "design_state_id": design_state_id,
+                }
+            )[:20]
+            applied_path = runtime_dir / f"{stem}.applied.json"
+            trace_path = runtime_dir / f"{stem}.interaction.json"
+            contract_path = runtime_dir / f"{stem}.layout.contract.json"
+            screenshot_path = runtime_dir / f"{stem}.png"
+            atomic_write_json(applied_path, applied)
+            atomic_write_json(
+                trace_path,
+                {
+                    "schema": "icp.visual-interaction-trace.v1",
+                    "visual_state_id": capture_case["visual_state_id"],
+                    "steps": capture_case["interaction_trace"],
+                },
+            )
+            atomic_write_json(
+                contract_path,
+                {
+                    "schema": "icp.runtime-layout-contract",
+                    "design_state_id": design_state_id,
+                    "visual_state_id": capture_case["visual_state_id"],
+                    "root_tag": capture_case["production_render"]["root_tag"],
+                    "logical_scale": 1,
+                    "require_device_window_insets": True,
+                    "component_instance_ids": list(
+                        contract["component_tree"]["nodes_by_instance_id"]
+                    ),
+                    "occurrence_ids_by_instance_id": {
+                        instance_id: instance_id
+                        for instance_id in contract["component_tree"][
+                            "nodes_by_instance_id"
+                        ]
+                    },
+                    "scroll_obligations": runtime_scroll_obligations(contract),
+                },
+            )
+            applied_result = call_driver("apply", package_name, config=applied_path)
+            if applied_result.returncode != 0:
+                raise ContractError(
+                    "responsive_capture_failed",
+                    "responsive device apply failed: " + applied_result.stderr[-2000:],
+                )
+            applied_snapshot_result = call_driver("snapshot", package_name)
+            if applied_snapshot_result.returncode != 0:
+                raise ContractError(
+                    "responsive_capture_failed",
+                    "responsive applied configuration snapshot failed: "
+                    + applied_snapshot_result.stderr[-2000:],
+                )
+            try:
+                applied_snapshot = validate_device_configuration(
+                    json.loads(applied_snapshot_result.stdout),
+                    "device configuration after responsive apply",
+                )
+            except (json.JSONDecodeError, ContractError) as exc:
+                raise ContractError(
+                    "responsive_capture_failed",
+                    "responsive applied configuration snapshot is invalid",
+                ) from exc
+            if applied_snapshot != applied:
+                raise ContractError(
+                    "responsive_configuration_mismatch",
+                    f"device did not apply the frozen {viewport} configuration",
+                    details={"expected": applied, "actual": applied_snapshot},
+                )
+            for command in capture_case["precondition_commands"]:
+                completed = subprocess.run(
+                    command,
+                    cwd=project_root,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=1200,
+                )
+                if completed.returncode != 0:
+                    raise ContractError(
+                        "responsive_capture_failed",
+                        "responsive state setup failed: " + completed.stderr[-2000:],
+                    )
+            postcondition_snapshot_result = call_driver("snapshot", package_name)
+            if postcondition_snapshot_result.returncode != 0:
+                raise ContractError(
+                    "responsive_capture_failed",
+                    "responsive postcondition configuration snapshot failed: "
+                    + postcondition_snapshot_result.stderr[-2000:],
+                )
+            try:
+                postcondition_snapshot = validate_device_configuration(
+                    json.loads(postcondition_snapshot_result.stdout),
+                    "device configuration after responsive preconditions",
+                )
+            except (json.JSONDecodeError, ContractError) as exc:
+                raise ContractError(
+                    "responsive_capture_failed",
+                    "responsive postcondition configuration snapshot is invalid",
+                ) from exc
+            if postcondition_snapshot != applied:
+                raise ContractError(
+                    "responsive_configuration_mismatch",
+                    "responsive preconditions changed the frozen device configuration",
+                    details={"expected": applied, "actual": postcondition_snapshot},
+                )
+            postcondition_package_identity = validate_android_package_identity(
+                driver_json(
+                    call_driver("package-identity", package_name),
+                    "package-identity",
+                ),
+                package_name,
+            )
+            if postcondition_package_identity != package_identity:
+                raise ContractError(
+                    "android_runtime_identity_changed",
+                    "responsive preconditions replaced the AGP-tested production APK",
+                )
+            validate_cold_start_evidence(
+                driver_json(
+                    call_driver("cold-start", package_name), "cold-start"
+                )
+            )
+            validate_interaction_evidence(
+                driver_json(
+                    call_driver("interact", package_name, trace=trace_path),
+                    "interact",
+                ),
+                capture_case["interaction_trace"],
+            )
+            validate_cold_start_evidence(
+                driver_json(call_driver("health", package_name), "health")
+            )
+            root_tag = capture_case["production_render"]["root_tag"]
+            validate_production_state_evidence(
+                driver_json(
+                    call_driver(
+                        "attest",
+                        package_name,
+                        state_id=capture_case["visual_state_id"],
+                        root_tag=root_tag,
+                    ),
+                    "attest",
+                ),
+                capture_case["visual_state_id"],
+                root_tag,
+            )
+            captured = call_driver("capture", package_name, output=screenshot_path)
+            if captured.returncode != 0 or not screenshot_path.is_file():
+                raise ContractError(
+                    "responsive_capture_failed",
+                    "responsive screenshot failed: " + captured.stderr[-2000:],
+                )
+            screenshot_width, screenshot_height, _pixels = read_png_rgba(
+                screenshot_path
+            )
+            if (screenshot_width, screenshot_height) != (width, height):
+                raise ContractError(
+                    "responsive_capture_failed",
+                    "responsive screenshot size differs from the applied viewport",
+                )
+            layout = require_dict(
+                driver_json(
+                    call_driver(
+                        "read-layout",
+                        package_name,
+                        contract=contract_path,
+                    ),
+                    "read-layout",
+                ),
+                "production responsive layout",
+            )
+            if (
+                layout.pop("visual_state_id", None) != capture_case["visual_state_id"]
+                or layout.pop("root_tag", None) != root_tag
+            ):
+                raise ContractError(
+                    "responsive_capture_failed",
+                    f"runtime layout targets another state: {design_state_id}",
+                )
+            snapshot = {
+                "design_state_id": design_state_id,
+                **layout,
+                "capture": {
+                    "screenshot_path": str(screenshot_path.relative_to(project_root)),
+                    "sha256": file_sha(screenshot_path),
+                    "device_configuration": {
+                        "width": width,
+                        "height": height,
+                        "density": applied["density"],
+                        "locale": applied["locale"],
+                        "font_scale": applied["font_scale"],
+                        "navigation_mode": applied["navigation_mode"],
+                    },
+                },
+            }
+            if verify_runtime_layout(contract, snapshot, "responsive")["status"] != "pass":
+                raise ContractError(
+                    "responsive_evidence_invalid",
+                    f"responsive runtime layout failed: {design_state_id}/{viewport}",
+                )
+            snapshots.append(snapshot)
+    except ContractError as exc:
+        failure = exc
+    finally:
+        package_name = captures[contracts[0]["design_state_id"]]["package_name"]
+        restored_result = call_driver("restore", package_name, config=before_path)
+        restored = None
+        if restored_result.returncode == 0:
+            snapshot_result = call_driver("snapshot", package_name)
+            if snapshot_result.returncode == 0:
+                try:
+                    restored = validate_device_configuration(
+                        json.loads(snapshot_result.stdout),
+                        "device configuration after responsive restore",
+                    )
+                except (json.JSONDecodeError, ContractError):
+                    restored = None
+        if restored != before:
+            restore_failure = ContractError(
+                "visual_restore_failed",
+                "device size, density, locale, font scale, or navigation mode was not restored",
+            )
+    if failure is not None:
+        if restore_failure is not None:
+            failure.details = {
+                **(failure.details or {}),
+                "restore_error": restore_failure.message,
+            }
+        raise failure
+    if restore_failure is not None:
+        raise restore_failure
+    run = {
+        "page_key": page_key,
+        "viewport": viewport,
+        "package_reset": package_reset,
+        "runtime_installation": runtime_installation,
+        "package_identity": package_identity,
+        "snapshots": snapshots,
+    }
+    evidence_path = runtime_dir / f"{page_key}-{viewport}.capture.json"
+    atomic_write_json(evidence_path, run)
+    implementation_checklist_call(
+        stage_dir,
+        state,
+        universe,
+        "complete",
+        node_id=node_id,
+        evidence_sha256=digest(run),
+    )
+    return {
+        "ok": True,
+        "stage": "implementation",
+        "page_key": page_key,
+        "viewport": viewport,
+        "responsive_evidence": str(evidence_path.relative_to(project_root)),
     }
 
 
@@ -3465,17 +6926,157 @@ def source_contains_executable_call(source: str, method_symbol: str) -> bool:
     return False
 
 
+def source_call_bodies(source: str, symbol: str) -> list[str]:
+    """Return balanced call bodies whose symbol occurs in executable source."""
+
+    executable = source_without_comments_or_literals(source)
+    pattern = re.compile(rf"(?<![A-Za-z0-9_$]){re.escape(symbol)}\s*\(")
+    bodies: list[str] = []
+    for match in pattern.finditer(executable):
+        opening = executable.find("(", match.start(), match.end())
+        depth = 0
+        for position in range(opening, len(executable)):
+            token = executable[position]
+            if token == "(":
+                depth += 1
+            elif token == ")":
+                depth -= 1
+                if depth == 0:
+                    bodies.append(source[opening + 1 : position])
+                    break
+    return bodies
+
+
+def call_has_string_argument(body: str, name: str, expected: str) -> bool:
+    return re.search(
+        rf"(?<![A-Za-z0-9_$]){re.escape(name)}\s*=\s*{re.escape(json.dumps(expected))}(?![A-Za-z0-9_$])",
+        body,
+    ) is not None
+
+
+def call_has_nullable_string_argument(
+    body: str, name: str, expected: str | None
+) -> bool:
+    if expected is None:
+        return re.search(
+            rf"(?<![A-Za-z0-9_$]){re.escape(name)}\s*=\s*null(?![A-Za-z0-9_$])",
+            body,
+        ) is not None
+    return call_has_string_argument(body, name, expected)
+
+
+def call_has_resource_argument(body: str, name: str, resource: str | None) -> bool:
+    expected = "null" if resource is None else "R.dimen." + resource
+    return re.search(
+        rf"(?<![A-Za-z0-9_$]){re.escape(name)}\s*=\s*{re.escape(expected)}(?![A-Za-z0-9_$])",
+        body,
+    ) is not None
+
+
+def android_resource_reference(relative_path: str) -> str | None:
+    parts = Path(relative_path).parts
+    try:
+        res_index = max(index for index, part in enumerate(parts) if part == "res")
+    except ValueError:
+        return None
+    if res_index + 2 != len(parts) - 1:
+        return None
+    resource_type = parts[res_index + 1].split("-", 1)[0]
+    resource_name = parts[res_index + 2].split(".", 1)[0]
+    if not re.fullmatch(r"[a-z][a-z0-9_]*", resource_type) or not re.fullmatch(
+        r"[a-z][a-z0-9_]*", resource_name
+    ):
+        return None
+    return f"R.{resource_type}.{resource_name}"
+
+
+def call_has_tokens(body: str, tokens: list[str]) -> bool:
+    return all(
+        re.search(
+            rf"(?<![A-Za-z0-9_$]){re.escape(token)}(?![A-Za-z0-9_$])",
+            body,
+        )
+        is not None
+        for token in tokens
+    )
+
+
 def verify_code_coverage(
-    project_root: Path, plan: dict[str, Any], universe: dict[str, Any]
+    project_root: Path,
+    plan: dict[str, Any],
+    universe: dict[str, Any],
+    page_key: str | None = None,
 ) -> dict[str, Any]:
+    selected_page_keys = (
+        set(universe["page_keys"]) if page_key is None else {page_key}
+    )
+    if not selected_page_keys.issubset(set(universe["page_keys"])):
+        raise ContractError("code_coverage_missing", f"unknown page: {page_key}")
+    selected_pages = [
+        item for item in plan["pages"] if item["page_key"] in selected_page_keys
+    ]
+    selected_components = [
+        item
+        for item in plan["component_mappings"]
+        if item["page_key"] in selected_page_keys
+    ]
+    selected_interactions = [
+        item
+        for item in plan["interaction_mappings"]
+        if item["page_key"] in selected_page_keys
+    ]
+    selected_api_contracts = [
+        item
+        for item in plan["api_contract_mappings"]
+        if item["page_key"] in selected_page_keys
+    ]
+    selected_runtime_entries = [
+        item
+        for item in plan["runtime_entries"]
+        if item["page_key"] in selected_page_keys
+    ]
+    selected_obligation_ids = {
+        item["obligation_id"]
+        for item in universe["design_elements"]
+        if item["page_key"] in selected_page_keys
+    }
+    selected_fact_ids = {
+        item["fact_id"]
+        for item in universe["semantic_facts"]
+        if item["page_key"] in selected_page_keys
+    }
+    selected_usage_ids = {
+        item["usage_id"]
+        for item in universe["presentation_usages"]
+        if item["source_page_key"] in selected_page_keys
+    }
     texts: dict[str, tuple[Path, str]] = {}
+    mock_bodies_by_page = {
+        case["page_key"]: case["runtime_test"]["mock_expectation"]["body"]
+        for case in plan["integration_test_cases"]
+        if case["runtime_test"]["mock_expectation"] is not None
+    }
 
     def text_for(relative: str, label: str) -> tuple[Path, str]:
         if relative not in texts:
             texts[relative] = read_required_text(project_root, relative, label)
         return texts[relative]
 
-    for page in plan["pages"]:
+    provider = plan["runtime_probe_provider"]
+    _, provider_source = text_for(
+        provider["source_file"], "runtime probe provider"
+    )
+    if (
+        provider["symbol"] not in provider_source
+        or provider["publish_method_symbol"] not in provider_source
+        or provider["output_path"] not in provider_source
+    ):
+        raise ContractError(
+            "runtime_probe_provider_missing",
+            "production code does not publish the frozen runtime probe payload",
+        )
+
+    for page in selected_pages:
         _, source = text_for(page["source_file"], f"page source {page['page_key']}")
         if page["root_symbol"] not in source:
             raise ContractError("code_coverage_missing", f"page root symbol is missing: {page['root_symbol']}")
@@ -3494,10 +7095,15 @@ def verify_code_coverage(
                 )
         mock_path = project_file(project_root, page["mock_fixture_path"], "page mock fixture")
         try:
-            json.loads(mock_path.read_text(encoding="utf-8"))
+            mock_payload = json.loads(mock_path.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             raise ContractError("code_coverage_missing", f"page mock fixture is invalid: {mock_path}") from exc
-    for entry in plan["runtime_entries"]:
+        if mock_payload != mock_bodies_by_page.get(page["page_key"]):
+            raise ContractError(
+                "mock_dto_runtime_unproven",
+                "mock fixture differs from its runtime DTO input: " + page["page_key"],
+            )
+    for entry in selected_runtime_entries:
         _, source = text_for(
             entry["source_file"], f"runtime entry {entry['entry_id']}"
         )
@@ -3506,11 +7112,29 @@ def verify_code_coverage(
                 "code_coverage_missing",
                 f"runtime entry symbol is missing: {entry['symbol']}",
             )
-    for mapping in plan["component_mappings"]:
+    for mapping in selected_components:
         _, source = text_for(mapping["source_file"], f"component {mapping['component_instance_id']}")
         if mapping["symbol"] not in source:
             raise ContractError("code_coverage_missing", f"component symbol is missing: {mapping['symbol']}")
-    for mapping in plan["interaction_mappings"]:
+    runtime_probe_call_sources = {
+        page["source_file"] for page in selected_pages
+    } | {
+        entry["source_file"] for entry in selected_runtime_entries
+    } | {
+        mapping["source_file"] for mapping in selected_components
+    }
+    if not any(
+        source_contains_executable_call(
+            text_for(relative, "runtime probe publication owner")[1],
+            provider["publish_method_symbol"],
+        )
+        for relative in runtime_probe_call_sources
+    ):
+        raise ContractError(
+            "runtime_probe_provider_missing",
+            "production renderer never calls the frozen runtime probe publisher",
+        )
+    for mapping in selected_interactions:
         _, source = text_for(
             mapping["source_file"], f"interaction {mapping['interaction_id']}"
         )
@@ -3522,7 +7146,7 @@ def verify_code_coverage(
                 "code_coverage_missing",
                 f"interaction implementation is missing: {mapping['interaction_id']}",
             )
-    for mapping in plan["api_contract_mappings"]:
+    for mapping in selected_api_contracts:
         _, source = text_for(
             mapping["source_file"], f"API contract {mapping['api_contract_id']}"
         )
@@ -3567,24 +7191,122 @@ def verify_code_coverage(
                 + mapping["interaction_id"],
             )
     for field in ("design_element_mappings", "semantic_fact_mappings", "presentation_mappings"):
-        for mapping in plan[field]:
+        selected_mappings = (
+            [
+                item
+                for item in plan[field]
+                if item["obligation_id"] in selected_obligation_ids
+            ]
+            if field == "design_element_mappings"
+            else [
+                item
+                for item in plan[field]
+                if item["fact_id"] in selected_fact_ids
+            ]
+            if field == "semantic_fact_mappings"
+            else [
+                item
+                for item in plan[field]
+                if item["usage_id"] in selected_usage_ids
+            ]
+        )
+        for mapping in selected_mappings:
             _, source = text_for(mapping["source_file"], f"{field} source")
             if mapping["implementation_anchor"] not in source or mapping["symbol"] not in source:
                 raise ContractError(
                     "code_coverage_missing",
                     f"code anchor or owner symbol is missing: {mapping['implementation_anchor']}",
                 )
-            if (
-                field == "design_element_mappings"
-                and mapping["runtime_probe_tag"] is not None
-                and mapping["runtime_probe_tag"] not in source
-            ):
-                raise ContractError(
-                    "visual_render_identity_mismatch",
-                    "frozen design element is not wired to its production runtime probe: "
-                    + mapping["obligation_id"],
+            if field == "design_element_mappings":
+                typography_resources = {
+                    assertion["kind"]: assertion["apk_resource_name"]
+                    for assertion in universe["reference_viewport_assertions"]
+                    if assertion["obligation_id"] == mapping["obligation_id"]
+                    and assertion["kind"] in {"font_size", "line_height"}
+                }
+                missing_resources = [
+                    name
+                    for name in typography_resources.values()
+                    if "R.dimen." + name not in source
+                ]
+                if missing_resources:
+                    raise ContractError(
+                        "apk_typography_not_implemented",
+                        "mapped production UI does not consume its frozen APK typography resources: "
+                        + mapping["obligation_id"],
+                        details={"missing_resources": missing_resources},
+                    )
+                element = next(
+                    item
+                    for item in universe["design_elements"]
+                    if item["obligation_id"] == mapping["obligation_id"]
                 )
+                asset_resource_refs: list[str] = []
+                for asset_mapping in mapping["asset_mappings"]:
+                    reference = android_resource_reference(
+                        asset_mapping["target_resource_path"]
+                    )
+                    if reference is None:
+                        raise ContractError(
+                            "asset_consumption_missing",
+                            "target asset is not an addressable Android resource: "
+                            + asset_mapping["target_resource_path"],
+                        )
+                    asset_resource_refs.append(reference)
+                identity_bindings = [
+                    body
+                    for body in source_call_bodies(source, "IcpBoundElement")
+                    if call_has_string_argument(
+                        body, "obligationId", mapping["obligation_id"]
+                    )
+                    and call_has_string_argument(
+                        body,
+                        "componentInstanceId",
+                        element["component_instance_id"],
+                    )
+                    and call_has_string_argument(
+                        body, "ownerSymbol", mapping["symbol"]
+                    )
+                    and call_has_nullable_string_argument(
+                        body, "probeTag", mapping["runtime_probe_tag"]
+                    )
+                    and call_has_resource_argument(
+                        body,
+                        "fontSizeRes",
+                        typography_resources.get("font_size"),
+                    )
+                    and call_has_resource_argument(
+                        body,
+                        "lineHeightRes",
+                        typography_resources.get("line_height"),
+                    )
+                ]
+                matching_bindings = [
+                    body
+                    for body in identity_bindings
+                    if call_has_tokens(body, asset_resource_refs)
+                ]
+                if len(matching_bindings) != 1:
+                    message = (
+                        "production element binding does not consume its mapped target assets: "
+                        if asset_resource_refs and len(identity_bindings) == 1
+                        else "mapped design element must have exactly one production element binding: "
+                    )
+                    raise ContractError(
+                        "production_element_binding_missing",
+                        message + mapping["obligation_id"],
+                        details={
+                            "component_instance_id": element[
+                                "component_instance_id"
+                            ],
+                            "owner_symbol": mapping["symbol"],
+                            "asset_resource_refs": asset_resource_refs,
+                            "matching_bindings": len(matching_bindings),
+                        },
+                    )
     for capture_case in plan["visual_capture_cases"]:
+        if capture_case["page_key"] not in selected_page_keys:
+            continue
         production = capture_case["production_render"]
         production_path, source = text_for(
             production["source_file"],
@@ -3651,6 +7373,8 @@ def verify_code_coverage(
     }
     asset_files: dict[str, Path] = {}
     for mapping in plan["design_element_mappings"]:
+        if mapping["obligation_id"] not in selected_obligation_ids:
+            continue
         source_assets = {
             asset["asset_id"]: asset
             for asset in design_elements[mapping["obligation_id"]]["assets"]
@@ -3679,6 +7403,7 @@ def verify_code_coverage(
             asset_files[str(target_path.relative_to(project_root))] = target_path
     return {
         "schema": "icp.implementation.code-manifest.v1",
+        "page_key": page_key,
         "files": [
             {
                 "path": str(path.relative_to(project_root)),
@@ -3754,6 +7479,10 @@ def validate_runtime_evidence(
         for viewport in ("compact", "expanded")
     }
     seen_responsive: set[tuple[str, str]] = set()
+    resolved_responsive_runs: list[dict[str, Any]] = []
+    captures = {
+        item["design_name"]: item for item in plan["visual_capture_cases"]
+    }
     layout_contracts_by_page: dict[str, dict[str, dict[str, Any]]] = {}
     for contract_value in require_list(plan.get("layout_contracts"), "layout contracts"):
         contract = require_dict(contract_value, "layout contract")
@@ -3764,16 +7493,70 @@ def validate_runtime_evidence(
         label = f"responsive_runs[{index}]"
         item = require_dict(value, label)
         try:
-            require_exact_keys(item, {"page_key", "viewport", "snapshots"}, label)
+            require_exact_keys(
+                item, {"page_key", "viewport", "capture_evidence"}, label
+            )
         except ContractError as exc:
             raise ContractError(
                 "responsive_evidence_invalid",
-                f"{label} must contain raw responsive measurements",
+                f"{label} must reference capture-responsive evidence",
+            ) from exc
+        capture_path = project_file(
+            project_root,
+            item.get("capture_evidence"),
+            f"{label}.capture_evidence",
+        )
+        try:
+            captured_run = require_dict(
+                read_json(capture_path), f"{label} captured responsive run"
+            )
+            require_exact_keys(
+                captured_run,
+                {
+                    "page_key",
+                    "viewport",
+                    "package_reset",
+                    "runtime_installation",
+                    "package_identity",
+                    "snapshots",
+                },
+                f"{label} captured responsive run",
+            )
+        except ContractError as exc:
+            raise ContractError(
+                "responsive_evidence_invalid",
+                f"{label} capture-responsive evidence is invalid",
             ) from exc
         key = (item.get("page_key"), item.get("viewport"))
+        if key != (captured_run.get("page_key"), captured_run.get("viewport")):
+            raise ContractError(
+                "responsive_evidence_invalid",
+                f"{label} points to another responsive run",
+            )
+        item = captured_run
+        resolved_responsive_runs.append(captured_run)
         if key not in expected_responsive or key in seen_responsive:
             raise ContractError("responsive_evidence_invalid", f"unexpected responsive run: {key}")
         seen_responsive.add(key)
+        page_package_names = {
+            captures[contract["design_state_id"]]["package_name"]
+            for contract in layout_contracts_by_page.get(key[0], {}).values()
+        }
+        if len(page_package_names) != 1:
+            raise ContractError(
+                "android_runtime_identity_unproven",
+                f"one page targets multiple Android packages: {key[0]}",
+            )
+        validate_android_package_reset(
+            item.get("package_reset"), next(iter(page_package_names))
+        )
+        validate_android_execution_transaction(
+            item.get("runtime_installation"),
+            item.get("package_identity"),
+            project_root,
+            plan,
+            key[0],
+        )
         expected_size = (360, 800) if key[1] == "compact" else (840, 1200)
         contracts = layout_contracts_by_page.get(key[0], {})
         snapshots = require_list(item.get("snapshots"), f"{label}.snapshots")
@@ -3791,6 +7574,7 @@ def validate_runtime_evidence(
                         "safe_insets",
                         "system_bars",
                         "scroll_metrics",
+                        "driver_observations",
                         "components",
                         "capture",
                     },
@@ -3843,11 +7627,6 @@ def validate_runtime_evidence(
                 instance_id = require_string(
                     component.get("instance_id"), "runtime component instance ID"
                 )
-                if component.get("presence") != "present":
-                    raise ContractError(
-                        "responsive_evidence_invalid",
-                        f"runtime component presence is not measured: {instance_id}",
-                    )
                 occurrence_ids.append(occurrence_id)
                 measured_ids.append(instance_id)
             if (
@@ -3916,6 +7695,9 @@ def validate_runtime_evidence(
         raise ContractError("responsive_evidence_invalid", "every page needs compact and expanded runtime evidence")
 
     references = {item["design_name"]: item for item in universe["visual_references"]}
+    reference_layout_contracts = {
+        item["design_state_id"]: item for item in plan["layout_contracts"]
+    }
     visual_runs = require_list(evidence.get("visual_runs"), "visual runs")
     seen_designs: set[str] = set()
     results: list[dict[str, Any]] = []
@@ -3969,10 +7751,14 @@ def validate_runtime_evidence(
                     "logical_scale",
                     "capture_strategy",
                     "visual_state_id",
+                    "package_reset",
+                    "runtime_installation",
+                    "package_identity",
                     "cold_start",
                     "interaction",
                     "production_state",
                     "measurements",
+                    "layout",
                     "before",
                     "applied",
                     "raw_pixel_size",
@@ -3984,6 +7770,19 @@ def validate_runtime_evidence(
                 "visual capture evidence",
             )
             before = validate_device_configuration(capture.get("before"), "capture before")
+            validate_android_package_reset(
+                capture.get("package_reset"), capture_case["package_name"]
+            )
+            execution_transaction = validate_android_execution_transaction(
+                capture.get("runtime_installation"),
+                capture.get("package_identity"),
+                project_root,
+                plan,
+                capture_case["page_key"],
+            )
+            _, clean_apk_sha256 = clean_build_base_apk(
+                execution_transaction, project_root
+            )
             applied = validate_device_configuration(capture.get("applied"), "capture applied")
             restored = validate_device_configuration(
                 capture.get("restored"), "capture restored"
@@ -4008,9 +7807,43 @@ def validate_runtime_evidence(
                 capture_case["visual_state_id"],
                 root_tag,
                 assertions,
+                reference["logical_scale"],
+                clean_apk_sha256,
             )
+            layout = require_dict(capture.get("layout"), "reference runtime layout")
+            require_exact_keys(
+                layout,
+                {
+                    "coordinate_space",
+                    "viewport_bounds",
+                    "safe_insets",
+                    "system_bars",
+                    "scroll_metrics",
+                    "driver_observations",
+                    "components",
+                },
+                "reference runtime layout",
+            )
+            layout_contract = reference_layout_contracts.get(design_name)
+            if layout_contract is None:
+                raise ContractError(
+                    "reference_viewport_layout_failed",
+                    f"missing frozen layout contract: {design_name}",
+                )
+            checked_layout = verify_runtime_layout(
+                layout_contract, layout, "reference"
+            )
+            if checked_layout["status"] != "pass":
+                raise ContractError(
+                    "reference_viewport_layout_failed",
+                    f"reference runtime layout failed: {design_name}",
+                    details={"problems": checked_layout["failures"]},
+                )
         except ContractError as exc:
-            if exc.code == "reference_viewport_measurement_failed":
+            if exc.code in {
+                "reference_viewport_measurement_failed",
+                "reference_viewport_layout_failed",
+            }:
                 raise
             raise ContractError(
                 "visual_capture_evidence_missing",
@@ -4019,7 +7852,7 @@ def validate_runtime_evidence(
         expected_applied = {
             "size": reference["pixel_size"],
             "size_override": True,
-            "density": round(160 * float(reference["logical_scale"])),
+            "density": logical_scale_density(reference.get("logical_scale")),
             "density_override": True,
             "locale": capture_case["locale"],
             "font_scale": before["font_scale"],
@@ -4057,6 +7890,13 @@ def validate_runtime_evidence(
         width, height, mae, difference_bbox = image_comparison(
             reference_path, actual_path
         )
+        color_pixel_observations = validate_color_pixel_evidence(
+            reference_path,
+            actual_path,
+            assertions,
+            measurements,
+            reference["logical_scale"],
+        )
         result = {
             "design_name": design_name,
             "evaluation_scope": "reference_viewport_visual_fidelity",
@@ -4070,6 +7910,7 @@ def validate_runtime_evidence(
             "height": height,
             "mae": mae,
             "mae_role": "diagnostic_only",
+            "color_pixel_observations": color_pixel_observations,
             "reference_checks": {
                 "exact_total": len(
                     [item for item in assertions if item["mode"] == "exact_at_reference"]
@@ -4097,7 +7938,9 @@ def validate_runtime_evidence(
         results.append(result)
     if seen_designs != set(references):
         raise ContractError("visual_evidence_invalid", "every design state needs one visual run")
-    return evidence.copy(), results
+    resolved_evidence = evidence.copy()
+    resolved_evidence["responsive_runs"] = resolved_responsive_runs
+    return resolved_evidence, results
 
 
 def write_visual_difference_artifacts(
@@ -4109,6 +7952,10 @@ def write_visual_difference_artifacts(
 ) -> list[dict[str, Any]]:
     mapping_by_obligation = {
         item["obligation_id"]: item for item in plan["design_element_mappings"]
+    }
+    channel_by_obligation = {
+        item["obligation_id"]: item
+        for item in universe["design_element_evidence_channels"]
     }
     failures: list[dict[str, Any]] = []
     for result in visual_results:
@@ -4123,6 +7970,9 @@ def write_visual_difference_artifacts(
                     {
                         **item,
                         "code_mapping": mapping_by_obligation[item["obligation_id"]],
+                        "evidence_channel": channel_by_obligation[
+                            item["obligation_id"]
+                        ],
                     }
                     for item in universe["design_elements"]
                     if item["design_name"] == design_name
@@ -4151,11 +8001,24 @@ def verify_implementation(args: argparse.Namespace) -> dict[str, Any]:
     if not evidence_path.is_file() or file_sha(evidence_path) != state.get("tdd_evidence_sha256"):
         raise ContractError("stage_drift", "TDD evidence changed")
     tdd_evidence = require_dict(read_json(evidence_path), "TDD evidence")
-    if any(item.get("red") is None or item.get("green") is None for item in tdd_evidence["cases"]):
-        raise ContractError("tdd_incomplete", "every integration case needs RED and GREEN evidence")
+    validate_tdd_evidence(
+        project_root, plan, tdd_evidence, require_complete=True
+    )
     if state.get("state") not in {"awaiting_verification", "complete"}:
         if plan["integration_test_cases"] or state.get("state") != "awaiting_implementation":
             raise ContractError("invalid_state", f"implementation state is {state.get('state')}")
+    for page_key in universe["page_keys"]:
+        page_manifest = verify_code_coverage(
+            project_root, plan, universe, page_key
+        )
+        implementation_checklist_call(
+            stage_dir,
+            state,
+            universe,
+            "complete",
+            node_id=f"implementation.code-coverage:{page_key}",
+            evidence_sha256=digest(page_manifest),
+        )
     code_manifest = verify_code_coverage(project_root, plan, universe)
     implementation_checklist_call(
         stage_dir,
@@ -4169,11 +8032,10 @@ def verify_implementation(args: argparse.Namespace) -> dict[str, Any]:
         project_root, read_json(Path(args.evidence)), state, universe, plan
     )
     for responsive_run in runtime_evidence["responsive_runs"]:
-        implementation_checklist_call(
+        require_recorded_checklist_evidence(
             stage_dir,
             state,
             universe,
-            "complete",
             node_id=(
                 f"responsive:{responsive_run['page_key']}."
                 f"{responsive_run['viewport']}"
@@ -4190,11 +8052,10 @@ def verify_implementation(args: argparse.Namespace) -> dict[str, Any]:
             visual_run["capture_evidence"],
             "visual capture evidence",
         ))
-        implementation_checklist_call(
+        require_recorded_checklist_evidence(
             stage_dir,
             state,
             universe,
-            "complete",
             node_id=f"visual:{visual_result['design_name']}.capture",
             evidence_sha256=capture_sha256,
         )
@@ -4251,8 +8112,6 @@ def verify_implementation(args: argparse.Namespace) -> dict[str, Any]:
     state["implementation_manifest_sha256"] = stage_result["implementation_manifest_sha256"]
     state["runtime_evidence_sha256"] = stage_result["runtime_evidence_sha256"]
     state["stage_result_sha256"] = file_sha(stage_dir / "stage-result.json")
-    state["state"] = "complete"
-    atomic_write_json(stage_dir / "state.json", state)
     implementation_checklist_call(
         stage_dir,
         state,
@@ -4265,6 +8124,7 @@ def verify_implementation(args: argparse.Namespace) -> dict[str, Any]:
         stage_dir, state, universe, "require-complete"
     )
     state["checklist_sha256"] = file_sha(stage_dir / "checklist.json")
+    state["state"] = "complete"
     atomic_write_json(stage_dir / "state.json", state)
     return {
         "ok": True,
@@ -4284,7 +8144,28 @@ def begin(args: argparse.Namespace) -> dict[str, Any]:
         raise ContractError("unsupported_platform", f"unsupported platform: {platform}")
     stage_dir = implementation_dir(project_root)
     if stage_dir.exists():
-        raise ContractError("implementation_exists", f"implementation stage already exists: {stage_dir}")
+        state_path = stage_dir / "state.json"
+        if state_path.is_file():
+            _stage_dir, state, universe = load_live_stage(project_root)
+            if state.get("platform") != platform:
+                raise ContractError(
+                    "input_drift", "implementation platform changed after begin"
+                )
+            return {
+                "ok": True,
+                "stage": "implementation",
+                "state": state["state"],
+                "resumed": True,
+                "page_count": len(universe["page_keys"]),
+                "design_element_count": len(universe["design_elements"]),
+                "integration_count": len(universe["integration_obligations"]),
+                "plan_input": str(stage_dir / "implementation-plan.input.json"),
+            }
+        for path in stage_dir.iterdir():
+            if path.is_dir():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
     component_dir, lock, bindings = load_sealed_component_design(project_root)
     universe = build_coverage_universe(project_root, lock, bindings)
     rules = rules_path.read_bytes()
@@ -4366,23 +8247,42 @@ def parser() -> argparse.ArgumentParser:
     command.add_argument("--project-root", required=True)
     command.add_argument("--case-id", required=True)
     command.add_argument("--phase", choices=("red", "green"), required=True)
+    command.add_argument("--device-serial")
     command.set_defaults(handler=run_case)
     command = commands.add_parser("capture-visual")
     command.add_argument("--project-root", required=True)
     command.add_argument("--design-name", required=True)
     command.add_argument("--driver", required=True)
+    command.add_argument("--device-serial")
     command.set_defaults(handler=capture_visual)
+    command = commands.add_parser("capture-responsive")
+    command.add_argument("--project-root", required=True)
+    command.add_argument("--page-key", required=True)
+    command.add_argument("--viewport", choices=("compact", "expanded"), required=True)
+    command.add_argument("--driver", required=True)
+    command.add_argument("--device-serial")
+    command.set_defaults(handler=capture_responsive)
     command = commands.add_parser("verify")
     command.add_argument("--project-root", required=True)
     command.add_argument("--evidence", required=True)
     command.set_defaults(handler=verify_implementation)
+    for command_parser in commands.choices.values():
+        command_parser.add_argument(
+            "--lock-timeout-seconds",
+            type=float,
+            default=DEFAULT_LOCK_TIMEOUT_SECONDS,
+            help="bounded wait for the stage write lock (default: 30)",
+        )
     return root
 
 
 def main() -> int:
     try:
         args = parser().parse_args()
-        result = args.handler(args)
+        with implementation_stage_lock(
+            Path(args.project_root).resolve(), args.lock_timeout_seconds
+        ):
+            result = args.handler(args)
     except ContractError as exc:
         error = {"ok": False, "error": exc.code, "message": exc.message}
         if exc.details is not None:

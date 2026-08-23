@@ -1592,6 +1592,16 @@ def _build_assertions(
                     "right": max(0, _right(envelope) - _right(reference_viewport)),
                 }
             )
+            responsive.append(
+                {
+                    "kind": "vertical_clipping_allowance",
+                    "instance_id": instance_id,
+                    "top": max(0, reference_viewport["top"] - envelope["top"]),
+                    "bottom": max(
+                        0, _bottom(envelope) - _bottom(reference_viewport)
+                    ),
+                }
+            )
     decisions_by_identity = {
         (value["scope"], value["parent_instance_id"], value["slot"]): value
         for value in decisions
@@ -1692,7 +1702,7 @@ def _build_assertions(
         return values
 
     for decision in decisions:
-        if decision["layout_kind"] != "scroll" or decision["main_axis"] != "horizontal":
+        if decision["layout_kind"] != "scroll":
             continue
         if decision["scope"] == "slot":
             roots = decision["ordered_member_ids"]
@@ -1705,11 +1715,20 @@ def _build_assertions(
         allowed = list(dict.fromkeys(value for root in roots for value in subtree(root)))
         responsive.append(
             {
-                "kind": "horizontal_overflow_scope",
+                "kind": "scroll_overflow_scope",
                 "decision_id": decision["decision_id"],
+                "axis": decision["main_axis"],
                 "allowed_instance_ids": allowed,
             }
         )
+        if decision["main_axis"] == "horizontal":
+            responsive.append(
+                {
+                    "kind": "horizontal_overflow_scope",
+                    "decision_id": decision["decision_id"],
+                    "allowed_instance_ids": allowed,
+                }
+            )
     for decision in decisions:
         if decision["layout_kind"] == "scroll":
             responsive.append(
@@ -1779,6 +1798,7 @@ def _prepare_component_layout(bound_page: JSON) -> dict[str, Any]:
     selector_input = {
         "page_key": page.get("page_key"),
         "design_state_id": page.get("design_state_id"),
+        "artboard_frames_by_source_node_id": copy.deepcopy(frames),
         "component_tree": copy.deepcopy(tree),
         "component_geometry_by_instance_id": copy.deepcopy(component_geometry),
         "layout_evidence": copy.deepcopy(evidence),
@@ -2097,43 +2117,56 @@ def verify_runtime_layout(layout_contract: JSON, runtime_probe_snapshot: JSON, v
                         }
                     )
             elif assertion.get("kind") == "scroll_reachability":
-                metrics = [
+                observations = runtime_probe_snapshot.get("driver_observations")
+                results = (
+                    observations.get("scroll_results")
+                    if isinstance(observations, dict)
+                    else None
+                )
+                matches = [
                     item
-                    for item in runtime_probe_snapshot.get("scroll_metrics", [])
+                    for item in results or []
                     if isinstance(item, dict)
                     and item.get("decision_id") == assertion["decision_id"]
                 ]
-                valid_metric = False
-                if len(metrics) == 1:
-                    metric = metrics[0]
-                    required = {
-                        "decision_id",
-                        "container_instance_id",
-                        "axis",
-                        "viewport_extent",
-                        "content_extent",
-                        "observed_offsets",
-                    }
-                    if (
-                        set(metric) == required
-                        and metric.get("container_instance_id")
-                        == assertion["container_instance_id"]
-                        and metric.get("axis") == assertion["axis"]
-                        and _finite_number(metric.get("viewport_extent"))
-                        and _finite_number(metric.get("content_extent"))
-                        and metric["viewport_extent"] > 0
-                        and metric["content_extent"] >= 0
-                        and isinstance(metric.get("observed_offsets"), list)
-                        and all(_finite_number(value) for value in metric["observed_offsets"])
-                    ):
-                        maximum = max(
-                            0, metric["content_extent"] - metric["viewport_extent"]
+                container_id = assertion["container_instance_id"]
+                required_ids: set[str] = set()
+                for instance_id in expected_nodes:
+                    current_id: str | None = instance_id
+                    while current_id is not None:
+                        if current_id == container_id:
+                            required_ids.add(instance_id)
+                            break
+                        current = expected_nodes.get(current_id)
+                        current_id = (
+                            current.get("parent_instance_id")
+                            if isinstance(current, dict)
+                            else None
                         )
-                        valid_metric = (
-                            0 in metric["observed_offsets"]
-                            and maximum in metric["observed_offsets"]
-                        )
-                if not valid_metric:
+                valid_result = False
+                if len(matches) == 1:
+                    result = matches[0]
+                    observed_ids = result.get("observed_instance_ids")
+                    valid_result = (
+                        set(result)
+                        == {
+                            "decision_id",
+                            "container_instance_id",
+                            "axis",
+                            "end_reached",
+                            "restored_to_start",
+                            "observed_instance_ids",
+                        }
+                        and result.get("container_instance_id") == container_id
+                        and result.get("axis") == assertion["axis"]
+                        and result.get("end_reached") is True
+                        and result.get("restored_to_start") is True
+                        and isinstance(observed_ids, list)
+                        and all(isinstance(value, str) and value for value in observed_ids)
+                        and len(observed_ids) == len(set(observed_ids))
+                        and required_ids.issubset(set(observed_ids))
+                    )
+                if not valid_result:
                     failures.append(
                         {
                             "code": "runtime_scroll_unreachable",
@@ -2170,6 +2203,13 @@ def verify_runtime_layout(layout_contract: JSON, runtime_probe_snapshot: JSON, v
                 if assertion.get("kind") == "horizontal_overflow_scope"
                 for instance_id in assertion.get("allowed_instance_ids", [])
             }
+            vertical_scroll_members = {
+                instance_id
+                for assertion in layout_contract.get("responsive_assertions", [])
+                if assertion.get("kind") == "scroll_overflow_scope"
+                and assertion.get("axis") == "vertical"
+                for instance_id in assertion.get("allowed_instance_ids", [])
+            }
             for instance_id in sorted(set(overflow_allowances) - horizontal_scroll_members):
                 bounds = measured_bounds.get(instance_id)
                 if bounds is None:
@@ -2186,6 +2226,35 @@ def verify_runtime_layout(layout_contract: JSON, runtime_probe_snapshot: JSON, v
                             "viewport_bounds": viewport_rect,
                             "component_bounds": bounds,
                             "reference_allowance": {"left": allowance["left"], "right": allowance["right"]},
+                        }
+                    )
+            vertical_allowances = {
+                assertion["instance_id"]: assertion
+                for assertion in layout_contract.get("responsive_assertions", [])
+                if assertion.get("kind") == "vertical_clipping_allowance"
+            }
+            for instance_id in sorted(
+                set(vertical_allowances) - vertical_scroll_members
+            ):
+                bounds = measured_bounds.get(instance_id)
+                if bounds is None:
+                    continue
+                allowance = vertical_allowances[instance_id]
+                if (
+                    bounds["top"] < viewport_rect["top"] - allowance["top"]
+                    or _bottom(bounds)
+                    > _bottom(viewport_rect) + allowance["bottom"]
+                ):
+                    failures.append(
+                        {
+                            "code": "runtime_vertical_clipping",
+                            "instance_id": instance_id,
+                            "viewport_bounds": viewport_rect,
+                            "component_bounds": bounds,
+                            "reference_allowance": {
+                                "top": allowance["top"],
+                                "bottom": allowance["bottom"],
+                            },
                         }
                     )
     return {"status": "pass" if not failures else "fail", "failures": failures}

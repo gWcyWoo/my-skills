@@ -7,6 +7,8 @@ import hashlib
 import json
 import os
 import tempfile
+from contextlib import contextmanager
+import fcntl
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -40,6 +42,18 @@ def _atomic_write(path: Path, value: object) -> None:
         temporary = Path(handle.name)
         handle.write(_json_bytes(value))
     os.replace(temporary, path)
+
+
+@contextmanager
+def _mutation_lock(path: Path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = path.with_name(f"{path.name}.lock")
+    with lock_path.open("a+b") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def node(
@@ -108,44 +122,47 @@ def create(
     _validate_specs(nodes)
     definition = _definition(stage, input_sha256, nodes)
     definition_sha256 = _digest(definition)
-    if path.is_file():
-        checklist = load(path, stage=stage, input_sha256=input_sha256, nodes=nodes)
-        return checklist
-    completed = set(initially_completed)
-    known = {item["node_id"] for item in nodes}
-    if not completed.issubset(known):
-        raise ChecklistError("invalid_checklist_definition", "initial checklist completion is unknown")
-    runtime_nodes: list[dict[str, Any]] = []
-    events: list[dict[str, Any]] = []
-    for item in nodes:
-        is_complete = item["node_id"] in completed
-        runtime_nodes.append(
-            {
-                **item,
-                "status": "completed" if is_complete else "pending",
-                "evidence_sha256": input_sha256 if is_complete else None,
-                "invalidated_by": None,
-            }
-        )
-        if is_complete:
-            events.append(
+    with _mutation_lock(path):
+        if path.is_file():
+            checklist = load(path, stage=stage, input_sha256=input_sha256, nodes=nodes)
+            return checklist
+        completed = set(initially_completed)
+        known = {item["node_id"] for item in nodes}
+        if not completed.issubset(known):
+            raise ChecklistError(
+                "invalid_checklist_definition", "initial checklist completion is unknown"
+            )
+        runtime_nodes: list[dict[str, Any]] = []
+        events: list[dict[str, Any]] = []
+        for item in nodes:
+            is_complete = item["node_id"] in completed
+            runtime_nodes.append(
                 {
-                    "sequence": len(events) + 1,
-                    "node_id": item["node_id"],
-                    "event": "completed",
-                    "evidence_sha256": input_sha256,
+                    **item,
+                    "status": "completed" if is_complete else "pending",
+                    "evidence_sha256": input_sha256 if is_complete else None,
+                    "invalidated_by": None,
                 }
             )
-    checklist = {
-        "schema": "icp.stage-checklist",
-        "stage": stage,
-        "input_sha256": input_sha256,
-        "definition_sha256": definition_sha256,
-        "nodes": runtime_nodes,
-        "events": events,
-    }
-    _atomic_write(path, checklist)
-    return checklist
+            if is_complete:
+                events.append(
+                    {
+                        "sequence": len(events) + 1,
+                        "node_id": item["node_id"],
+                        "event": "completed",
+                        "evidence_sha256": input_sha256,
+                    }
+                )
+        checklist = {
+            "schema": "icp.stage-checklist",
+            "stage": stage,
+            "input_sha256": input_sha256,
+            "definition_sha256": definition_sha256,
+            "nodes": runtime_nodes,
+            "events": events,
+        }
+        _atomic_write(path, checklist)
+        return checklist
 
 
 def load(
@@ -260,18 +277,7 @@ def _descendants(checklist: dict[str, Any], root_id: str) -> set[str]:
     return result
 
 
-def invalidate(
-    path: Path,
-    *,
-    stage: str,
-    input_sha256: str,
-    nodes: list[dict[str, Any]],
-    node_id: str,
-) -> dict[str, Any]:
-    checklist = load(path, stage=stage, input_sha256=input_sha256, nodes=nodes)
-    by_id = {item["node_id"]: item for item in checklist["nodes"]}
-    if node_id not in by_id:
-        raise ChecklistError("unknown_checklist_node", f"unknown checklist node: {node_id}")
+def _invalidate_loaded(checklist: dict[str, Any], node_id: str) -> None:
     affected = _descendants(checklist, node_id)
     for item in checklist["nodes"]:
         if item["node_id"] in affected and item["status"] == "completed":
@@ -286,8 +292,24 @@ def invalidate(
                     "invalidated_by": node_id,
                 }
             )
-    _atomic_write(path, checklist)
-    return checklist
+
+
+def invalidate(
+    path: Path,
+    *,
+    stage: str,
+    input_sha256: str,
+    nodes: list[dict[str, Any]],
+    node_id: str,
+) -> dict[str, Any]:
+    with _mutation_lock(path):
+        checklist = load(path, stage=stage, input_sha256=input_sha256, nodes=nodes)
+        by_id = {item["node_id"]: item for item in checklist["nodes"]}
+        if node_id not in by_id:
+            raise ChecklistError("unknown_checklist_node", f"unknown checklist node: {node_id}")
+        _invalidate_loaded(checklist, node_id)
+        _atomic_write(path, checklist)
+        return checklist
 
 
 def complete(
@@ -299,48 +321,43 @@ def complete(
     node_id: str,
     evidence_sha256: str,
 ) -> dict[str, Any]:
-    checklist = load(path, stage=stage, input_sha256=input_sha256, nodes=nodes)
-    by_id = {item["node_id"]: item for item in checklist["nodes"]}
-    target = by_id.get(node_id)
-    if target is None:
-        raise ChecklistError("unknown_checklist_node", f"unknown checklist node: {node_id}")
-    missing_dependencies = [
-        dependency
-        for dependency in target["depends_on"]
-        if by_id[dependency]["status"] != "completed"
-    ]
-    if missing_dependencies:
-        missing = missing_dependencies[0]
-        action = by_id[missing]["action"]
-        raise ChecklistError(
-            "checklist_incomplete",
-            f"resume_from_node={missing}; required_action={action}; blocked_node={node_id}",
-        )
-    if target["status"] == "completed" and target["evidence_sha256"] == evidence_sha256:
-        return checklist
-    if target["status"] == "completed":
-        checklist = invalidate(
-            path,
-            stage=stage,
-            input_sha256=input_sha256,
-            nodes=nodes,
-            node_id=node_id,
-        )
+    with _mutation_lock(path):
+        checklist = load(path, stage=stage, input_sha256=input_sha256, nodes=nodes)
         by_id = {item["node_id"]: item for item in checklist["nodes"]}
-        target = by_id[node_id]
-    target["status"] = "completed"
-    target["evidence_sha256"] = evidence_sha256
-    target["invalidated_by"] = None
-    checklist["events"].append(
-        {
-            "sequence": len(checklist["events"]) + 1,
-            "node_id": node_id,
-            "event": "completed",
-            "evidence_sha256": evidence_sha256,
-        }
-    )
-    _atomic_write(path, checklist)
-    return checklist
+        target = by_id.get(node_id)
+        if target is None:
+            raise ChecklistError("unknown_checklist_node", f"unknown checklist node: {node_id}")
+        missing_dependencies = [
+            dependency
+            for dependency in target["depends_on"]
+            if by_id[dependency]["status"] != "completed"
+        ]
+        if missing_dependencies:
+            missing = missing_dependencies[0]
+            action = by_id[missing]["action"]
+            raise ChecklistError(
+                "checklist_incomplete",
+                f"resume_from_node={missing}; required_action={action}; blocked_node={node_id}",
+            )
+        if target["status"] == "completed" and target["evidence_sha256"] == evidence_sha256:
+            return checklist
+        if target["status"] == "completed":
+            _invalidate_loaded(checklist, node_id)
+            by_id = {item["node_id"]: item for item in checklist["nodes"]}
+            target = by_id[node_id]
+        target["status"] = "completed"
+        target["evidence_sha256"] = evidence_sha256
+        target["invalidated_by"] = None
+        checklist["events"].append(
+            {
+                "sequence": len(checklist["events"]) + 1,
+                "node_id": node_id,
+                "event": "completed",
+                "evidence_sha256": evidence_sha256,
+            }
+        )
+        _atomic_write(path, checklist)
+        return checklist
 
 
 def require_ready(

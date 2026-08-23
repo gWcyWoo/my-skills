@@ -374,6 +374,21 @@ class ComponentDesignV4CliTest(unittest.TestCase):
             read_json(frozen_path)["bundle_digest"],
         )
 
+    def test_begin_rebuilds_uncommitted_artifacts_when_state_was_not_published(self) -> None:
+        begun = self.begin()
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        expected_state = read_json(self.stage_dir / "state.json")
+        (self.stage_dir / "state.json").unlink()
+
+        resumed = self.begin()
+
+        self.assertEqual(resumed.returncode, 0, resumed.stdout + resumed.stderr)
+        self.assertEqual(read_json(self.stage_dir / "state.json"), expected_state)
+        self.assertEqual(
+            read_json(self.stage_dir / "checklist.json")["nodes"][0]["status"],
+            "completed",
+        )
+
     def test_begin_requires_the_stage1_frozen_source(self) -> None:
         (self.project / ".icp" / "source" / "source-bundle.json").unlink()
 
@@ -2402,6 +2417,23 @@ class ComponentDesignV4CliTest(unittest.TestCase):
         finally:
             nested.tearDown()
 
+    def test_source_contract_values_are_bound_to_their_actual_sheet_columns(self) -> None:
+        bundle = read_json(self.bundle_path)
+        member = next(item for item in bundle["members"] if item["title"] == "Design A")
+        contract = member["source_contract"]
+        contract["interaction"] = member["row_data"]["UI补充描述"]
+        contract["contract_digest"] = canonical_digest(
+            {key: value for key, value in contract.items() if key != "contract_digest"}
+        )
+        bundle["bundle_digest"] = canonical_digest(
+            {key: value for key, value in bundle.items() if key != "bundle_digest"}
+        )
+
+        rejected, _nested = self.begin_on_fresh_project(bundle)
+
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("source contract column mismatch", rejected.stderr)
+
     def test_analyzed_column_rejects_duplicate_missing_and_unexpected_columns(self) -> None:
         base = read_json(self.bundle_path)
 
@@ -2471,6 +2503,46 @@ class ComponentDesignV4CliTest(unittest.TestCase):
                     {"from_title": "Design A", "to_title": "Designless Context"},
                 ],
             )
+        finally:
+            nested.tearDown()
+
+    def test_begin_rejects_a_self_consistent_bundle_that_drops_a_title_mention(self) -> None:
+        bundle = read_json(self.bundle_path)
+        closure = bundle["source_closure"]
+        source_row = next(
+            row
+            for row in closure["analysis"]["rows"]
+            if any(field["references"] for field in row["fields"])
+        )
+        source_field = next(
+            field for field in source_row["fields"] if field["references"]
+        )
+        removed_reference = source_field["references"].pop(0)
+        source_title = source_row["title"]
+        target_title = removed_reference["target_title"]
+        bundle["relations"] = [
+            relation
+            for relation in bundle["relations"]
+            if (relation["from_title"], relation["to_title"])
+            != (source_title, target_title)
+        ]
+        bundle["members"] = [
+            member for member in bundle["members"] if member["title"] != target_title
+        ]
+        closure["analysis"]["rows"] = [
+            row for row in closure["analysis"]["rows"] if row["title"] != target_title
+        ]
+        closure["review"]["field_reviews"] = [
+            review
+            for review in closure["review"]["field_reviews"]
+            if review["title"] != target_title
+        ]
+        refresh_iole_digests(bundle)
+
+        rejected, nested = self.begin_on_fresh_project(bundle)
+        try:
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertIn("unresolved title mention", rejected.stderr)
         finally:
             nested.tearDown()
 
@@ -2752,6 +2824,15 @@ class ComponentDesignV4CliTest(unittest.TestCase):
                 if item["clause_id"].startswith("requirement:")
             )
         )
+        design_a = next(item for item in pages if item["member_title"] == "Design A")
+        design_a_template = read_json(Path(design_a["input_path"]))
+        self.assertIn(
+            "Designless Context",
+            {
+                item["target_member_title"]
+                for item in design_a_template["navigation_requirements"]
+            },
+        )
 
     def test_modal_reference_becomes_an_exact_page_presentation_requirement(self) -> None:
         self.bundle_path = self.build_source_bundle(design_a_relation_kind="modal")
@@ -3032,6 +3113,28 @@ class ComponentDesignV4CliTest(unittest.TestCase):
 
         self.assertNotEqual(begun.returncode, 0)
         self.assertIn("source closure", begun.stderr)
+
+    def test_extract_begin_rejects_a_false_source_closure_before_stage_one_work(self) -> None:
+        bundle = read_json(self.bundle_path)
+        bundle["source_closure"]["review"]["decision"] = "revise"
+        refresh_iole_digests(bundle)
+        source_path = self.root / "false-closure-bundle.json"
+        write_json(source_path, bundle)
+        extract_project = self.root / "extract-project"
+        extract_project.mkdir()
+
+        begun = run_command(
+            STAGE_ROOT.parent / "extract" / "scripts" / "extract.py",
+            "begin-run",
+            "--project-root",
+            str(extract_project),
+            "--source-bundle",
+            str(source_path),
+        )
+
+        self.assertNotEqual(begun.returncode, 0)
+        self.assertIn("source closure review did not pass", begun.stderr)
+        self.assertFalse((extract_project / ".icp" / "extract" / "run-manifest.json").exists())
 
     def test_locked_source_context_cannot_be_changed_without_detection(self) -> None:
         self.seal_all_pages()
@@ -5211,6 +5314,16 @@ class ComponentDesignV4CliTest(unittest.TestCase):
                 all("source_nodes" in block for block in design["blocks"])
             )
 
+    def test_begin_does_not_rerun_stage_one_verification(self) -> None:
+        # Stage 1 already froze a complete run-result. Removing an internal review
+        # artifact makes a second verify-run impossible, but must not prevent
+        # Stage 2 from consuming the sealed Stage-1 output.
+        (self.project / ".icp" / "extract" / "Design A" / "semantic-review.json").unlink()
+
+        begun = self.begin()
+
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+
     def test_begin_rejects_ui_supplement_not_used_for_stage_one_grouping(self) -> None:
         self.bundle_path = self.build_source_bundle(source_contains_todo=True)
 
@@ -5273,6 +5386,104 @@ class ComponentDesignV4CliTest(unittest.TestCase):
         self.assertEqual(actual_fact_ids, expected_fact_ids)
         self.assertTrue((self.stage_dir / "component-cache-events.json").is_file())
         self.assertTrue((self.stage_dir / "replacement-map.json").is_file())
+
+    def test_record_abstraction_resumes_after_artifacts_were_written_before_state(self) -> None:
+        self.seal_all_pages()
+        plan = self.valid_abstraction_plan()
+        state_path = self.stage_dir / "state.json"
+        checklist_path = self.stage_dir / "checklist.json"
+        state_before = state_path.read_bytes()
+        checklist_before = checklist_path.read_bytes()
+
+        first = self.record_abstraction(plan)
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        state_path.write_bytes(state_before)
+        checklist_path.write_bytes(checklist_before)
+
+        resumed = self.record_abstraction(plan)
+
+        self.assertEqual(resumed.returncode, 0, resumed.stdout + resumed.stderr)
+        self.assertEqual(read_json(state_path)["state"], "ready_to_lock")
+
+    def test_committed_stage2_steps_repair_missing_checklist_receipts_without_new_revision(self) -> None:
+        begun = self.begin()
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        pages = json.loads(begun.stdout)["pages"]
+        first = pages[0]
+        facts = self.valid_page_facts(first)
+        drafted = self.record_page_draft(first, facts)
+        self.assertEqual(drafted.returncode, 0, drafted.stdout + drafted.stderr)
+
+        def remove_receipt(node_id: str) -> None:
+            checklist_path = self.stage_dir / "checklist.json"
+            checklist = read_json(checklist_path)
+            checklist["events"] = [
+                event
+                for event in checklist["events"]
+                if not (
+                    event["node_id"] == node_id
+                    and event["event"] == "completed"
+                )
+            ]
+            for sequence, event in enumerate(checklist["events"], start=1):
+                event["sequence"] = sequence
+            target = next(
+                item for item in checklist["nodes"] if item["node_id"] == node_id
+            )
+            target.update(
+                {
+                    "status": "pending",
+                    "evidence_sha256": None,
+                    "invalidated_by": None,
+                }
+            )
+            write_json(checklist_path, checklist)
+
+        state_path = self.stage_dir / "state.json"
+        facts_revision = read_json(state_path)["pages"][first["page_key"]]["revision"]
+        remove_receipt(f"page:{first['page_key']}.facts")
+        resumed_draft = self.record_page_draft(first, facts, acquire_contracts=False)
+        self.assertEqual(
+            resumed_draft.returncode,
+            0,
+            resumed_draft.stdout + resumed_draft.stderr,
+        )
+        self.assertEqual(
+            read_json(state_path)["pages"][first["page_key"]]["revision"],
+            facts_revision,
+        )
+
+        review = self.page_review(first)
+        reviewed = self.record_page_review(first, review)
+        self.assertEqual(reviewed.returncode, 0, reviewed.stdout + reviewed.stderr)
+        review_revision = read_json(state_path)["pages"][first["page_key"]]["revision"]
+        remove_receipt(f"page:{first['page_key']}.review")
+        resumed_review = self.record_page_review(first, review)
+        self.assertEqual(
+            resumed_review.returncode,
+            0,
+            resumed_review.stdout + resumed_review.stderr,
+        )
+        self.assertEqual(
+            read_json(state_path)["pages"][first["page_key"]]["revision"],
+            review_revision,
+        )
+
+        for page in pages[1:]:
+            recorded = self.record_page(page, self.valid_page_facts(page))
+            self.assertEqual(recorded.returncode, 0, recorded.stdout + recorded.stderr)
+        plan = self.valid_abstraction_plan()
+        abstracted = self.record_abstraction(plan)
+        self.assertEqual(abstracted.returncode, 0, abstracted.stdout + abstracted.stderr)
+        state_before_retry = read_json(state_path)
+        remove_receipt("group.abstraction")
+        resumed_abstraction = self.record_abstraction(plan)
+        self.assertEqual(
+            resumed_abstraction.returncode,
+            0,
+            resumed_abstraction.stdout + resumed_abstraction.stderr,
+        )
+        self.assertEqual(read_json(state_path), state_before_retry)
 
     def test_component_lock_references_mobile_patterns_once_without_copying_each_page(self) -> None:
         self.seal_all_pages()
@@ -5568,7 +5779,82 @@ class ComponentDesignV4CliTest(unittest.TestCase):
 
         self.assertEqual(recorded.returncode, 0, recorded.stdout + recorded.stderr)
 
-    def test_single_candidate_shared_container_needs_source_only_component_declaration(self) -> None:
+    def test_inbound_shared_usage_authorizes_one_unambiguous_target_candidate(self) -> None:
+        self.bundle_path = self.build_source_bundle(include_designless_context=True)
+        begun = self.begin()
+        self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+        shared_usage_fact_id = None
+        for page in reversed(json.loads(begun.stdout)["pages"]):
+            facts = self.valid_page_facts(page)
+            if page["member_title"] == "Design A":
+                interaction_fact = next(
+                    fact
+                    for candidate in facts["candidates"]
+                    for fact in candidate["facts"]
+                    if any(
+                        ref["clause_id"] == "page:interaction"
+                        for ref in fact["source_refs"]
+                    )
+                )
+                relation = {
+                    **interaction_fact,
+                    "fact_id": f"{page['page_key']}-shared-usage",
+                    "kind": "component_relation",
+                    "meaning": "Use the shared component from Designless Context.",
+                    "relation_intent": "shared_usage",
+                    "relation_target": {
+                        "kind": "source_member",
+                        "id": "Designless Context",
+                    },
+                }
+                facts["candidates"][1]["facts"].append(relation)
+                interaction_segment = next(
+                    segment
+                    for coverage in facts["source_coverage"]
+                    if coverage["clause_id"] == "page:interaction"
+                    for segment in coverage["segments"]
+                    if interaction_fact["fact_id"] in segment.get("fact_ids", [])
+                )
+                interaction_segment["fact_ids"].append(relation["fact_id"])
+                shared_usage_fact_id = relation["fact_id"]
+            recorded = self.record_page(page, facts)
+            self.assertEqual(recorded.returncode, 0, recorded.stdout + recorded.stderr)
+
+        self.assertIsNotNone(shared_usage_fact_id)
+        plan = self.source_declared_single_container_plan()
+        usage_instance = next(
+            item
+            for item in plan["component_instances"]
+            if item["member_title"] == "Design A"
+        )
+        usage_binding = next(
+            item
+            for item in usage_instance["fact_bindings"]
+            if item["fact_id"] == shared_usage_fact_id
+        )
+        usage_binding.update(
+            {
+                "target_kind": "component_ref",
+                "target_id": "source-declared-container",
+            }
+        )
+
+        recorded = self.record_abstraction(plan)
+
+        self.assertEqual(recorded.returncode, 0, recorded.stdout + recorded.stderr)
+        verified = self.verify()
+        self.assertEqual(verified.returncode, 0, verified.stdout + verified.stderr)
+        lock = read_json(self.stage_dir / "component-lock.json")
+        self.assertIn(
+            "source-declared-container",
+            {
+                definition["component_id"]
+                for definition in lock["component_definitions"]
+                if definition["scope"] == "shared"
+            },
+        )
+
+    def test_single_candidate_shared_container_needs_source_backed_share_evidence(self) -> None:
         self.bundle_path = self.build_source_bundle(include_designless_context=True)
         self.seal_all_pages()
 

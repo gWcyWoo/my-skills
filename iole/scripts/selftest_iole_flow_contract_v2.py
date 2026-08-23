@@ -206,6 +206,106 @@ def page_node(title: str) -> str:
     return "page:" + internal_page_id(title)
 
 
+def current_execution_plan() -> dict[str, object]:
+    source_bundle_digest = "f" * 64
+    implementation_plan_sha256 = "b" * 64
+    flow_id = "flow-" + canonical_digest(
+        {
+            "source_bundle_digest": source_bundle_digest,
+            "implementation_plan_sha256": implementation_plan_sha256,
+        }
+    )[:24]
+    return {
+        "kind": "iole.flow-execution-plan.v4",
+        "schema_version": 4,
+        "decision": "ready",
+        "flow_id": flow_id,
+        "role": "client",
+        "source_bundle_digest": source_bundle_digest,
+        "claim_page_titles": ["申请首页", "职业信息页", "申请结果页"],
+        "member_digests": {
+            "page-home": "c" * 64,
+            "page-job": "d" * 64,
+            "page-result": "e" * 64,
+        },
+        "component_lock_sha256": "a" * 64,
+        "implementation_plan_sha256": implementation_plan_sha256,
+        "execution_nodes": [],
+        "file_owners": {},
+    }
+
+
+def write_complete_icp_result(root: Path, plan: dict[str, object]) -> Path:
+    artifacts = {
+        "tdd-evidence.json": {"cases": [{"red": {}, "green": {}}]},
+        "implementation-manifest.json": {"files": []},
+        "runtime-evidence.json": {"visual_runs": [], "responsive_runs": []},
+    }
+    hashes: dict[str, str] = {}
+    for filename, value in artifacts.items():
+        path = root / filename
+        path.write_text(json.dumps(value, ensure_ascii=False) + "\n", encoding="utf-8")
+        hashes[filename] = hashlib.sha256(path.read_bytes()).hexdigest()
+    result = {
+        "schema": "icp.implementation.stage-result.v1",
+        "status": "complete",
+        "component_lock_sha256": plan["component_lock_sha256"],
+        "implementation_plan_sha256": plan["implementation_plan_sha256"],
+        "tdd_evidence_sha256": hashes["tdd-evidence.json"],
+        "implementation_manifest_sha256": hashes["implementation-manifest.json"],
+        "runtime_evidence_sha256": hashes["runtime-evidence.json"],
+        "design_element_count": 1,
+        "semantic_fact_count": 1,
+        "integration_case_count": 1,
+        "responsive_run_count": 2,
+        "visual_results": [{"design_name": "登录", "status": "pass"}],
+        "verification_commands": [
+            {"kind": kind, "exit_code": 0}
+            for kind in ("lint", "build", "integration")
+        ],
+    }
+    result_path = root / "stage-result.json"
+    result_path.write_text(
+        json.dumps(result, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    result_sha256 = hashlib.sha256(result_path.read_bytes()).hexdigest()
+    checklist_path = root / "checklist.json"
+    checklist_path.write_text(
+        json.dumps(
+            {
+                "schema": "icp.stage-checklist",
+                "stage": "implementation",
+                "nodes": [
+                    {
+                        "node_id": "stage.verify",
+                        "status": "completed",
+                        "evidence_sha256": result_sha256,
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (root / "state.json").write_text(
+        json.dumps(
+            {
+                "state": "complete",
+                "implementation_plan_sha256": plan["implementation_plan_sha256"],
+                "stage_result_sha256": result_sha256,
+                "checklist_sha256": hashlib.sha256(
+                    checklist_path.read_bytes()
+                ).hexdigest(),
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return result_path
+
+
 class FlowPlanContractTests(unittest.TestCase):
     def test_source_bundle_v2_compiles_directly_to_execution_plan(self) -> None:
         bundle = {
@@ -220,6 +320,7 @@ class FlowPlanContractTests(unittest.TestCase):
                     "title": "登录",
                     "change_scope": "modify",
                     "row_data": {"标题": "登录"},
+                    "source_contract": {"contract_digest": "d" * 64},
                 }
             ],
             "relations": [],
@@ -235,11 +336,23 @@ class FlowPlanContractTests(unittest.TestCase):
                 json.dumps(bundle, ensure_ascii=False), encoding="utf-8"
             )
             component_lock = {
-                "schema": "icp.component-design.lock.v6",
                 "source_hashes": {
-                    "iole_source_bundle_sha256": hashlib.sha256(
-                        bundle_path.read_bytes()
-                    ).hexdigest()
+                    "source_bundle_digest": bundle["bundle_digest"]
+                },
+                "implementation_contract": {
+                    "source_identity": {
+                        "source_id": bundle["source_id"],
+                        "root_title": bundle["root_title"],
+                        "bundle_digest": bundle["bundle_digest"],
+                        "members": [
+                            {
+                                "title": "登录",
+                                "page_key": page_key,
+                                "change_scope": "modify",
+                                "contract_digest": "d" * 64,
+                            }
+                        ],
+                    }
                 },
                 "source_context": {
                     "members": [
@@ -256,7 +369,6 @@ class FlowPlanContractTests(unittest.TestCase):
                 json.dumps(component_lock, ensure_ascii=False), encoding="utf-8"
             )
             implementation_plan = {
-                "schema": "icp.implementation.plan.v1",
                 "component_lock_sha256": hashlib.sha256(
                     lock_path.read_bytes()
                 ).hexdigest(),
@@ -1039,240 +1151,6 @@ class FlowPlanContractTests(unittest.TestCase):
             "modify page is not ready: 登录相关",
         )
 
-    def test_lossless_review_writeback_accepts_a_complete_icp_v2_result(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            input_path = root / "flow-input.json"
-            input_path.write_text(json.dumps(base_input()), encoding="utf-8")
-            planned = subprocess.run(
-                [sys.executable, str(SCRIPT), "build-plan", "--input", str(input_path)],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            plan = json.loads(planned.stdout)
-            plan["kind"] = "iole.flow-plan.v3"
-            plan["schema_version"] = 3
-            plan_path = root / "flow-plan-v3.json"
-            plan_path.write_text(json.dumps(plan), encoding="utf-8")
-            changed_path = root / "app/src/main/Screen.kt"
-            changed_path.parent.mkdir(parents=True, exist_ok=True)
-            changed_path.write_text("// complete\n", encoding="utf-8")
-            manifest_path = root / "manifest.json"
-            manifest_path.write_text("{}\n", encoding="utf-8")
-            result_path = root / "icp-result.json"
-            result_path.write_text(
-                json.dumps(
-                    {
-                        "kind": "icp.flow-handoff-result.v2",
-                        "schema_version": 2,
-                        "job_id": "fixture-job",
-                        "job_digest": "1" * 64,
-                        "flow_id": plan["flow_id"],
-                        "member_digests": plan["member_digests"],
-                        "base_revision": "2" * 40,
-                        "project_root": str(root.resolve()),
-                        "status": "ready-for-pr",
-                        "changed_files": ["app/src/main/Screen.kt"],
-                        "verification": {
-                            "node_tests": "passed",
-                            "runtime_capture": "passed",
-                            "visual": "passed",
-                            "e2e": "passed",
-                        },
-                        "evidence_manifest": str(manifest_path.resolve()),
-                        "evidence_manifest_digest": hashlib.sha256(
-                            manifest_path.read_bytes()
-                        ).hexdigest(),
-                        "implementation_contract_sha256": "4" * 64,
-                        "coverage": {
-                            "status": "passed",
-                            "required_clause_ids": ["clause-1"],
-                            "covered_clause_ids": ["clause-1"],
-                            "worker_evidence_digests": [
-                                {"node_id": node_id, "sha256": "5" * 64}
-                                for node_id in plan["execution_order"]
-                            ],
-                        },
-                    }
-                ),
-                encoding="utf-8",
-            )
-
-            intent_process = subprocess.run(
-                [
-                    sys.executable,
-                    str(SCRIPT),
-                    "build-review-writeback",
-                    "--plan",
-                    str(plan_path),
-                    "--lease-token",
-                    "flow-lease-1",
-                    "--mr",
-                    "2",
-                    "--pr-url",
-                    "https://git.example/team/app/pull/9",
-                    "--icp-result",
-                    str(result_path),
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-            plan["kind"] = "iole.flow-execution-plan.v4"
-            plan["schema_version"] = 4
-            execution_plan_path = root / "flow-execution-plan-v4.json"
-            execution_plan_path.write_text(json.dumps(plan), encoding="utf-8")
-            execution_intent_process = subprocess.run(
-                [
-                    sys.executable,
-                    str(SCRIPT),
-                    "build-review-writeback",
-                    "--plan",
-                    str(execution_plan_path),
-                    "--lease-token",
-                    "flow-lease-1",
-                    "--mr",
-                    "2",
-                    "--pr-url",
-                    "https://git.example/team/app/pull/9",
-                    "--icp-result",
-                    str(result_path),
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-        self.assertEqual(intent_process.returncode, 0, intent_process.stdout + intent_process.stderr)
-        self.assertEqual(
-            execution_intent_process.returncode,
-            0,
-            execution_intent_process.stdout + execution_intent_process.stderr,
-        )
-        self.assertEqual(
-            json.loads(intent_process.stdout)["connector_operation"],
-            "complete_flow_rows",
-        )
-
-    def test_lossless_review_writeback_rejects_incomplete_icp_clause_coverage(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            input_path = root / "flow-input.json"
-            input_path.write_text(json.dumps(base_input()), encoding="utf-8")
-            planned = subprocess.run(
-                [sys.executable, str(SCRIPT), "build-plan", "--input", str(input_path)],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            plan = json.loads(planned.stdout)
-            plan["kind"] = "iole.flow-plan.v3"
-            plan["schema_version"] = 3
-            plan_path = root / "flow-plan-v3.json"
-            plan_path.write_text(json.dumps(plan), encoding="utf-8")
-            result_path = root / "icp-result.json"
-            result_path.write_text(
-                json.dumps(
-                    {
-                        "kind": "icp.flow-handoff-result.v2",
-                        "schema_version": 2,
-                        "job_id": "fixture-job",
-                        "job_digest": "1" * 64,
-                        "flow_id": plan["flow_id"],
-                        "member_digests": plan["member_digests"],
-                        "base_revision": "2" * 40,
-                        "project_root": str(root.resolve()),
-                        "status": "ready-for-pr",
-                        "changed_files": ["app/src/main/Screen.kt"],
-                        "verification": {
-                            "node_tests": "passed",
-                            "runtime_capture": "passed",
-                            "visual": "passed",
-                            "e2e": "passed",
-                        },
-                        "evidence_manifest": str((root / "manifest.json").resolve()),
-                        "evidence_manifest_digest": "3" * 64,
-                        "implementation_contract_sha256": "4" * 64,
-                        "coverage": {
-                            "status": "passed",
-                            "required_clause_ids": ["clause-1"],
-                            "covered_clause_ids": [],
-                            "worker_evidence_digests": [],
-                        },
-                    }
-                ),
-                encoding="utf-8",
-            )
-
-            intent_process = subprocess.run(
-                [
-                    sys.executable,
-                    str(SCRIPT),
-                    "build-review-writeback",
-                    "--plan",
-                    str(plan_path),
-                    "--lease-token",
-                    "flow-lease-1",
-                    "--mr",
-                    "2",
-                    "--pr-url",
-                    "https://git.example/team/app/pull/9",
-                    "--icp-result",
-                    str(result_path),
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-
-        self.assertEqual(intent_process.returncode, 2)
-        self.assertEqual(
-            json.loads(intent_process.stdout)["reason"],
-            "ICP result acceptance coverage is incomplete",
-        )
-
-    def test_lossless_review_writeback_requires_a_verified_icp_v2_result(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            input_path = root / "flow-input.json"
-            input_path.write_text(json.dumps(base_input()), encoding="utf-8")
-            planned = subprocess.run(
-                [sys.executable, str(SCRIPT), "build-plan", "--input", str(input_path)],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            plan = json.loads(planned.stdout)
-            plan["kind"] = "iole.flow-plan.v3"
-            plan["schema_version"] = 3
-            plan_path = root / "flow-plan-v3.json"
-            plan_path.write_text(json.dumps(plan), encoding="utf-8")
-
-            intent_process = subprocess.run(
-                [
-                    sys.executable,
-                    str(SCRIPT),
-                    "build-review-writeback",
-                    "--plan",
-                    str(plan_path),
-                    "--lease-token",
-                    "flow-lease-1",
-                    "--mr",
-                    "2",
-                    "--pr-url",
-                    "https://git.example/team/app/pull/9",
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-
-        self.assertEqual(intent_process.returncode, 2)
-        self.assertEqual(
-            json.loads(intent_process.stdout)["reason"],
-            "lossless review writeback requires a verified ICP v2 result",
-        )
-
     def test_lossless_build_plan_rejects_an_input_without_raw_sheet_rows(self) -> None:
         ui_notes = "原始 UI 合同"
         raw_row = {
@@ -1668,15 +1546,18 @@ class FlowPlanContractTests(unittest.TestCase):
         result = json.loads(completed.stdout)
         self.assertEqual(result["kind"], "iole.flow-schedule-plan.v2")
         self.assertEqual(result["mr"], 0)
+        self.assertEqual(result["source_adapter"], "icps")
         self.assertEqual(result["mapping_path"], str(MAPPING))
         self.assertEqual(
             result["required_connector_operations"],
             [
+                "inspect_active_flow_claims",
                 "inspect_ready_flow_root",
                 "inspect_title_catalog",
                 "inspect_flow_rows",
                 "claim_flow_rows",
                 "release_flow_claim",
+                "reconcile_flow_claim",
                 "expand_flow_claim",
                 "complete_flow_rows",
                 "record_flow_error",
@@ -2180,7 +2061,12 @@ class FlowPlanContractTests(unittest.TestCase):
                 text=True,
             )
             plan_path = root / "flow-plan.json"
-            plan_path.write_text(planned.stdout, encoding="utf-8")
+            current_plan = current_execution_plan()
+            plan_path.write_text(
+                json.dumps(current_plan, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            result_path = write_complete_icp_result(root, current_plan)
             intent_process = subprocess.run(
                 [
                     sys.executable,
@@ -2194,6 +2080,8 @@ class FlowPlanContractTests(unittest.TestCase):
                     "2",
                     "--pr-url",
                     "https://git.example/team/app/pull/9",
+                    "--icp-result",
+                    str(result_path),
                 ],
                 check=False,
                 capture_output=True,
@@ -2210,6 +2098,262 @@ class FlowPlanContractTests(unittest.TestCase):
         self.assertEqual(intent["set"]["status"], "review")
         self.assertEqual(intent["set"]["pr_url"], "https://git.example/team/app/pull/9")
 
+    def test_current_execution_plan_requires_and_accepts_a_verified_icp_result(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            plan = current_execution_plan()
+            plan_path = root / "execution-plan.json"
+            plan_path.write_text(
+                json.dumps(plan, ensure_ascii=False) + "\n", encoding="utf-8"
+            )
+            missing = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "build-review-writeback",
+                    "--plan",
+                    str(plan_path),
+                    "--lease-token",
+                    "lease-1",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            result_path = write_complete_icp_result(root, plan)
+            accepted = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "build-review-writeback",
+                    "--plan",
+                    str(plan_path),
+                    "--lease-token",
+                    "lease-1",
+                    "--icp-result",
+                    str(result_path),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertNotEqual(missing.returncode, 0)
+        self.assertIn(
+            "requires the verified ICP stage result",
+            missing.stdout + missing.stderr,
+        )
+        self.assertEqual(accepted.returncode, 0, accepted.stdout + accepted.stderr)
+        self.assertEqual(
+            json.loads(accepted.stdout)["connector_operation"],
+            "complete_flow_rows",
+        )
+
+    def test_review_writeback_rejects_old_or_internally_transplanted_execution_plans(self) -> None:
+        for mutation in ("old-contract", "transplanted-flow-id"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary_directory:
+                root = Path(temporary_directory)
+                plan = current_execution_plan()
+                result_path = write_complete_icp_result(root, plan)
+                if mutation == "old-contract":
+                    plan["kind"] = "iole.flow-plan.v3"
+                    plan["schema_version"] = 3
+                else:
+                    plan["flow_id"] = "flow-" + "0" * 24
+                plan_path = root / "execution-plan.json"
+                plan_path.write_text(
+                    json.dumps(plan, ensure_ascii=False) + "\n", encoding="utf-8"
+                )
+
+                rejected = subprocess.run(
+                    [
+                        sys.executable,
+                        str(SCRIPT),
+                        "build-review-writeback",
+                        "--plan",
+                        str(plan_path),
+                        "--lease-token",
+                        "lease-1",
+                        "--icp-result",
+                        str(result_path),
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+
+            self.assertNotEqual(rejected.returncode, 0, mutation)
+            self.assertIn(
+                "current compiled execution plan",
+                rejected.stdout + rejected.stderr,
+            )
+
+    def test_review_writeback_rejects_an_incomplete_or_changed_stage_checklist(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            plan = current_execution_plan()
+            plan_path = root / "execution-plan.json"
+            plan_path.write_text(json.dumps(plan) + "\n", encoding="utf-8")
+            result_path = write_complete_icp_result(root, plan)
+            checklist_path = root / "checklist.json"
+            checklist = json.loads(checklist_path.read_text(encoding="utf-8"))
+            checklist["nodes"][0]["status"] = "pending"
+            checklist_path.write_text(json.dumps(checklist) + "\n", encoding="utf-8")
+            state_path = root / "state.json"
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            state["checklist_sha256"] = hashlib.sha256(
+                checklist_path.read_bytes()
+            ).hexdigest()
+            state_path.write_text(json.dumps(state) + "\n", encoding="utf-8")
+
+            rejected = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "build-review-writeback",
+                    "--plan",
+                    str(plan_path),
+                    "--lease-token",
+                    "lease-1",
+                    "--icp-result",
+                    str(result_path),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn(
+            "ICP implementation checklist is incomplete",
+            rejected.stdout + rejected.stderr,
+        )
+
+    def test_current_writeback_command_rejects_a_legacy_plan_without_icp_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            input_path = root / "flow-input.json"
+            input_path.write_text(json.dumps(base_input()), encoding="utf-8")
+            planned = subprocess.run(
+                [sys.executable, str(SCRIPT), "build-plan", "--input", str(input_path)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            plan_path = root / "legacy-plan.json"
+            plan_path.write_text(planned.stdout, encoding="utf-8")
+
+            rejected = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "build-review-writeback",
+                    "--plan",
+                    str(plan_path),
+                    "--lease-token",
+                    "lease-1",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("current compiled execution plan", rejected.stdout + rejected.stderr)
+
+    def test_current_execution_plan_rejects_tampered_or_failed_icp_results(self) -> None:
+        mutations = ("artifact", "state", "command", "visual", "plan")
+        for mutation in mutations:
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary_directory:
+                root = Path(temporary_directory)
+                plan = current_execution_plan()
+                plan_path = root / "execution-plan.json"
+                plan_path.write_text(
+                    json.dumps(plan, ensure_ascii=False) + "\n", encoding="utf-8"
+                )
+                result_path = write_complete_icp_result(root, plan)
+                if mutation == "artifact":
+                    (root / "tdd-evidence.json").write_text("{}\n", encoding="utf-8")
+                elif mutation == "state":
+                    state = json.loads((root / "state.json").read_text(encoding="utf-8"))
+                    state["state"] = "awaiting_verification"
+                    (root / "state.json").write_text(json.dumps(state) + "\n", encoding="utf-8")
+                else:
+                    result = json.loads(result_path.read_text(encoding="utf-8"))
+                    if mutation == "command":
+                        result["verification_commands"][0]["exit_code"] = 1
+                    elif mutation == "visual":
+                        result["visual_results"][0]["status"] = "fail"
+                    else:
+                        result["implementation_plan_sha256"] = "d" * 64
+                    result_path.write_text(json.dumps(result) + "\n", encoding="utf-8")
+                    state = json.loads((root / "state.json").read_text(encoding="utf-8"))
+                    state["stage_result_sha256"] = hashlib.sha256(
+                        result_path.read_bytes()
+                    ).hexdigest()
+                    (root / "state.json").write_text(json.dumps(state) + "\n", encoding="utf-8")
+                rejected = subprocess.run(
+                    [
+                        sys.executable,
+                        str(SCRIPT),
+                        "build-review-writeback",
+                        "--plan",
+                        str(plan_path),
+                        "--lease-token",
+                        "lease-1",
+                        "--icp-result",
+                        str(result_path),
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+
+            self.assertNotEqual(rejected.returncode, 0, mutation)
+
+    def test_designless_complete_icp_result_does_not_require_visual_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            plan = current_execution_plan()
+            plan_path = root / "execution-plan.json"
+            plan_path.write_text(json.dumps(plan) + "\n", encoding="utf-8")
+            result_path = write_complete_icp_result(root, plan)
+            result = json.loads(result_path.read_text(encoding="utf-8"))
+            result["design_element_count"] = 0
+            result["semantic_fact_count"] = 0
+            result["responsive_run_count"] = 0
+            result["visual_results"] = []
+            result_path.write_text(json.dumps(result) + "\n", encoding="utf-8")
+            state = json.loads((root / "state.json").read_text(encoding="utf-8"))
+            state["stage_result_sha256"] = hashlib.sha256(result_path.read_bytes()).hexdigest()
+            checklist_path = root / "checklist.json"
+            checklist = json.loads(checklist_path.read_text(encoding="utf-8"))
+            checklist["nodes"][0]["evidence_sha256"] = state["stage_result_sha256"]
+            checklist_path.write_text(json.dumps(checklist) + "\n", encoding="utf-8")
+            state["checklist_sha256"] = hashlib.sha256(
+                checklist_path.read_bytes()
+            ).hexdigest()
+            (root / "state.json").write_text(json.dumps(state) + "\n", encoding="utf-8")
+
+            accepted = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "build-review-writeback",
+                    "--plan",
+                    str(plan_path),
+                    "--lease-token",
+                    "lease-1",
+                    "--icp-result",
+                    str(result_path),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(accepted.returncode, 0, accepted.stdout + accepted.stderr)
+
     def test_default_delivery_builds_review_intent_without_pr(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -2222,7 +2366,12 @@ class FlowPlanContractTests(unittest.TestCase):
                 text=True,
             )
             plan_path = root / "flow-plan.json"
-            plan_path.write_text(planned.stdout, encoding="utf-8")
+            current_plan = current_execution_plan()
+            plan_path.write_text(
+                json.dumps(current_plan, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            result_path = write_complete_icp_result(root, current_plan)
             intent_process = subprocess.run(
                 [
                     sys.executable,
@@ -2232,6 +2381,8 @@ class FlowPlanContractTests(unittest.TestCase):
                     str(plan_path),
                     "--lease-token",
                     "flow-lease-1",
+                    "--icp-result",
+                    str(result_path),
                 ],
                 check=False,
                 capture_output=True,
@@ -2248,6 +2399,8 @@ class FlowPlanContractTests(unittest.TestCase):
                     "flow-lease-1",
                     "--mr",
                     "1",
+                    "--icp-result",
+                    str(result_path),
                 ],
                 check=False,
                 capture_output=True,

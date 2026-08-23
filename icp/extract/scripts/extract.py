@@ -5,12 +5,18 @@ from __future__ import annotations
 
 import argparse
 import copy
+import fcntl
 import hashlib
+import io
 import json
 import os
 import shutil
 import sys
 import tempfile
+import time
+import math
+from contextlib import contextmanager
+from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +30,7 @@ from stage_checklist import (  # noqa: E402
     require_complete as require_checklist_complete,
     require_ready as require_checklist_node_ready,
 )
+from source_closure import SourceClosureError, validate_source_closure  # noqa: E402
 
 from lanhu import (
     LanhuError,
@@ -41,6 +48,49 @@ class ContractError(Exception):
         super().__init__(message)
         self.code = code
         self.message = message
+
+
+DEFAULT_LOCK_TIMEOUT_SECONDS = 30.0
+
+
+@contextmanager
+def stage_write_lock(project_root: Path, timeout_seconds: float):
+    if timeout_seconds < 0:
+        raise ContractError(
+            "invalid_lock_timeout", "lock timeout must be zero or greater"
+        )
+    deadline = time.monotonic() + timeout_seconds
+    lock_fd = os.open(project_root, os.O_RDONLY)
+    try:
+        while True:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError as exc:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise ContractError(
+                        "stage_busy",
+                        "another extract command holds the stage write lock",
+                    ) from exc
+                time.sleep(min(0.05, remaining))
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+    finally:
+        os.close(lock_fd)
+
+
+def require_pillow_image():
+    try:
+        from PIL import Image as pillow_image
+    except ImportError as exc:
+        raise ContractError(
+            "missing_dependency",
+            "Pillow is required to derive and verify reference crop assets",
+        ) from exc
+    return pillow_image
 
 
 def sha256_bytes(value: bytes) -> str:
@@ -206,6 +256,10 @@ def designs_from_source_bundle(
     )
     if bundle.get("bundle_digest") != expected_digest:
         raise ContractError("invalid_source_bundle", "IOLE source bundle digest mismatch")
+    try:
+        validate_source_closure(bundle)
+    except SourceClosureError as exc:
+        raise ContractError("invalid_source_bundle", str(exc)) from exc
     source_id = bundle.get("source_id")
     root_title = bundle.get("root_title")
     if not isinstance(source_id, str) or not source_id:
@@ -673,6 +727,7 @@ def build_asset_index(
     facts: dict[str, Any],
     asset_records: list[dict[str, Any]],
     acquisition_files: list[dict[str, Any]] | None = None,
+    derived_assets: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     figma_json = source.get("figma_json")
     if not isinstance(figma_json, dict):
@@ -783,12 +838,223 @@ def build_asset_index(
             "asset_relation_missing",
             "local assets and source export URLs do not form an exact relation",
         )
+    derived = copy.deepcopy(derived_assets or [])
+    asset_ids = {asset["asset_id"] for asset in assets}
+    local_paths = {asset["local_path"] for asset in assets}
+    for asset in derived:
+        if (
+            not isinstance(asset, dict)
+            or asset.get("origin") != "reference_crop"
+            or asset.get("asset_id") in asset_ids
+            or asset.get("local_path") in local_paths
+        ):
+            raise ContractError("invalid_asset_relation", "derived asset identity is invalid")
+        asset_ids.add(asset["asset_id"])
+        local_paths.add(asset["local_path"])
     return {
         "schema": "icp.extract.asset-index.v1",
         "source_sha256": facts["source_sha256"],
         "source_facts_sha256": sha256_bytes(json_bytes(facts)),
-        "assets": assets,
+        "assets": [*assets, *derived],
     }
+
+
+def _source_rect(payload: dict[str, Any]) -> dict[str, int | float] | None:
+    frame = payload.get("frame")
+    if not isinstance(frame, dict):
+        frame = payload.get("realFrame")
+    if not isinstance(frame, dict):
+        return None
+    left = frame.get("left", frame.get("x"))
+    top = frame.get("top", frame.get("y"))
+    width = frame.get("width")
+    height = frame.get("height")
+    if not all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in (left, top, width, height)):
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    return {"left": left, "top": top, "width": width, "height": height}
+
+
+def _scaled_pixel_rect(
+    rect: dict[str, int | float], logical_scale: str
+) -> dict[str, int] | None:
+    try:
+        scale = Fraction(logical_scale)
+        left = Fraction(str(rect["left"])) * scale
+        top = Fraction(str(rect["top"])) * scale
+        right = (Fraction(str(rect["left"])) + Fraction(str(rect["width"]))) * scale
+        bottom = (Fraction(str(rect["top"])) + Fraction(str(rect["height"]))) * scale
+    except (KeyError, TypeError, ValueError, ZeroDivisionError):
+        return None
+    if scale <= 0:
+        return None
+    pixel_left = math.floor(left)
+    pixel_top = math.floor(top)
+    pixel_right = math.ceil(right)
+    pixel_bottom = math.ceil(bottom)
+    return {
+        "left": pixel_left,
+        "top": pixel_top,
+        "width": pixel_right - pixel_left,
+        "height": pixel_bottom - pixel_top,
+    }
+
+
+def _node_subtree_ids(node_id: str, nodes: dict[str, Any]) -> list[str]:
+    result: list[str] = []
+    stack = [node_id]
+    while stack:
+        current = stack.pop()
+        result.append(current)
+        node = nodes.get(current)
+        children = node.get("child_ids", []) if isinstance(node, dict) else []
+        stack.extend(reversed(children if isinstance(children, list) else []))
+    return result
+
+
+def build_reference_crop_assets(
+    facts: dict[str, Any],
+    reference_raw: bytes,
+    reference_contract: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[tuple[str, bytes]]]:
+    """Rasterize small, unexported icon components from the frozen reference."""
+
+    nodes = facts.get("nodes")
+    node_order = facts.get("node_order")
+    logical_scale = reference_contract.get("logical_scale")
+    if not isinstance(nodes, dict) or not isinstance(node_order, list) or not isinstance(logical_scale, str):
+        raise ContractError("invalid_stage", "reference crop inputs are invalid")
+    candidates: list[tuple[str, dict[str, Any]]] = []
+    for node_id in node_order:
+        node = nodes.get(node_id)
+        payload = node.get("payload") if isinstance(node, dict) else None
+        if not isinstance(payload, dict):
+            continue
+        node_type = str(payload.get("type", "")).casefold()
+        component_name = payload.get("componentName")
+        rect = _source_rect(payload)
+        if (
+            node_type not in {"symbolinstance", "symbolinstence"}
+            or not isinstance(component_name, str)
+            or not component_name
+            or rect is None
+            or rect["width"] > 64
+            or rect["height"] > 64
+        ):
+            continue
+        subtree = [nodes[subtree_id] for subtree_id in _node_subtree_ids(node_id, nodes)]
+        subtree_payloads = [
+            item.get("payload") for item in subtree if isinstance(item, dict) and isinstance(item.get("payload"), dict)
+        ]
+        if not any(str(item.get("type", "")).casefold() == "shapelayer" for item in subtree_payloads):
+            continue
+        if any("text" in str(item.get("type", "")).casefold() for item in subtree_payloads):
+            continue
+        if any(
+            isinstance(item.get("image"), dict)
+            and any(isinstance(item["image"].get(key), str) and item["image"].get(key) for key in ("imageUrl", "svgUrl"))
+            for item in subtree_payloads
+        ):
+            continue
+        candidates.append((node_id, rect))
+    if not candidates:
+        return [], []
+    pillow_image = require_pillow_image()
+    try:
+        with pillow_image.open(io.BytesIO(reference_raw)) as opened:
+            reference = opened.convert("RGBA")
+    except Exception as exc:
+        raise ContractError("invalid_reference", "reference PNG cannot be cropped") from exc
+
+    assets: list[dict[str, Any]] = []
+    files: list[tuple[str, bytes]] = []
+    reference_sha = require_string_value(reference_contract.get("sha256"), "reference SHA-256")
+    for node_id, rect in candidates:
+        pixel_rect = _scaled_pixel_rect(rect, logical_scale)
+        if pixel_rect is None:
+            raise ContractError(
+                "reference_crop_invalid",
+                f"cannot map reference crop candidate to pixels: {node_id}",
+            )
+        right = pixel_rect["left"] + pixel_rect["width"]
+        bottom = pixel_rect["top"] + pixel_rect["height"]
+        if pixel_rect["left"] < 0 or pixel_rect["top"] < 0 or right > reference.width or bottom > reference.height:
+            raise ContractError(
+                "reference_crop_invalid",
+                f"reference crop candidate is outside the frozen reference: {node_id}",
+            )
+        crop = reference.crop((pixel_rect["left"], pixel_rect["top"], right, bottom))
+        buffer = io.BytesIO()
+        crop.save(buffer, format="PNG", optimize=False, compress_level=9)
+        raw = buffer.getvalue()
+        crop_sha = sha256_bytes(raw)
+        pixel_sha = sha256_bytes(
+            json_bytes({"width": crop.width, "height": crop.height})
+            + crop.tobytes()
+        )
+        file_name = f"reference-crop-{hashlib.sha256((facts['source_sha256'] + ':' + node_id).encode('utf-8')).hexdigest()[:20]}.png"
+        local_path = f"source/reference-crops/{file_name}"
+        crop_contract = {
+            "reference_sha256": reference_sha,
+            "logical_rect": rect,
+            "pixel_rect": pixel_rect,
+            "logical_scale": logical_scale,
+            "rounding": "outward",
+        }
+        asset_identity = sha256_bytes(
+            json_bytes(
+                {
+                    "origin": "reference_crop",
+                    "source_sha256": facts["source_sha256"],
+                    "source_node_id": node_id,
+                    "reference_crop": crop_contract,
+                }
+            )
+        )
+        assets.append(
+            {
+                "asset_id": f"sha256:{asset_identity}",
+                "origin": "reference_crop",
+                "local_path": local_path,
+                "format": "png",
+                "sha256": crop_sha,
+                "pixel_sha256": pixel_sha,
+                "size": len(raw),
+                "source_references": [
+                    {"source_node_id": node_id, "source_field": "reference.crop"}
+                ],
+                "reference_crop": crop_contract,
+            }
+        )
+        files.append((local_path, raw))
+    return assets, files
+
+
+def reference_crop_semantics(assets: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {key: copy.deepcopy(value) for key, value in asset.items() if key not in {"sha256", "size"}}
+        for asset in assets
+    ]
+
+
+def reference_crop_pixel_sha(raw: bytes) -> str:
+    pillow_image = require_pillow_image()
+    try:
+        with pillow_image.open(io.BytesIO(raw)) as opened:
+            image = opened.convert("RGBA")
+            return sha256_bytes(
+                json_bytes({"width": image.width, "height": image.height})
+                + image.tobytes()
+            )
+    except Exception as exc:
+        raise ContractError("source_drift", "derived reference crop is not a valid PNG") from exc
+
+
+def require_string_value(value: object, label: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise ContractError("invalid_stage", f"{label} must be a non-empty string")
+    return value
 
 
 def acquisition_child(root: Path, value: object, label: str) -> Path:
@@ -1004,6 +1270,13 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
     }
     semantic_context_raw = json_bytes(semantic_context)
     semantic_context_sha = sha256_bytes(semantic_context_raw)
+    facts = normalize_source(source, source_sha)
+    facts_raw = json_bytes(facts)
+    derived_assets, derived_asset_files = build_reference_crop_assets(
+        facts,
+        reference_raw,
+        reference_contract,
+    )
 
     if stage_dir.exists():
         manifest_path = stage_dir / "source-manifest.json"
@@ -1031,6 +1304,16 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
             raise ContractError(
                 "input_drift",
                 "existing .icp/extract input differs; preserve it and start a deliberate new run",
+            )
+        manifest_derived = manifest.get("derived_assets")
+        if bool(derived_assets) != isinstance(manifest_derived, list) or (
+            derived_assets
+            and reference_crop_semantics(manifest_derived)
+            != reference_crop_semantics(derived_assets)
+        ):
+            raise ContractError(
+                "input_drift",
+                "existing derived reference crops differ; preserve them and start a deliberate new run",
             )
         state = read_json(stage_dir / "state.json")
         if not isinstance(state, dict):
@@ -1061,8 +1344,6 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
             "stage_dir": str(stage_dir),
         }
 
-    facts = normalize_source(source, source_sha)
-    facts_raw = json_bytes(facts)
     acquisition_files = None
     if acquisition_evidence is not None:
         acquisition_assets = acquisition_evidence.get("assets")
@@ -1078,6 +1359,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         facts,
         asset_records,
         acquisition_files,
+        derived_assets,
     )
     asset_index_raw = json_bytes(asset_index)
     manifest = {
@@ -1100,6 +1382,8 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         "semantic_context_file": "semantic-context.json",
         "semantic_context_sha256": semantic_context_sha,
     }
+    if derived_assets:
+        manifest["derived_assets"] = derived_assets
     if acquisition_provenance is not None:
         manifest.update(acquisition_provenance)
     state = {
@@ -1120,6 +1404,10 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
             asset_target = temp_stage / "source" / "assets" / relative
             asset_target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(asset_source, asset_target)
+        for local_path, raw in derived_asset_files:
+            asset_target = temp_stage / local_path
+            asset_target.parent.mkdir(parents=True, exist_ok=True)
+            asset_target.write_bytes(raw)
         (temp_stage / "source-facts.json").write_bytes(facts_raw)
         (temp_stage / "asset-index.json").write_bytes(asset_index_raw)
         (temp_stage / "semantic-context.json").write_bytes(semantic_context_raw)
@@ -1443,6 +1731,56 @@ def verify_frozen_sources(
             "source_drift", "reference mapping does not match source artboard and PNG"
         )
     recomputed_facts = normalize_source(source, manifest["source_sha256"])
+    if "derived_assets" in manifest:
+        recomputed_derived_assets, recomputed_derived_files = build_reference_crop_assets(
+            recomputed_facts,
+            reference_raw,
+            expected_reference,
+        )
+    else:
+        recomputed_derived_assets, recomputed_derived_files = [], []
+    manifest_derived_assets = manifest.get("derived_assets", [])
+    if reference_crop_semantics(manifest_derived_assets) != reference_crop_semantics(
+        recomputed_derived_assets
+    ):
+        raise ContractError(
+            "source_drift", "derived reference crops do not match the frozen source"
+        )
+    expected_derived_paths: set[str] = set()
+    manifest_derived_by_path = {
+        item["local_path"]: item for item in manifest_derived_assets
+    }
+    recomputed_by_path = {
+        item["local_path"]: item for item in recomputed_derived_assets
+    }
+    for local_path, _expected_raw in recomputed_derived_files:
+        derived_path = stage_relative_file(stage_dir, local_path, "derived asset")
+        require_file(derived_path, "derived reference crop")
+        stored_raw = derived_path.read_bytes()
+        manifest_asset = manifest_derived_by_path[local_path]
+        recomputed_asset = recomputed_by_path[local_path]
+        if (
+            sha256_bytes(stored_raw) != manifest_asset.get("sha256")
+            or len(stored_raw) != manifest_asset.get("size")
+            or reference_crop_pixel_sha(stored_raw)
+            != recomputed_asset.get("pixel_sha256")
+        ):
+            raise ContractError("source_drift", "derived reference crop bytes changed")
+        expected_derived_paths.add(
+            derived_path.relative_to(stage_dir / "source" / "reference-crops").as_posix()
+        )
+    derived_root = stage_dir / "source" / "reference-crops"
+    actual_derived_paths = (
+        {
+            path.relative_to(derived_root).as_posix()
+            for path in derived_root.rglob("*")
+            if path.is_file()
+        }
+        if derived_root.is_dir()
+        else set()
+    )
+    if actual_derived_paths != expected_derived_paths:
+        raise ContractError("source_drift", "derived reference crop set changed")
     facts_path = stage_dir / "source-facts.json"
     facts_raw = facts_path.read_bytes() if facts_path.is_file() else b""
     if facts_raw != json_bytes(recomputed_facts):
@@ -1467,6 +1805,7 @@ def verify_frozen_sources(
         source,
         recomputed_facts,
         asset_records,
+        derived_assets=manifest_derived_assets,
     )
     if asset_index_raw != json_bytes(expected_asset_index):
         raise ContractError(
@@ -1570,6 +1909,13 @@ def record_draft(args: argparse.Namespace) -> dict[str, Any]:
         and state.get("semantic_draft_sha256") == draft_sha
     ):
         sync_stage_index(args.project_root, stage_dir, state)
+        mark_extract_checklist(
+            project_root,
+            checklist_design_node(
+                project_root, source_manifest["design_url"], "semantic-draft"
+            ),
+            draft_sha,
+        )
         return {
             "ok": True,
             "resumed": True,
@@ -1999,6 +2345,135 @@ def build_binding_evidence(
     }
 
 
+def build_source_block_topology_projection(
+    semantic_draft: dict[str, Any],
+    facts: dict[str, Any],
+    node_order: list[str],
+    assignments: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Project exact source containment into the authored semantic Block tree.
+
+    Visual semantics may merge source nodes or split one source group into nested
+    Blocks. They may not reverse a source containment edge or project it across
+    sibling Blocks. Non-rendering source containers are collapsed to the nearest
+    rendered source ancestor without discarding the traversed source path.
+    """
+
+    nodes = facts.get("nodes")
+    if not isinstance(nodes, dict):
+        raise ContractError("invalid_stage", "source facts nodes must be an object")
+    block_parents = {
+        block["block_id"]: block.get("parent_block_id")
+        for block in semantic_draft["blocks"]
+    }
+
+    def source_path(node_id: str) -> list[str]:
+        path: list[str] = []
+        current_id: str | None = node_id
+        while current_id is not None:
+            path.append(current_id)
+            current = nodes.get(current_id)
+            if not isinstance(current, dict):
+                raise ContractError(
+                    "invalid_stage", f"source node is missing from facts: {current_id}"
+                )
+            parent_id = current.get("parent_id")
+            current_id = parent_id if isinstance(parent_id, str) else None
+        return list(reversed(path))
+
+    def block_is_same_or_descendant(block_id: str, ancestor_id: str) -> bool:
+        current_id: str | None = block_id
+        while current_id is not None:
+            if current_id == ancestor_id:
+                return True
+            parent_id = block_parents.get(current_id)
+            current_id = parent_id if isinstance(parent_id, str) else None
+        return False
+
+    def rendered_block(node_id: str) -> str | None:
+        assignment = assignments.get(node_id)
+        if not isinstance(assignment, dict):
+            return None
+        if assignment.get("status") not in {"mapped", "absorbed"}:
+            return None
+        block_id = assignment.get("block_id")
+        return block_id if isinstance(block_id, str) else None
+
+    edges: list[dict[str, Any]] = []
+    issues: list[dict[str, Any]] = []
+    for child_id in node_order:
+        child_block_id = rendered_block(child_id)
+        if child_block_id is None:
+            continue
+        child = nodes.get(child_id)
+        if not isinstance(child, dict):
+            raise ContractError("invalid_stage", f"source node is missing: {child_id}")
+        direct_parent_id = child.get("parent_id")
+        direct_parent = nodes.get(direct_parent_id) if isinstance(direct_parent_id, str) else None
+        direct_siblings = (
+            direct_parent.get("child_ids", []) if isinstance(direct_parent, dict) else []
+        )
+        source_sibling_index = (
+            direct_siblings.index(child_id)
+            if isinstance(direct_siblings, list) and child_id in direct_siblings
+            else None
+        )
+        parent_id = direct_parent_id
+        collapsed_source_ids: list[str] = []
+        parent_block_id: str | None = None
+        while isinstance(parent_id, str):
+            parent_block_id = rendered_block(parent_id)
+            if parent_block_id is not None:
+                break
+            collapsed_source_ids.append(parent_id)
+            parent = nodes.get(parent_id)
+            if not isinstance(parent, dict):
+                raise ContractError("invalid_stage", f"source node is missing: {parent_id}")
+            parent_id = parent.get("parent_id")
+        if not isinstance(parent_id, str) or parent_block_id is None:
+            continue
+
+        relation = (
+            "same_block"
+            if child_block_id == parent_block_id
+            else "descendant_block"
+            if block_is_same_or_descendant(child_block_id, parent_block_id)
+            else "reversed_block_hierarchy"
+            if block_is_same_or_descendant(parent_block_id, child_block_id)
+            else "crosses_sibling_blocks"
+        )
+        edge = {
+            "source_parent_id": parent_id,
+            "source_child_id": child_id,
+            "collapsed_source_ids": collapsed_source_ids,
+            "parent_block_id": parent_block_id,
+            "child_block_id": child_block_id,
+            "source_sibling_index": source_sibling_index,
+            "relation": relation,
+        }
+        edges.append(edge)
+        if relation in {"same_block", "descendant_block"}:
+            continue
+        issues.append(
+            {
+                "code": (
+                    "source_edge_reverses_block_hierarchy"
+                    if relation == "reversed_block_hierarchy"
+                    else "source_edge_crosses_sibling_blocks"
+                ),
+                "source_parent_id": parent_id,
+                "source_child_id": child_id,
+                "parent_block_id": parent_block_id,
+                "child_block_id": child_block_id,
+                "source_parent_path": source_path(parent_id),
+                "source_child_path": source_path(child_id),
+                "source_sibling_index": source_sibling_index,
+                "expected": "child Block must equal or descend from parent Block",
+            }
+        )
+    return {"ok": not issues, "edges": edges, "issues": issues}
+
+
 def build_reverse_binding_evidence(
     semantic_draft: dict[str, Any],
     facts: dict[str, Any],
@@ -2059,6 +2534,9 @@ def build_reverse_binding_evidence(
         "source_manifest_sha256": semantic_draft["source_manifest_sha256"],
         "semantic_draft_sha256": sha256_bytes(json_bytes(semantic_draft)),
         "bindings_sha256": bindings_sha256,
+        "topology_projection": build_source_block_topology_projection(
+            semantic_draft, facts, node_order, assignments
+        ),
         "nodes": evidence_nodes,
     }
 
@@ -2085,6 +2563,13 @@ def build_semantic_blocks(
     if set(assignments) != set(node_order):
         raise ContractError(
             "stage_drift", "semantic Block materialization needs every source assignment"
+        )
+    topology_projection = build_source_block_topology_projection(
+        semantic_draft, facts, node_order, assignments
+    )
+    if not topology_projection["ok"]:
+        raise ContractError(
+            "stage_drift", "semantic Blocks reverse or cross source containment"
         )
     asset_index = read_json(stage_dir / "asset-index.json")
     if not isinstance(asset_index, dict):
@@ -2162,6 +2647,7 @@ def build_semantic_blocks(
         "root_node_id": facts["root_node_id"],
         "root_block_id": roots[0],
         "node_order": copy.deepcopy(node_order),
+        "source_topology_projection": topology_projection,
         "source_document_without_artboard": source_document_without_artboard,
         "blocks": [
             {
@@ -2295,10 +2781,6 @@ def record_bindings(args: argparse.Namespace) -> dict[str, Any]:
         project_root,
         checklist_design_node(project_root, source_manifest["design_url"], "bindings"),
     )
-    if state.get("state") not in {"awaiting_bindings", "repair_required"}:
-        raise ContractError(
-            "invalid_transition", f"cannot record bindings while state={state.get('state')}"
-        )
     facts = read_json(stage_dir / "source-facts.json")
     semantic_draft = read_json(stage_dir / "semantic-draft.json")
     source_manifest = read_json(stage_dir / "source-manifest.json")
@@ -2309,6 +2791,34 @@ def record_bindings(args: argparse.Namespace) -> dict[str, Any]:
     bindings, assignments = validate_bindings(
         read_json(Path(args.bindings).resolve()), state, facts, semantic_draft
     )
+    bindings_raw = json_bytes(bindings)
+    bindings_sha = sha256_bytes(bindings_raw)
+    current_path = stage_dir / "bindings.json"
+    if (
+        state.get("state") == "awaiting_semantic_review"
+        and current_path.is_file()
+        and current_path.read_bytes() == bindings_raw
+        and state.get("bindings_sha256") == bindings_sha
+    ):
+        verify_exact_coverage(stage_dir, state, facts)
+        sync_stage_index(args.project_root, stage_dir, state)
+        mark_extract_checklist(
+            project_root,
+            checklist_design_node(project_root, source_manifest["design_url"], "bindings"),
+            bindings_sha,
+        )
+        return {
+            "ok": True,
+            "resumed": True,
+            "stage_dir": str(stage_dir),
+            "state": state["state"],
+            "revision": state["revision"],
+            "complete": True,
+        }
+    if state.get("state") not in {"awaiting_bindings", "repair_required"}:
+        raise ContractError(
+            "invalid_transition", f"cannot record bindings while state={state.get('state')}"
+        )
     node_order = facts.get("node_order")
     if not isinstance(node_order, list) or any(node_id not in facts["nodes"] for node_id in node_order):
         raise ContractError("invalid_stage", "source node_order is invalid")
@@ -2331,18 +2841,41 @@ def record_bindings(args: argparse.Namespace) -> dict[str, Any]:
             if status == "unresolved":
                 unresolved_reasons[node_id] = assignment["rationale"]
 
-    complete = not partitions["unresolved"]
-    if complete:
+    bindings_resolved = not partitions["unresolved"]
+    if bindings_resolved:
         require_semantic_leaf_reachability(semantic_draft, assignments)
+    topology_projection = build_source_block_topology_projection(
+        semantic_draft, facts, node_order, assignments
+    )
+    blocks_by_id = {
+        block["block_id"]: block for block in semantic_draft["blocks"]
+    }
+    topology_repair_packets = {
+        issue["source_child_id"]: {
+            "issue": copy.deepcopy(issue),
+            "source_parent": copy.deepcopy(facts["nodes"][issue["source_parent_id"]]),
+            "source_child": copy.deepcopy(facts["nodes"][issue["source_child_id"]]),
+            "parent_block": copy.deepcopy(blocks_by_id[issue["parent_block_id"]]),
+            "child_block": copy.deepcopy(blocks_by_id[issue["child_block_id"]]),
+            "allowed_repairs": [
+                "bind_to_existing_block",
+                "split_semantic_block",
+                "merge_semantic_blocks",
+                "create_semantic_block",
+                "fix_parent_child_relation",
+                "classify_non_rendering",
+            ],
+        }
+        for issue in topology_projection["issues"]
+    }
+    complete = bindings_resolved and topology_projection["ok"]
     revision = state.get("revision")
     if not isinstance(revision, int) or revision < 0:
         raise ContractError("invalid_stage", "state revision must be a non-negative integer")
     revision += 1
-    bindings_raw = json_bytes(bindings)
-    bindings_sha = sha256_bytes(bindings_raw)
     binding_evidence = (
         build_binding_evidence(semantic_draft, node_order, assignments, bindings_sha)
-        if complete
+        if bindings_resolved
         else None
     )
     binding_evidence_sha = (
@@ -2352,7 +2885,7 @@ def record_bindings(args: argparse.Namespace) -> dict[str, Any]:
         build_reverse_binding_evidence(
             semantic_draft, facts, node_order, assignments, bindings_sha
         )
-        if complete
+        if bindings_resolved
         else None
     )
     reverse_binding_evidence_sha = (
@@ -2392,6 +2925,8 @@ def record_bindings(args: argparse.Namespace) -> dict[str, Any]:
         "repair_packets": repair_files,
         "binding_evidence_sha256": binding_evidence_sha,
         "reverse_binding_evidence_sha256": reverse_binding_evidence_sha,
+        "topology_projection": topology_projection,
+        "topology_repair_packets": topology_repair_packets,
         "complete": complete,
     }
     coverage_sha = sha256_bytes(json_bytes(coverage))
@@ -2495,11 +3030,12 @@ def record_bindings(args: argparse.Namespace) -> dict[str, Any]:
     sync_stage_index(args.project_root, stage_dir, next_state)
     source_manifest = read_json(stage_dir / "source-manifest.json")
     project_root = Path(args.project_root).resolve()
-    mark_extract_checklist(
-        project_root,
-        checklist_design_node(project_root, source_manifest["design_url"], "bindings"),
-        bindings_sha,
-    )
+    if complete:
+        mark_extract_checklist(
+            project_root,
+            checklist_design_node(project_root, source_manifest["design_url"], "bindings"),
+            bindings_sha,
+        )
     return {
         "ok": True,
         "stage_dir": str(stage_dir),
@@ -2507,6 +3043,7 @@ def record_bindings(args: argparse.Namespace) -> dict[str, Any]:
         "revision": revision,
         "complete": complete,
         "coverage": {status: len(node_ids) for status, node_ids in partitions.items()},
+        "topology_issues": topology_projection["issues"],
     }
 
 
@@ -2570,6 +3107,17 @@ def verify_exact_coverage(
     ):
         raise ContractError(
             "stage_drift", "reverse binding evidence does not match live JSON bindings"
+        )
+    expected_topology_projection = build_source_block_topology_projection(
+        semantic_draft, facts, node_order, indexed
+    )
+    if coverage.get("topology_projection") != expected_topology_projection:
+        raise ContractError(
+            "stage_drift", "source-to-Block topology projection changed"
+        )
+    if not expected_topology_projection["ok"]:
+        raise ContractError(
+            "coverage_incomplete", "source containment does not project into the Block hierarchy"
         )
     if coverage.get("duplicate_bindings") != [] or coverage.get("synthetic_source_ids") != []:
         raise ContractError("coverage_invalid", "coverage contains duplicate or synthetic ids")
@@ -2963,6 +3511,7 @@ def build_stage_result(
             "no_duplicate_bindings": True,
             "no_synthetic_source_ids": True,
             "semantic_blocks_reconstruct_complete_design_json": True,
+            "source_parent_child_projection_exact": True,
             "reverse_json_semantic_audit": True,
             "visual_json_group_reconciliation": True,
             "semantic_review_passed": True,
@@ -3004,21 +3553,52 @@ def record_review(args: argparse.Namespace) -> dict[str, Any]:
         project_root,
         checklist_design_node(project_root, source_manifest["design_url"], "semantic-review"),
     )
-    if state.get("state") != "awaiting_semantic_review":
-        raise ContractError(
-            "invalid_transition", f"cannot record semantic review while state={state.get('state')}"
-        )
     manifest, facts = verify_frozen_sources(stage_dir, state)
     semantic_draft, bindings, coverage = verify_exact_coverage(stage_dir, state, facts)
     review, evidence_passes = validate_semantic_review(
         read_json(Path(args.review).resolve()), state, semantic_draft
     )
+    review_raw = json_bytes(review)
+    review_sha = sha256_bytes(review_raw)
+    current_path = stage_dir / "semantic-review.json"
+    if (
+        state.get("state") == "complete"
+        and evidence_passes
+        and current_path.is_file()
+        and current_path.read_bytes() == review_raw
+        and state.get("semantic_review_sha256") == review_sha
+    ):
+        for path, field in (
+            (stage_dir / "semantic-blocks.json", "semantic_blocks_sha256"),
+            (stage_dir / "stage-result.json", "stage_result_sha256"),
+        ):
+            if not path.is_file() or sha256_bytes(path.read_bytes()) != state.get(field):
+                raise ContractError("stage_drift", f"committed {path.name} changed")
+        sync_stage_index(args.project_root, stage_dir, state)
+        mark_extract_checklist(
+            project_root,
+            checklist_design_node(
+                project_root, source_manifest["design_url"], "semantic-review"
+            ),
+            review_sha,
+        )
+        return {
+            "ok": True,
+            "resumed": True,
+            "stage_dir": str(stage_dir),
+            "state": state["state"],
+            "revision": state["revision"],
+            "complete": True,
+            "stage_result": str(stage_dir / "stage-result.json"),
+        }
+    if state.get("state") != "awaiting_semantic_review":
+        raise ContractError(
+            "invalid_transition", f"cannot record semantic review while state={state.get('state')}"
+        )
     revision = state.get("revision")
     if not isinstance(revision, int) or revision < 0:
         raise ContractError("invalid_stage", "state revision must be a non-negative integer")
     revision += 1
-    review_raw = json_bytes(review)
-    review_sha = sha256_bytes(review_raw)
     next_state = {
         **state,
         "state": "complete" if evidence_passes else "repair_required",
@@ -3379,13 +3959,32 @@ def build_parser() -> argparse.ArgumentParser:
     )
     verify_run_parser.add_argument("--project-root", required=True)
     verify_run_parser.set_defaults(handler=verify_run)
+    for command_parser in (
+        begin_parser,
+        prepare_parser,
+        draft_parser,
+        bindings_parser,
+        expand_parser,
+        review_parser,
+        verify_parser,
+        verify_run_parser,
+    ):
+        command_parser.add_argument(
+            "--lock-timeout-seconds",
+            type=float,
+            default=DEFAULT_LOCK_TIMEOUT_SECONDS,
+            help="bounded wait for the stage write lock (default: 30)",
+        )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        result = args.handler(args)
+        with stage_write_lock(
+            Path(args.project_root).resolve(), args.lock_timeout_seconds
+        ):
+            result = args.handler(args)
     except ContractError as exc:
         print(
             json.dumps({"ok": False, "error": exc.code, "message": exc.message}),

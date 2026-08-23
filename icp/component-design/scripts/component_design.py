@@ -10,7 +10,7 @@ import hashlib
 import json
 import os
 import re
-import subprocess
+import shutil
 import sys
 import tempfile
 import time
@@ -29,9 +29,12 @@ from stage_checklist import (  # noqa: E402
     require_complete as require_checklist_complete,
     require_ready as require_checklist_node_ready,
 )
+from source_closure import (  # noqa: E402
+    SourceClosureError,
+    validate_source_closure as validate_shared_source_closure,
+)
 
 
-EXTRACT_SCRIPT = Path(__file__).resolve().parents[2] / "extract" / "scripts" / "extract.py"
 MOBILE_COMPONENT_PATTERNS_PATH = (
     Path(__file__).resolve().parents[1]
     / "references"
@@ -513,36 +516,6 @@ def mark_page_api_checklist_if_complete(
         )
 
 
-def run_extract_verify(project_root: Path) -> dict[str, Any]:
-    completed = subprocess.run(
-        [
-            sys.executable,
-            str(EXTRACT_SCRIPT),
-            "verify-run",
-            "--project-root",
-            str(project_root),
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if completed.returncode != 0:
-        message = completed.stderr.strip() or "extract verify-run failed"
-        try:
-            payload = json.loads(message)
-            detail = f"{payload.get('error')}: {payload.get('message')}"
-        except json.JSONDecodeError:
-            detail = message
-        raise ContractError("extract_incomplete", detail)
-    try:
-        result = json.loads(completed.stdout)
-    except json.JSONDecodeError as exc:
-        raise ContractError("extract_incomplete", "extract verify-run returned invalid JSON") from exc
-    if result.get("complete") is not True:
-        raise ContractError("extract_incomplete", "extract batch is not complete")
-    return result
-
-
 def verified_artifact(stage_dir: Path, descriptor: object, label: str) -> tuple[Path, Any]:
     item = require_dict(descriptor, label)
     relative = require_string(item.get("path"), f"{label}.path")
@@ -564,8 +537,9 @@ def require_project_relative_path(value: object, label: str) -> str:
 
 
 def build_source_catalog(project_root: Path) -> tuple[dict[str, Any], str]:
-    run = run_extract_verify(project_root)
-    run_result_path = Path(run["run_result"])
+    run_result_path = project_root / ".icp" / "extract" / "run-result.json"
+    if not run_result_path.is_file():
+        raise ContractError("extract_incomplete", "extract run-result is missing")
     run_result = require_dict(read_json(run_result_path), "extract run-result")
     if run_result.get("schema") != "icp.extract.run-result.v1" or run_result.get("status") != "complete":
         raise ContractError("extract_incomplete", "extract run-result is not complete")
@@ -740,6 +714,10 @@ def validate_iole_source_closure(
     members: list[dict[str, Any]],
     relations: list[dict[str, str]],
 ) -> dict[str, Any]:
+    try:
+        validate_shared_source_closure(flow)
+    except SourceClosureError as exc:
+        raise ContractError("invalid_iole_input", str(exc)) from exc
     closure = require_dict(flow.get("source_closure"), "IOLE source closure")
     require_exact_keys(
         closure,
@@ -1200,6 +1178,30 @@ def build_business_context(
             raise ContractError(
                 "invalid_iole_input", f"invalid source contract for {title}"
             )
+        source_columns = require_dict(
+            source_contract.get("source_columns"),
+            f"{label}.source_contract.source_columns",
+        )
+        require_exact_keys(
+            source_columns,
+            {
+                "title",
+                "route",
+                "design_ref",
+                "interaction",
+                "requirement_sections",
+                "acceptance_sections",
+            },
+            f"{label}.source_contract.source_columns",
+        )
+        scalar_sources = {
+            field: require_string(source_columns.get(field), f"{label}.{field} source")
+            for field in ("title", "route", "design_ref", "interaction")
+        }
+        if any(column not in row_data for column in scalar_sources.values()):
+            raise ContractError(
+                "invalid_iole_input", f"source contract column mismatch for {title}"
+            )
         source_route = require_nullable_text(
             source_contract.get("route"), f"{label}.source_contract.route"
         )
@@ -1212,9 +1214,15 @@ def build_business_context(
         route = source_route or ""
         design_ref = source_design_ref or ""
         raw_interaction = source_interaction or ""
-        if source_contract.get("title") != title:
+        if (
+            source_contract.get("title") != title
+            or row_data[scalar_sources["title"]] != source_contract.get("title")
+            or row_data[scalar_sources["route"]] != source_route
+            or row_data[scalar_sources["design_ref"]] != source_design_ref
+            or row_data[scalar_sources["interaction"]] != source_interaction
+        ):
             raise ContractError(
-                "invalid_iole_input", f"row and lossless source contract disagree for {title}"
+                "invalid_iole_input", f"source contract column mismatch for {title}"
             )
         projected_values = [
             source_contract.get("title"),
@@ -1268,11 +1276,31 @@ def build_business_context(
             source_contract.get("requirement_sections"),
             f"{label}.source_contract.requirement_sections",
         )
+        requirement_sources = require_list(
+            source_columns.get("requirement_sections"),
+            f"{label}.source_contract requirement columns",
+        )
+        if len(requirement_sources) != len(requirement_sections):
+            raise ContractError(
+                "invalid_iole_input", f"source contract column mismatch for {title}"
+            )
         for section_index, section_value in enumerate(requirement_sections):
             section = require_dict(section_value, "requirement section")
+            source = require_dict(
+                requirement_sources[section_index], "requirement section source"
+            )
             section_text = require_nullable_text(
                 section.get("value"), "requirement value"
             )
+            if (
+                source.get("label") != section.get("label")
+                or not isinstance(source.get("source"), str)
+                or source["source"] not in row_data
+                or row_data[source["source"]] != section_text
+            ):
+                raise ContractError(
+                    "invalid_iole_input", f"source contract column mismatch for {title}"
+                )
             projected_values.append(section_text)
             clauses.append(
                 {
@@ -1296,11 +1324,31 @@ def build_business_context(
             source_contract.get("acceptance_sections"),
             f"{label}.source_contract.acceptance_sections",
         )
+        acceptance_sources = require_list(
+            source_columns.get("acceptance_sections"),
+            f"{label}.source_contract acceptance columns",
+        )
+        if len(acceptance_sources) != len(acceptance_sections):
+            raise ContractError(
+                "invalid_iole_input", f"source contract column mismatch for {title}"
+            )
         for section_index, section_value in enumerate(acceptance_sections):
             section = require_dict(section_value, "acceptance section")
+            source = require_dict(
+                acceptance_sources[section_index], "acceptance section source"
+            )
             section_text = require_nullable_text(
                 section.get("value"), "acceptance value"
             )
+            if (
+                source.get("prefix") != section.get("prefix")
+                or not isinstance(source.get("source"), str)
+                or source["source"] not in row_data
+                or row_data[source["source"]] != section_text
+            ):
+                raise ContractError(
+                    "invalid_iole_input", f"source contract column mismatch for {title}"
+                )
             projected_values.append(section_text)
             clauses.append(
                 {
@@ -1801,7 +1849,6 @@ def build_navigation_requirements(
         relation_kinds={"navigation"},
         id_prefix="navigation",
         id_field="navigation_requirement_id",
-        require_target_designs=True,
     )
 
 
@@ -2110,12 +2157,14 @@ def begin(args: argparse.Namespace) -> dict[str, Any]:
             "resumed": True,
             "pages": page_work_items(stage_dir, context),
         }
-    if stage_dir.exists() and any(
-        path.name != ".write.lock" for path in stage_dir.iterdir()
-    ):
-        raise ContractError(
-            "invalid_state", "component-design directory exists without a valid state"
-        )
+    if stage_dir.exists():
+        for path in stage_dir.iterdir():
+            if path.name == ".write.lock":
+                continue
+            if path.is_dir():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
 
     catalog, run_sha = build_source_catalog(project_root)
     catalog_sha = sha256_bytes(json_bytes(catalog))
@@ -3727,13 +3776,24 @@ def validate_page_facts(
                     target_member.get("design_states"), "design states"
                 )
             ]
-            if (
+            target_title = require_string(
+                target_member.get("title"), "target business member title"
+            )
+            if target_design_names and (
                 target_design_name not in target_design_names
                 or target_design_name not in catalog_design_order
             ):
                 raise ContractError(
                     "invalid_interaction_edge_target",
                     f"{label} target design is not in the frozen source catalog",
+                )
+            if not target_design_names and (
+                target_design_name != target_title
+                or target_design_name in catalog_design_order
+            ):
+                raise ContractError(
+                    "invalid_interaction_edge_target",
+                    f"{label} source-only target does not match its frozen member identity",
                 )
             normalized_target = {
                 "kind": target_kind,
@@ -4731,6 +4791,34 @@ def is_source_declared_shared_candidate(candidate: dict[str, Any]) -> bool:
     )
 
 
+def has_reviewed_inbound_shared_usage(
+    target_candidate_id: str,
+    registry_candidates: dict[str, dict[str, Any]],
+) -> bool:
+    target_member = registry_candidates[target_candidate_id]["member_title"]
+    if (
+        sum(
+            item["member_title"] == target_member
+            for item in registry_candidates.values()
+        )
+        != 1
+    ):
+        return False
+    return any(
+        source["member_title"] != target_member
+        and isinstance(fact, dict)
+        and fact.get("evidence_class") == "business_source"
+        and fact.get("kind") == "component_relation"
+        and fact.get("relation_intent") == "shared_usage"
+        and fact.get("relation_target")
+        == {"kind": "source_member", "id": target_member}
+        for source in registry_candidates.values()
+        for fact in require_list(
+            source["candidate"].get("facts"), "candidate facts"
+        )
+    )
+
+
 def semantic_tokens(value: str) -> set[str]:
     return set(
         re.findall(
@@ -4912,28 +5000,27 @@ def validate_abstraction_plan(
             raise ContractError("invalid_abstraction_decision", f"missing definition {target_id}")
         else:
             targeted_definitions.add(target_id)
-            if kind == "extract-container":
-                source_declared_single = (
-                    len(candidate_ids) == 1
-                    and is_source_declared_shared_candidate(
+            source_backed_single = (
+                len(candidate_ids) == 1
+                and (
+                    is_source_declared_shared_candidate(
                         registry_candidates[candidate_ids[0]]["candidate"]
                     )
+                    or has_reviewed_inbound_shared_usage(
+                        candidate_ids[0], registry_candidates
+                    )
                 )
+            )
+            if kind == "extract-container":
                 if (
-                    (len(candidate_ids) < 2 and not source_declared_single)
+                    (len(candidate_ids) < 2 and not source_backed_single)
                     or definition["scope"] != "shared"
                     or definition["reuse_mode"] != "container"
                 ):
                     raise ContractError("unsupported_abstraction", f"{decision_id} is not a shared container")
             elif kind == "extract-complete":
-                source_declared_single = (
-                    len(candidate_ids) == 1
-                    and is_source_declared_shared_candidate(
-                        registry_candidates[candidate_ids[0]]["candidate"]
-                    )
-                )
                 if (
-                    (len(candidate_ids) < 2 and not source_declared_single)
+                    (len(candidate_ids) < 2 and not source_backed_single)
                     or definition["scope"] != "shared"
                     or definition["reuse_mode"] != "complete"
                 ):
@@ -5607,7 +5694,7 @@ def record_abstraction(args: argparse.Namespace) -> dict[str, Any]:
     project_root = Path(args.project_root).resolve()
     stage_dir, state = load_state(project_root)
     verify_live_mobile_component_pattern_context(stage_dir, state)
-    if state.get("state") != "awaiting_group_abstraction":
+    if state.get("state") not in {"awaiting_group_abstraction", "ready_to_lock"}:
         raise ContractError("invalid_state", "group abstraction is not ready")
     require_component_checklist_node(stage_dir, state, "group.abstraction")
     catalog = verify_live_catalog(project_root, stage_dir, state)
@@ -5629,9 +5716,6 @@ def record_abstraction(args: argparse.Namespace) -> dict[str, Any]:
     system_path = stage_dir / "component-system.json"
     events_path = stage_dir / "component-cache-events.json"
     replacement_path = stage_dir / "replacement-map.json"
-    if any(path.exists() for path in (plan_path, system_path, events_path, replacement_path)):
-        raise ContractError("abstraction_already_recorded", "abstraction transaction is append-only")
-    atomic_write_json(plan_path, plan)
     historical_by_id = {
         item["component_id"]: item
         for item in require_list(project_catalog.get("components"), "project catalog components")
@@ -5658,10 +5742,28 @@ def record_abstraction(args: argparse.Namespace) -> dict[str, Any]:
         "presentation_usages": copy.deepcopy(plan["presentation_usages"]),
         "decisions": copy.deepcopy(plan["decisions"]),
     }
-    atomic_write_json(system_path, system)
     event_log, replacement_map = build_component_cache(plan, registry, state)
-    atomic_write_json(events_path, event_log)
-    atomic_write_json(replacement_path, replacement_map)
+    artifacts = (
+        (plan_path, plan),
+        (system_path, system),
+        (events_path, event_log),
+        (replacement_path, replacement_map),
+    )
+    existing = [path.exists() for path, _payload in artifacts]
+    if any(existing) and not all(existing):
+        raise ContractError(
+            "abstraction_already_recorded",
+            "abstraction transaction is partially written",
+        )
+    if all(existing):
+        if any(read_json(path) != payload for path, payload in artifacts):
+            raise ContractError(
+                "abstraction_already_recorded",
+                "abstraction transaction differs from the recorded artifacts",
+            )
+    else:
+        for path, payload in artifacts:
+            atomic_write_json(path, payload)
     state["abstraction_plan_sha256"] = sha256_bytes(plan_path.read_bytes())
     state["component_system_sha256"] = sha256_bytes(system_path.read_bytes())
     state["component_cache_events_sha256"] = sha256_bytes(events_path.read_bytes())
@@ -5722,6 +5824,31 @@ def record_page_facts(args: argparse.Namespace) -> dict[str, Any]:
         stage_dir / "page-component-facts" / f"{page_key}.review.input.json"
     )
     review_input = build_page_review_input(normalized)
+    normalized_sha = sha256_bytes(json_bytes(normalized))
+    if (
+        page_state.get("status") == "awaiting_page_review"
+        and draft_path.is_file()
+        and sha256_bytes(draft_path.read_bytes()) == normalized_sha
+        and page_state.get("draft_sha256") == normalized_sha
+        and review_input_path.is_file()
+        and read_json(review_input_path) == review_input
+    ):
+        mark_component_checklist(
+            stage_dir,
+            state,
+            f"page:{page_key}.facts",
+            normalized_sha,
+        )
+        return {
+            "ok": True,
+            "stage": "component-design",
+            "state": state["state"],
+            "page_key": page_key,
+            "page_status": page_state["status"],
+            "resumed": True,
+            "page_facts_draft": str(draft_path),
+            "page_review_input": str(review_input_path),
+        }
     revision = page_state.get("revision", 0)
     if type(revision) is not int or revision < 0:
         raise ContractError("invalid_state", "page revision must be a non-negative integer")
@@ -5769,15 +5896,14 @@ def record_page_review(args: argparse.Namespace) -> dict[str, Any]:
     project_root = Path(args.project_root).resolve()
     stage_dir, state = load_state(project_root)
     verify_live_mobile_component_pattern_context(stage_dir, state)
-    if state.get("state") != "collecting_page_facts":
+    if state.get("state") not in {
+        "collecting_page_facts",
+        "awaiting_group_abstraction",
+    }:
         raise ContractError("invalid_state", "page review cannot be recorded in this state")
     page_key = require_string(args.page_key, "page key")
     page_state = require_dict(state.get("pages", {}).get(page_key), "page state")
     require_component_checklist_node(stage_dir, state, f"page:{page_key}.review")
-    if page_state.get("status") != "awaiting_page_review":
-        raise ContractError(
-            "invalid_state", "page review requires an awaiting_page_review draft"
-        )
     catalog = verify_live_catalog(project_root, stage_dir, state)
     context = verify_live_business_context(stage_dir, state, catalog)
     member = next(
@@ -5807,6 +5933,42 @@ def record_page_review(args: argparse.Namespace) -> dict[str, Any]:
         raise ContractError("invalid_state", "page revision must be a positive integer")
     review_path = stage_dir / "page-component-facts" / f"{page_key}.review.json"
     review_sha = sha256_bytes(json_bytes(review))
+    canonical_path = stage_dir / "page-component-facts" / f"{page_key}.json"
+    if (
+        page_state.get("status") == "sealed"
+        and evidence_passes
+        and review_path.is_file()
+        and sha256_bytes(review_path.read_bytes()) == review_sha
+        and page_state.get("review_sha256") == review_sha
+        and canonical_path.is_file()
+        and sha256_bytes(canonical_path.read_bytes()) == page_state.get("sha256")
+        and read_json(canonical_path) == draft
+    ):
+        if state.get("state") == "awaiting_group_abstraction":
+            verify_live_group_registry(stage_dir, state)
+        mark_component_checklist(
+            stage_dir,
+            state,
+            f"page:{page_key}.review",
+            review_sha,
+        )
+        return {
+            "ok": True,
+            "stage": "component-design",
+            "state": state["state"],
+            "page_key": page_key,
+            "page_status": page_state["status"],
+            "resumed": True,
+            "page_facts": str(canonical_path),
+            "page_review": str(review_path),
+        }
+    if (
+        state.get("state") != "collecting_page_facts"
+        or page_state.get("status") != "awaiting_page_review"
+    ):
+        raise ContractError(
+            "invalid_state", "page review requires an awaiting_page_review draft"
+        )
     atomic_write_json(
         stage_dir / "revisions" / f"page-review.{page_key}.{revision:04d}.json",
         review,
@@ -5875,7 +6037,6 @@ def record_page_review(args: argparse.Namespace) -> dict[str, Any]:
             "page_review_repair": str(repair_path),
         }
 
-    canonical_path = stage_dir / "page-component-facts" / f"{page_key}.json"
     atomic_write_json(canonical_path, draft)
     page_state["status"] = "sealed"
     page_state["sha256"] = sha256_bytes(canonical_path.read_bytes())

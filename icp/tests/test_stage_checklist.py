@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import multiprocessing
 import tempfile
 import unittest
 from pathlib import Path
@@ -14,7 +15,74 @@ from icp.scripts.stage_checklist import (
 )
 
 
+def complete_checklist_nodes_concurrently(
+    path_value: str,
+    start: multiprocessing.synchronize.Event,
+    nodes: list[dict],
+    node_ids: list[str],
+) -> None:
+    path = Path(path_value)
+    start.wait()
+    for node_id in node_ids:
+        complete(
+            path,
+            stage="fixture",
+            input_sha256="a" * 64,
+            nodes=nodes,
+            node_id=node_id,
+            evidence_sha256=node_id,
+        )
+
+
 class StageChecklistTest(unittest.TestCase):
+    def test_concurrent_completions_do_not_lose_execution_receipts(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "checklist.json"
+            nodes = [node("begin", "Begin the stage.")] + [
+                node(f"work-{index:03d}", f"Run work item {index}.", ["begin"])
+                for index in range(80)
+            ]
+            create(
+                path,
+                stage="fixture",
+                input_sha256="a" * 64,
+                nodes=nodes,
+                initially_completed=["begin"],
+            )
+            context = multiprocessing.get_context("spawn")
+            start = context.Event()
+            worker_ids = [
+                [f"work-{index:03d}" for index in range(offset, 80, 4)]
+                for offset in range(4)
+            ]
+            workers = [
+                context.Process(
+                    target=complete_checklist_nodes_concurrently,
+                    args=(str(path), start, nodes, ids),
+                )
+                for ids in worker_ids
+            ]
+            for worker in workers:
+                worker.start()
+            start.set()
+            for worker in workers:
+                worker.join(timeout=20)
+                self.assertEqual(worker.exitcode, 0)
+
+            checklist = require_complete(
+                path,
+                stage="fixture",
+                input_sha256="a" * 64,
+                nodes=nodes,
+            )
+            completed = [
+                event["node_id"]
+                for event in checklist["events"]
+                if event["event"] == "completed"
+            ]
+            self.assertEqual(len(completed), 81)
+            self.assertEqual(len(completed), len(set(completed)))
+
     def test_changed_upstream_evidence_rewinds_every_dependent_node_and_resumes_in_order(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "checklist.json"

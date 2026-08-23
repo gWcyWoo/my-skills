@@ -23,8 +23,9 @@ Turn rendered designs and their machine-readable sources into reviewable contrac
   user asks to discuss or activate it. Do not create Stage-4 runtime artifacts,
   run a fourth gate, or delay completion on its behalf.
 
-Run `component-design` only after the same project's complete extract batch passes
-live verification. IOLE's exact `iole.flow-source-bundle.v2` must be passed once
+Run `component-design` only after Stage 1 has frozen a complete extract
+`run-result.json`. Stage 2 reads that sealed result and must not invoke any Stage-1
+command or rerun Stage-1 verification. IOLE's exact `iole.flow-source-bundle.v2` must be passed once
 to Stage 1, which freezes it at `.icp/source/source-bundle.json`; Stage 2 reads
 that single project artifact and accepts no second source-bundle input. The bundle
 declares `row_data_columns`, derived only from the selected role mapping's ICP
@@ -100,6 +101,16 @@ earliest unfinished node as `resume_from_node` plus the complete
 `revalidate_nodes` suffix; the model must execute that node and then revalidate
 its dependents in dependency order. Only after every node is `completed` may the
 final verify node complete or the next stage begin.
+
+Stage state and hash-bound artifacts are the transaction authority; the checklist
+is their derived execution receipt, never a second business-state machine. Every
+recording command must hold its stage's OS-backed write lock from live-state read
+through artifact publication, state commit, and checklist receipt. Retrying the
+same committed input is idempotent: if state and artifact hashes are committed but
+the receipt is missing, revalidate those exact artifacts and write only the
+receipt; if artifacts exist without committed state, deterministically publish the
+same transaction again; a receipt without matching committed state is invalid.
+Never decrement a revision or infer current state from conversation history.
 
 ## Self-contained boundary
 
@@ -220,14 +231,16 @@ repeated Markdown body from locked page data, so stage 3 receives component
 semantics rather than duplicated inference instructions.
 
 New shared extraction normally needs at least two independent current candidates.
-One candidate is sufficient only when its exact page-reviewed
+One candidate is sufficient when either its exact page-reviewed
 `business_source/component_relation` fact has closed `shared_candidate` intent and
-targets that candidate itself. `local_boundary` never authorizes reuse. A
-`shared_usage` fact must target an exact member already connected by IOLE's source
-relation graph and must bind to that member's final shared component through a
-`component_ref`; it cannot remain a generic instance fact. This exception may
-apply inside one design or to a source-only shared component row; mobile-pattern
-familiarity alone never triggers it.
+targets that candidate itself, or an independently reviewed `shared_usage` fact
+targets that candidate's exact source member and that member owns exactly one
+candidate. `local_boundary` never authorizes reuse. A `shared_usage` fact must
+target an exact member already connected by IOLE's source relation graph and must
+bind to that member's final shared component through a `component_ref`; it cannot
+remain a generic instance fact. These exceptions may apply inside one design or
+to a source-only shared component row; mobile-pattern familiarity alone never
+triggers them.
 
 Every page fact must declare `business_source` or `design_visible` and cite Blocks
 owned by its own page candidate. Business-source facts additionally require exact
@@ -312,15 +325,45 @@ Stage 3 does only implementation and implementation verification: create every
 integration test from three preserved sources—same-page `IT`, the same-page
 interaction graph derived from `交互描述`, and model inference over each frozen component's complete semantic
 contract. Freeze the complete obligation universe first, then execute one strict
-vertical case at a time: materialize that case's page-scoped test, observe RED,
+vertical case at a time: map its frozen fact basis to a closed production-UI
+scenario, let ICP deterministically materialize and freeze that Android test,
+observe RED,
 implement its smallest production slice, and observe GREEN before starting the
-next case. Do not require every page's tests to compile or become RED before the
-first page can reach GREEN. Final verification still requires RED and GREEN for
-every frozen obligation. Audit every Stage 1 design element/asset and compare every
+next case. The implementation model may author the scenario mapping but never the
+executable test body. Do not require every case to become RED before the first
+case can reach GREEN. Final verification still requires RED and GREEN for
+every frozen obligation. Every executable interaction contract keeps `condition`
+and current `state` facts in preconditions,
+`trigger` facts in actions, and `behavior` plus `result` facts in post-action
+assertions. A visual trace step must reuse the complete ordered action sequence
+from that interaction's frozen integration case. A case-driven step names only the case,
+interaction, and selected outcome; ICP derives and freezes its complete ordered
+action sequence, including input, click, and back operations. When its selected graph edge targets
+another interaction, any following step must start at that exact target; sharing a
+page does not make two interactions adjacent.
+For every case with actions, the generated device test proves each declared result
+predicate is false before the trigger and true afterward. For `api_call`, its
+runtime contract also freezes method/path/significant headers and request body plus
+an allowed response. An instrumentation-owned HTTP recorder must observe that real
+production-adapter request and return the frozen response before the final UI
+result may pass; app-authored network claims are never evidence.
+The recorder first withholds the response and proves the result is still false,
+then releases a response containing a fresh runtime-only canary and requires that
+same value on the live production UI. A failure edge instead closes the matched
+request without a response and accepts only the resulting production error state.
+Every page likewise has one runtime Mock
+input carrying a fresh canary through its normal DTO/UI-state render path. A valid
+JSON file, DTO class name, source anchor, or syntactic method call is coverage only
+and never completes either behavior without these device observations.
+
+Audit every Stage 1 design element/asset and compare every
 design state with its reference at the exact frozen reference viewport. Derive
 immutable bounds, color, font-size, and line-height assertions from Stage 1 and
 bind them to production elements through `runtime_probe_tag`; authored pass/fail
-booleans are not evidence. Intrinsic/container bounds and visual tokens are exact;
+booleans are not evidence. Bounds come from the live hierarchy, opaque color from
+captured pixels, and font size/line height from deterministic `R.dimen` resources
+read from the uniquely matched clean-build APK; app-published typography is not
+evidence. Intrinsic/container bounds and visual tokens are exact;
 text and dynamic-content bounds are measured but adaptive so natural wrapping is
 not forced. At that viewport check those runtime values;
 whole-image MAE is diagnostic only. Compact, expanded,
@@ -328,6 +371,9 @@ and other sizes instead check
 natural text reflow, clipping, overlap, horizontal overflow, scroll reachability,
 control operation, system bars, and safe insets. Every component must be
 constraint-driven and content-adaptive; they never use screenshot MAE as a gate.
+Scroll reachability is proven by real driver swipes to a stable hierarchy end,
+complete occurrence coverage, and restoration to the starting hierarchy; app
+content extents and offsets are ignored.
 The reference artboard is not a fixed runtime geometry template: do not hard-code
 text/card/section/page heights or use locale/copy-specific line breaks, font
 metrics, spacing, offsets, or geometry merely to reduce diagnostic MAE. Interaction
@@ -413,11 +459,17 @@ identity-vs-order rule governs the other coverage collections: global
 sorted missing/unexpected diffs reported) and normalized to the authoritative
 expected order when the plan is frozen.
 
-Stage 3 must also prove that it consumed exact exported assets. For every rendered
-design element with source assets, its plan selects at least one frozen asset ID and
+Stage 3 must also prove that it consumed exact source-bound assets. These include
+exported assets and deterministic reference crops created for small, unexported
+icon components. For every rendered design element with source assets, its plan selects at least one frozen asset ID and
 SHA-256 plus one project-relative target resource. Verification requires identical
 source and target bytes by SHA-256; code anchors alone do not prove the asset was
-used, and redrawing or approximating an exported icon is forbidden.
+used, and redrawing or approximating a source-bound icon is forbidden.
+An asset-internal element is joined to that owner only by Stage 1's frozen
+`parent_id` chain. Never infer ownership from punctuation, prefixes, or hierarchy
+encoded in a design-tool node ID. Every element has exactly one evidence channel:
+its own live production node or one exact source ancestor that owns the verified
+asset bytes.
 
 Visual evidence must be produced by ICP's reversible device-capture process. For
 each design state, derive one collision-resistant `visual_state_id` from its exact
@@ -437,6 +489,22 @@ long artboard; normalize the PNG to the reference dimensions; and restore the ex
 snapshot in a `finally` path. Verification rejects missing conversion/restoration
 or production-path evidence before recording diagnostic MAE and applying
 source-bound runtime checks.
+Opaque color completion comes only from a concrete pixel coordinate in the real
+production screenshot inside the hierarchy-bound element region. The app's probe
+may locate the element but its claimed color is not a pass/fail value. Preserve the
+observed coordinate and RGBA value in the visual result.
+
+The implementation plan declares one foundation-owned production runtime-probe
+publisher at `files/icp-runtime-probes.json`, its exact publish method, and the
+production render call sites. Its payload follows
+`implementation/references/runtime-probe-contract.md`. Reference and responsive
+capture accept only ICP's own Android driver and run only after the selected
+page's GREEN cases plus page-scoped production code/asset coverage pass. Final
+verification still requires every page and the global manifest. Compact and expanded runs are generated by
+`capture-responsive`, not authored in the final evidence: every published
+component occurrence must be observed on the live UI hierarchy, including by
+scrolling lazy content when necessary, and its payload bounds must agree with the
+observed geometry. Static anchors and copied probe JSON are never runtime evidence.
 
 The runtime entry file/symbol identifies the real launcher, deep-link handler, or
 navigation coordinator found in the codebase. Its initial page/design identity is

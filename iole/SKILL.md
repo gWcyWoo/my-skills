@@ -68,6 +68,29 @@ or both null. The `backend` columns currently exist with a null worker pair. Rej
 schedule creation and stop before claim with `blocked/role-worker-unavailable`
 when a selected role has no callable worker.
 
+## Source-adapter routing
+
+IOLE owns source identification and connector selection. The closed flow is:
+
+1. Parse the user-supplied document URL and identify its source family before any
+   data access.
+2. For Google Sheets, call ICPS to inspect exactly one eligible root row for the
+   selected role and status.
+3. IOLE analyzes that root row plus the complete title catalog to derive the
+   related-row identities. ICPS does not perform this semantic analysis.
+4. Call ICPS again to read exactly those related rows. Repeat only when IOLE's
+   exhaustive relation review discovers a newly referenced identity; claim only
+   after the closure is complete.
+5. IOLE assembles the lossless source bundle and passes it to ICP.
+
+Do not pass ICPS claims or rows directly to ICP. Do not let ICPS create an ICP
+job, source bundle, implementation plan, Git branch, or review decision.
+
+DingTalk is currently unsupported. When an ICPX adapter is implemented and
+registered, route recognized DingTalk URLs to ICPX at step 2; never send them to
+ICPS or treat them as Google Sheets. Until then, stop before reading or claiming
+with `blocked/source-adapter-unavailable`.
+
 ## Client flow v2 for new work
 
 Use [role-mapping-v2.json](references/role-mapping-v2.json) and read
@@ -75,13 +98,31 @@ Use [role-mapping-v2.json](references/role-mapping-v2.json) and read
 client tick. Resume an existing v1 claim with the legacy v1 path below; never
 convert or take over its locator.
 
-For Google Sheets, require `inspect_ready_flow_root`, `inspect_title_catalog`, `inspect_flow_rows`,
-`claim_flow_rows`, `release_flow_claim`, `expand_flow_claim`, `complete_flow_rows`, and
+For Google Sheets, require `inspect_active_flow_claims`, `inspect_ready_flow_root`,
+`inspect_title_catalog`, `inspect_flow_rows`, `claim_flow_rows`, `release_flow_claim`,
+`reconcile_flow_claim`, `expand_flow_claim`, `complete_flow_rows`, and
 `record_flow_error`. Microsoft Excel flow work is
 `blocked/flow-connector-unavailable` until its adapter exposes equivalent
 operations; never downgrade a multi-page flow to independent single-row claims.
 
-Run one new client flow in this order:
+Before any resume, claim, ICP, Git, or Sheet writeback decision, call
+`inspect_active_flow_claims` without mutation. Only its live result may make a flow
+resumable. A flow ID, lease, locator, plan, or tool result retained in conversation,
+an archive, or deleted `.icp` is historical evidence only. When it returns no active
+claim, discard those historical handles. When it returns more than one claim or
+reports drift, stop fail-closed; do not choose one from history.
+For one returned claim, use persisted inputs only after their flow ID and lease match
+that live result. Retry `claim_flow_rows` first for `phase=claim-prepared`. When
+`pending_member_row_ids` is present, retry that exact `expand_flow_claim` first;
+its `pending_state` reports whether the remote batch is still `ready` or already
+`claimed`. Do not run ICP, Git, error writeback, or completion until either recovery
+finishes and a fresh inspection reports one fully claimed flow without pending work.
+When the active claim includes `completion_state=prepared|terminal`, retry the
+same `complete_flow_rows` call with the locator-bound guards and delivery intent
+before any other action. This is the write-ahead recovery path for interruption
+immediately before or after the atomic Sheet completion update.
+
+When there is no active claim, run one new client flow in this order:
 
 1. Call `inspect_ready_flow_root` without mutation. Return `no-work` when absent.
 2. Call `inspect_title_catalog` once and preserve its digest-bound complete title
@@ -134,8 +175,9 @@ Run one new client flow in this order:
    It also embeds the hash-bound source closure; a missing, stale, false-pass, or
    incomplete closure is invalid. Queue, PR, review, lease, error, and other-role
    columns remain IOLE orchestration evidence and are not duplicated into ICP
-   `row_data`. Pass this bundle unchanged to
-   ICP. ICP owns design semantics, component boundaries, reuse decisions, props,
+   `row_data`. Pass this bundle once to ICP Stage 1, which freezes the sole
+   project copy at `.icp/source/source-bundle.json`. Stage 2 reads that artifact;
+   Stage 3 never receives the bundle or original business prose. ICP owns design semantics, component boundaries, reuse decisions, props,
    slots, states, events, and the component lock. Only after ICP returns that
    verified lock may execution planning derive component decisions, ownership
    paths, and `claim_page_titles`; IOLE may validate and orchestrate those outputs
@@ -144,8 +186,10 @@ Run one new client flow in this order:
    `modify` page keys/source-context joins. The plan must close every design node,
    semantic fact, interaction test, and presentation usage before claim. Compile
    the unchanged source bundle, verified component lock, and recorded
-   implementation plan with `compile-execution-plan` and require
-   `iole.flow-execution-plan.v4`. This is the only new-flow execution contract and
+   implementation plan with `compile-execution-plan` and require the returned
+   hash-bound execution plan. Compilation joins by canonical `bundle_digest`,
+   stable source/member contract identity, and artifact hashes; JSON byte layout
+   is irrelevant. This is the only new-flow execution contract and
    the source of `claim_page_titles`, execution nodes, order, and exact file owners.
    IOLE then orchestrates Steps 6–11 against that hash-bound plan; it never falls
    back to an IOLE-authored component/code plan or legacy analysis-input envelope.
@@ -159,11 +203,11 @@ Run one new client flow in this order:
 7. Select the Git execution boundary from the frozen `mr` value. For `mr=0|1`,
    use the current project checkout and current `HEAD`; do not create a branch or
    isolated worktree. Preserve unrelated changes and allow only ICP-declared files
-   into any later commit. For `mr=2`, fetch `origin/dev`, run v2 `branch-name`, and
+   into any later commit. For `mr=2`, fetch `origin/dev`, run `branch-name`, and
    create one isolated worktree. If the common existing PR is not both open and
    backed by a present source branch, run v2 `pr-recovery-plan` against the exact
    fetched revision. All flow members share that branch and MR.
-8. Execute the frozen v4 DAG in order: `foundation`, then one page node at a time,
+8. Execute the frozen DAG in order: `foundation`, then one page node at a time,
    then `flow-integration`. Every project-relative file has exactly one owner;
    dependent nodes may read but never modify another node's files. Shared
    components/assets and app-wide configuration belong to `foundation`, all files
@@ -185,16 +229,20 @@ Run one new client flow in this order:
    PR, error, ignored, and other-role cells remain outside ICP.
 9. If a changed child is discovered after claim, stop before editing it and call
    `expand_flow_claim`; never modify an unclaimed page.
-10. Require `icp.flow-handoff-result.v2` and independently verify its declared
-    files, frozen implementation-contract SHA, exact required/covered clause
-    equality, and full-flow evidence. Then apply exactly one delivery action:
+10. Require ICP's actual `.icp/implementation/stage-result.json` and independently
+    verify that it targets the compiled component lock and implementation plan,
+    that its TDD/implementation-manifest/runtime artifacts still match their
+    hashes, that implementation state is `complete`, and that every frozen
+    lint/build/integration command and visual result passed. IOLE must consume
+    this Git-synchronized current artifact directly; it must not invent a separate
+    handoff schema or gate on ICP-internal schema numbers. Then apply exactly one delivery action:
     `mr=0` performs no Git mutation; `mr=1` commits only those files and pushes the
     current branch directly; `mr=2` commits/pushes only those files and reuses or
     creates one MR against `dev`. Never create one MR per page.
-11. Run `build-review-writeback --mr MR --icp-result /absolute/result.json`; pass
+11. Run `build-review-writeback --mr MR --icp-result /absolute/.icp/implementation/stage-result.json`; pass
     `--pr-url` only for `mr=2`. It fails
-    unless the canonical v2 result matches the flow/member digests and has complete
-    coverage. Reuse the exact bound `expected_values` for every
+    unless the real ICP result and its hash-bound artifacts prove completion for
+    the compiled execution plan. Reuse the exact bound `expected_values` for every
     member, and call `complete_flow_rows`. Move all members to `review` and clear
     every lease/error, or mutate none. For `mr=0|1`, preserve each member's
     existing PR cell; for `mr=2`, write the same MR URL to every member. On a
@@ -223,6 +271,16 @@ either:
   error fields, preserve PR/business/other-role fields, archive the active locator,
   and return `icps.flow-release-result.v2/released`; or
 - mutate nothing and return a controlled mismatch.
+
+When that ordinary release returns only a controlled member identity, input, or
+release-lease ownership mismatch, the same explicit restart also authorizes one
+`reconcile_flow_claim` call with the exact same bound inputs. Reconciliation may
+only either reset an exact same-lease `review` half-transition to `ready` while
+clearing selected-role lease/error fields, or archive an orphaned locator without
+Sheet mutation after proving its lease token no longer exists in the selected
+role's lease column. It must fail closed when that lease exists outside the exact
+locator membership. Never use reconciliation to override a foreign active lease,
+change business/PR/other-role cells, or bypass a guard-digest mismatch.
 
 Accept the release result only when it names the exact persisted flow and members.
 Then preserve the old worktree and ICP evidence as an abandoned execution, create a
@@ -384,8 +442,9 @@ role PR URL is optional for `mr=0|1` and required only when reusing an MR under
 
 ## Recovery and stop rules
 
-- Resume persisted claims before selecting another row for the same project,
-  document, and role.
+- Resume only a claim returned as active by the current
+  `inspect_active_flow_claims` response before selecting another row for the same
+  project, document, and role.
 - Reuse only an open PR whose source branch still exists. A merged or closed PR, or
   any PR with a missing source branch, is not updateable: run `pr-recovery-plan`
   and inspect from its exact fetched `origin/dev` revision.
@@ -418,7 +477,10 @@ PYTHONDONTWRITEBYTECODE=1 \
 python3 ~/.agents/skills/icps/scripts/selftest_icps_atomic_sheets_v2.py
 PYTHONDONTWRITEBYTECODE=1 \
 python3 -m unittest \
-  icp.component-design.tests.test_component_design_cli
+  icp.extract.tests.test_extract_cli \
+  icp.component-design.tests.test_component_design_v4_cli \
+  icp.implementation.tests.test_implementation_cli \
+  icp.implementation.tests.test_android_visual_driver
 python3 ~/.codex/skills/.system/skill-creator/scripts/quick_validate.py \
   ~/.agents/skills/iole
 python3 ~/.codex/skills/.system/skill-creator/scripts/quick_validate.py \

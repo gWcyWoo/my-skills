@@ -75,6 +75,18 @@ class GoogleSheetStore:
         column: str,
         value: str,
     ) -> int | None:
+        matches = self.find_row_numbers_by_value(
+            spreadsheet_id, sheet_name, column, value
+        )
+        return matches[0] if matches else None
+
+    def find_row_numbers_by_value(
+        self,
+        spreadsheet_id: str,
+        sheet_name: str,
+        column: str,
+        value: str,
+    ) -> list[int]:
         headers = self._headers(spreadsheet_id, sheet_name)
         try:
             column_number = headers.index(column) + 1
@@ -85,11 +97,12 @@ class GoogleSheetStore:
             spreadsheet_id,
             f"{quote_sheet_name(sheet_name)}!{column_name}2:{column_name}",
         )
+        matches: list[int] = []
         for row_number, source_values in enumerate(values, start=2):
             cell_value = "" if not source_values else str(source_values[0])
             if cell_value == value:
-                return row_number
-        return None
+                matches.append(row_number)
+        return matches
 
     def find_row_numbers_by_ids(
         self,
@@ -568,6 +581,41 @@ def inspect_flow_rows(
 
 
 @mcp.tool()
+def inspect_active_flow_claims(
+    spreadsheet_id: str,
+    sheet_name: str,
+    row_id_column: str,
+    status_column: str,
+    lease_token_column: str,
+    lease_until_column: str,
+    pr_url_column: str,
+    last_error_column: str,
+    ready_value: str = "ready",
+    doing_value: str = "doing",
+    review_value: str = "review",
+    done_value: str = "done",
+) -> dict[str, object]:
+    """Read recoverable active flow claims; reject corrupt or mixed state."""
+    mapping = flow_mapping_from_arguments(
+        row_id_column,
+        status_column,
+        lease_token_column,
+        lease_until_column,
+        pr_url_column,
+        last_error_column,
+        ready_value,
+        doing_value,
+        review_value,
+        done_value,
+    )
+    return build_flow_queue().inspect_active_flow_claims(
+        spreadsheet_id,
+        sheet_name,
+        mapping,
+    )
+
+
+@mcp.tool()
 def claim_flow_rows(
     spreadsheet_id: str,
     sheet_name: str,
@@ -642,6 +690,47 @@ def release_flow_claim(
         done_value,
     )
     return build_flow_queue().release_flow_claim(
+        spreadsheet_id,
+        sheet_name,
+        mapping,
+        flow_id,
+        lease_token,
+        expected_values,
+    )
+
+
+@mcp.tool()
+def reconcile_flow_claim(
+    spreadsheet_id: str,
+    sheet_name: str,
+    row_id_column: str,
+    status_column: str,
+    lease_token_column: str,
+    lease_until_column: str,
+    pr_url_column: str,
+    last_error_column: str,
+    flow_id: str,
+    lease_token: str,
+    expected_values: dict[str, dict[str, object]],
+    ready_value: str = "ready",
+    doing_value: str = "doing",
+    review_value: str = "review",
+    done_value: str = "done",
+) -> dict[str, object]:
+    """Reconcile one explicitly restarted flow after guarded release mismatch."""
+    mapping = flow_mapping_from_arguments(
+        row_id_column,
+        status_column,
+        lease_token_column,
+        lease_until_column,
+        pr_url_column,
+        last_error_column,
+        ready_value,
+        doing_value,
+        review_value,
+        done_value,
+    )
+    return build_flow_queue().reconcile_flow_claim(
         spreadsheet_id,
         sheet_name,
         mapping,

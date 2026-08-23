@@ -14,11 +14,13 @@ from urllib.parse import urlparse
 DEFAULT_MAPPING = Path(__file__).parents[1] / "references" / "role-mapping-v2.json"
 ICP_SKILL_PATH = "~/.agents/skills/icp/SKILL.md"
 FLOW_CONNECTOR_OPERATIONS = [
+    "inspect_active_flow_claims",
     "inspect_ready_flow_root",
     "inspect_title_catalog",
     "inspect_flow_rows",
     "claim_flow_rows",
     "release_flow_claim",
+    "reconcile_flow_claim",
     "expand_flow_claim",
     "complete_flow_rows",
     "record_flow_error",
@@ -248,8 +250,16 @@ def complete_nullable_row(
 
 
 def resolve_exact_source(row: dict[str, object], source: object, label: str) -> str:
+    return exact_cell(row, resolve_exact_source_column(row, source, label), label)
+
+
+def resolve_exact_source_column(
+    row: dict[str, object], source: object, label: str
+) -> str:
     if isinstance(source, str):
-        return exact_cell(row, source, label)
+        if source not in row:
+            raise ValueError(f"raw Sheet field is missing: {label}")
+        return source
     if not isinstance(source, list) or not source or any(
         not isinstance(alias, str) or not alias for alias in source
     ):
@@ -257,7 +267,34 @@ def resolve_exact_source(row: dict[str, object], source: object, label: str) -> 
     present = [alias for alias in source if alias in row]
     if len(present) != 1:
         raise ValueError(f"raw Sheet {label} alias is missing or ambiguous")
-    return exact_cell(row, present[0], label)
+    return present[0]
+
+
+def source_columns_from_mapping(
+    raw_row: dict[str, object], job_mapping: dict[str, object]
+) -> dict[str, object]:
+    page_mapping = job_mapping["page"]
+    assert isinstance(page_mapping, dict)
+    result: dict[str, object] = {
+        "title": resolve_exact_source_column(raw_row, page_mapping["title"], "title"),
+        "route": resolve_exact_source_column(raw_row, page_mapping["route"], "route"),
+        "design_ref": str(job_mapping["design_ref"]),
+        "interaction": resolve_exact_source_column(
+            raw_row, page_mapping["interaction"], "interaction"
+        ),
+    }
+    for contract_field, label_key in (
+        ("requirement_sections", "label"),
+        ("acceptance_sections", "prefix"),
+    ):
+        sections = job_mapping[contract_field]
+        assert isinstance(sections, list)
+        result[contract_field] = [
+            {label_key: str(section[label_key]), "source": str(section["source"])}
+            for section in sections
+            if isinstance(section, dict)
+        ]
+    return result
 
 
 def exact_sections(
@@ -404,6 +441,7 @@ def validate_nullable_source_contract(contract: object) -> dict[str, object]:
         "requirement_sections",
         "route",
         "schema_version",
+        "source_columns",
         "title",
     }
     if not isinstance(contract, dict) or set(contract) != expected_keys:
@@ -440,6 +478,42 @@ def validate_nullable_source_contract(contract: object) -> dict[str, object]:
             for section in sections
         ):
             raise ValueError(f"nullable Sheet source contract {field} is invalid")
+    source_columns = contract["source_columns"]
+    if not isinstance(source_columns, dict) or set(source_columns) != {
+        "title",
+        "route",
+        "design_ref",
+        "interaction",
+        "requirement_sections",
+        "acceptance_sections",
+    }:
+        raise ValueError("nullable Sheet source contract columns are invalid")
+    if any(
+        not isinstance(source_columns[field], str) or not source_columns[field]
+        for field in ("title", "route", "design_ref", "interaction")
+    ):
+        raise ValueError("nullable Sheet source contract columns are invalid")
+    for field, label_key in (
+        ("requirement_sections", "label"),
+        ("acceptance_sections", "prefix"),
+    ):
+        sections = source_columns[field]
+        expected_sections = contract[field]
+        if (
+            not isinstance(sections, list)
+            or len(sections) != len(expected_sections)
+            or any(
+                not isinstance(section, dict)
+                or set(section) != {label_key, "source"}
+                or not isinstance(section[label_key], str)
+                or not section[label_key]
+                or not isinstance(section["source"], str)
+                or not section["source"]
+                or section[label_key] != expected_sections[index][label_key]
+                for index, section in enumerate(sections)
+            )
+        ):
+            raise ValueError("nullable Sheet source contract columns are invalid")
     digest = contract["contract_digest"]
     if (
         not isinstance(digest, str)
@@ -460,6 +534,7 @@ def nullable_source_contract_from_raw(
     contract: dict[str, object] = {
         "kind": "iole.sheet-member-contract.v2",
         "schema_version": 2,
+        "source_columns": source_columns_from_mapping(raw_row, job_mapping),
         "title": resolve_exact_source(raw_row, page_mapping["title"], "title"),
         "route": None if exact_route == "" else exact_route,
         "design_ref": nullable_cell(
@@ -1076,6 +1151,7 @@ def build_schedule_plan(
     ).hexdigest()
     prompt_payload = {
         "excel_url": excel_url,
+        "source_adapter": "icps",
         "role": role,
         "mr": mr,
         "flow_contract_version": 2,
@@ -1087,6 +1163,7 @@ def build_schedule_plan(
         "schema_version": 2,
         "schedule_identity": f"iole-flow-{identity[:24]}",
         "provider": provider,
+        "source_adapter": "icps",
         "role": role,
         "mr": mr,
         "mapping_path": str(mapping_path),
@@ -1863,6 +1940,121 @@ def build_pr_recovery_plan(
     }
 
 
+def validate_icp_stage_result(
+    plan: dict[str, object], result_path: Path
+) -> dict[str, object]:
+    if result_path.is_symlink() or not result_path.is_file():
+        raise ValueError("ICP stage result is invalid")
+    result = load_input_document(result_path, "ICP stage result")
+    required_fields = {
+        "status",
+        "component_lock_sha256",
+        "implementation_plan_sha256",
+        "tdd_evidence_sha256",
+        "implementation_manifest_sha256",
+        "runtime_evidence_sha256",
+        "design_element_count",
+        "semantic_fact_count",
+        "integration_case_count",
+        "responsive_run_count",
+        "visual_results",
+        "verification_commands",
+    }
+    if not required_fields.issubset(result) or result.get("status") != "complete":
+        raise ValueError("ICP stage result is incomplete")
+    if (
+        result.get("component_lock_sha256") != plan.get("component_lock_sha256")
+        or result.get("implementation_plan_sha256")
+        != plan.get("implementation_plan_sha256")
+    ):
+        raise ValueError("ICP stage result targets another execution plan")
+    artifact_hashes = {
+        "tdd-evidence.json": "tdd_evidence_sha256",
+        "implementation-manifest.json": "implementation_manifest_sha256",
+        "runtime-evidence.json": "runtime_evidence_sha256",
+    }
+    for filename, digest_field in artifact_hashes.items():
+        artifact_path = result_path.parent / filename
+        expected_digest = result.get(digest_field)
+        if (
+            not isinstance(expected_digest, str)
+            or SHA256_HEX.fullmatch(expected_digest) is None
+            or artifact_path.is_symlink()
+            or not artifact_path.is_file()
+            or hashlib.sha256(artifact_path.read_bytes()).hexdigest()
+            != expected_digest
+        ):
+            raise ValueError(f"ICP stage artifact is invalid: {filename}")
+    state_path = result_path.parent / "state.json"
+    if state_path.is_symlink() or not state_path.is_file():
+        raise ValueError("ICP implementation state is invalid")
+    state = load_input_document(state_path, "ICP implementation state")
+    checklist_path = result_path.parent / "checklist.json"
+    if checklist_path.is_symlink() or not checklist_path.is_file():
+        raise ValueError("ICP implementation checklist is incomplete")
+    checklist = load_input_document(checklist_path, "ICP implementation checklist")
+    checklist_nodes = checklist.get("nodes")
+    final_nodes = (
+        [
+            item
+            for item in checklist_nodes
+            if isinstance(item, dict) and item.get("node_id") == "stage.verify"
+        ]
+        if isinstance(checklist_nodes, list)
+        else []
+    )
+    stage_result_sha256 = hashlib.sha256(result_path.read_bytes()).hexdigest()
+    if (
+        state.get("state") != "complete"
+        or state.get("implementation_plan_sha256")
+        != result.get("implementation_plan_sha256")
+        or state.get("stage_result_sha256") != stage_result_sha256
+    ):
+        raise ValueError("ICP implementation state is incomplete")
+    if (
+        checklist.get("schema") != "icp.stage-checklist"
+        or checklist.get("stage") != "implementation"
+        or not isinstance(checklist_nodes, list)
+        or not checklist_nodes
+        or any(
+            not isinstance(item, dict) or item.get("status") != "completed"
+            for item in checklist_nodes
+        )
+        or len(final_nodes) != 1
+        or final_nodes[0].get("evidence_sha256") != stage_result_sha256
+        or state.get("checklist_sha256")
+        != hashlib.sha256(checklist_path.read_bytes()).hexdigest()
+    ):
+        raise ValueError("ICP implementation checklist is incomplete")
+    commands = result.get("verification_commands")
+    if (
+        not isinstance(commands, list)
+        or not commands
+        or {item.get("kind") for item in commands if isinstance(item, dict)}
+        != {"lint", "build", "integration"}
+        or any(
+            not isinstance(item, dict) or item.get("exit_code") != 0
+            for item in commands
+        )
+    ):
+        raise ValueError("ICP verification commands are incomplete")
+    visual_results = result.get("visual_results")
+    design_element_count = result.get("design_element_count")
+    if (
+        not isinstance(visual_results, list)
+        or not isinstance(design_element_count, int)
+        or isinstance(design_element_count, bool)
+        or design_element_count < 0
+        or (design_element_count > 0 and not visual_results)
+        or any(
+            not isinstance(item, dict) or item.get("status") != "pass"
+            for item in visual_results
+        )
+    ):
+        raise ValueError("ICP visual verification is incomplete")
+    return result
+
+
 def build_review_writeback(
     plan_path: Path,
     lease_token: str,
@@ -1873,145 +2065,45 @@ def build_review_writeback(
     if mr not in {0, 1, 2}:
         raise ValueError("mr must be 0, 1, or 2")
     plan = load_input_document(plan_path, "flow plan")
-    plan_version = (plan.get("kind"), plan.get("schema_version"))
+    required_execution_fields = {
+        "flow_id",
+        "source_bundle_digest",
+        "implementation_plan_sha256",
+        "component_lock_sha256",
+        "execution_nodes",
+        "file_owners",
+        "claim_page_titles",
+        "member_digests",
+    }
+    source_bundle_digest = plan.get("source_bundle_digest")
+    implementation_plan_sha256 = plan.get("implementation_plan_sha256")
+    expected_flow_id = (
+        "flow-"
+        + hashlib.sha256(
+            canonical_bytes(
+                {
+                    "source_bundle_digest": source_bundle_digest,
+                    "implementation_plan_sha256": implementation_plan_sha256,
+                }
+            )
+        ).hexdigest()[:24]
+        if isinstance(source_bundle_digest, str)
+        and SHA256_HEX.fullmatch(source_bundle_digest)
+        and isinstance(implementation_plan_sha256, str)
+        and SHA256_HEX.fullmatch(implementation_plan_sha256)
+        else None
+    )
     if (
         (plan.get("kind"), plan.get("schema_version"))
-        not in {
-            ("iole.flow-plan.v2", 2),
-            ("iole.flow-plan.v3", 3),
-            ("iole.flow-execution-plan.v4", 4),
-        }
+        != ("iole.flow-execution-plan.v4", 4)
+        or not required_execution_fields.issubset(plan)
         or plan.get("decision") != "ready"
+        or plan.get("flow_id") != expected_flow_id
     ):
-        raise ValueError("flow plan is not ready")
-    if (
-        plan_version
-        in {
-            ("iole.flow-plan.v3", 3),
-            ("iole.flow-execution-plan.v4", 4),
-        }
-        and icp_result_path is None
-    ):
-        raise ValueError(
-            "lossless review writeback requires a verified ICP v2 result"
-        )
-    if plan_version in {
-        ("iole.flow-plan.v3", 3),
-        ("iole.flow-execution-plan.v4", 4),
-    }:
-        assert icp_result_path is not None
-        if icp_result_path.is_symlink() or not icp_result_path.is_file():
-            raise ValueError("ICP result contract is invalid")
-        result = load_input_document(icp_result_path, "ICP result")
-        expected_result_keys = {
-            "kind",
-            "schema_version",
-            "job_id",
-            "job_digest",
-            "flow_id",
-            "member_digests",
-            "base_revision",
-            "project_root",
-            "status",
-            "changed_files",
-            "verification",
-            "evidence_manifest",
-            "evidence_manifest_digest",
-            "implementation_contract_sha256",
-            "coverage",
-        }
-        if set(result) != expected_result_keys or (
-            result.get("kind"), result.get("schema_version"), result.get("status")
-        ) != ("icp.flow-handoff-result.v2", 2, "ready-for-pr"):
-            raise ValueError("ICP result contract is invalid")
-        if (
-            result.get("flow_id") != plan.get("flow_id")
-            or result.get("member_digests") != plan.get("member_digests")
-        ):
-            raise ValueError("ICP result does not match the claimed flow")
-        verification = result.get("verification")
-        if (
-            not isinstance(verification, dict)
-            or set(verification) != {"e2e", "node_tests", "runtime_capture", "visual"}
-            or set(verification.values()) != {"passed"}
-        ):
-            raise ValueError("ICP result verification is incomplete")
-        for field in (
-            "job_digest",
-            "evidence_manifest_digest",
-            "implementation_contract_sha256",
-        ):
-            if not isinstance(result.get(field), str) or SHA256_HEX.fullmatch(
-                str(result[field])
-            ) is None:
-                raise ValueError("ICP result digest is invalid")
-        coverage = result.get("coverage")
-        if not isinstance(coverage, dict) or set(coverage) != {
-            "status",
-            "required_clause_ids",
-            "covered_clause_ids",
-            "worker_evidence_digests",
-        }:
-            raise ValueError("ICP result acceptance coverage is incomplete")
-        required_clause_ids = coverage["required_clause_ids"]
-        covered_clause_ids = coverage["covered_clause_ids"]
-        if (
-            coverage["status"] != "passed"
-            or not isinstance(required_clause_ids, list)
-            or not required_clause_ids
-            or len(required_clause_ids) != len(set(required_clause_ids))
-            or covered_clause_ids != required_clause_ids
-        ):
-            raise ValueError("ICP result acceptance coverage is incomplete")
-        worker_digests = coverage["worker_evidence_digests"]
-        expected_node_ids = plan.get("execution_order")
-        if (
-            not isinstance(worker_digests, list)
-            or not isinstance(expected_node_ids, list)
-            or [item.get("node_id") for item in worker_digests if isinstance(item, dict)]
-            != expected_node_ids
-            or any(
-                not isinstance(item, dict)
-                or set(item) != {"node_id", "sha256"}
-                or not isinstance(item["sha256"], str)
-                or SHA256_HEX.fullmatch(item["sha256"]) is None
-                for item in worker_digests
-            )
-        ):
-            raise ValueError("ICP result worker evidence is incomplete")
-        project_root = result.get("project_root")
-        changed_files = result.get("changed_files")
-        if (
-            not isinstance(project_root, str)
-            or not Path(project_root).is_absolute()
-            or not Path(project_root).is_dir()
-            or not isinstance(changed_files, list)
-            or not changed_files
-            or len(changed_files) != len(set(changed_files))
-        ):
-            raise ValueError("ICP result changed files are invalid")
-        resolved_project = Path(project_root).resolve()
-        for relative in changed_files:
-            if not isinstance(relative, str) or not relative or Path(relative).is_absolute():
-                raise ValueError("ICP result changed files are invalid")
-            target = Path(project_root) / relative
-            try:
-                target.resolve(strict=True).relative_to(resolved_project)
-            except (OSError, ValueError) as exc:
-                raise ValueError("ICP result changed files are invalid") from exc
-            if target.is_symlink() or not target.is_file():
-                raise ValueError("ICP result changed files are invalid")
-        evidence_manifest = result.get("evidence_manifest")
-        if not isinstance(evidence_manifest, str) or not Path(evidence_manifest).is_absolute():
-            raise ValueError("ICP result evidence manifest is invalid")
-        manifest_path = Path(evidence_manifest)
-        if (
-            manifest_path.is_symlink()
-            or not manifest_path.is_file()
-            or hashlib.sha256(manifest_path.read_bytes()).hexdigest()
-            != result["evidence_manifest_digest"]
-        ):
-            raise ValueError("ICP result evidence manifest is invalid")
+        raise ValueError("review writeback requires the current compiled execution plan")
+    if icp_result_path is None:
+        raise ValueError("review writeback requires the verified ICP stage result")
+    validate_icp_stage_result(plan, icp_result_path)
     if (
         not isinstance(lease_token, str)
         or not lease_token
@@ -2153,23 +2245,31 @@ def compile_execution_plan(
     if root_title not in bundle_members:
         raise ValueError("source bundle root member is missing")
 
-    if component_lock.get("schema") != "icp.component-design.lock.v6":
-        raise ValueError("component lock v6 is required")
     source_hashes = component_lock.get("source_hashes")
     if (
         not isinstance(source_hashes, dict)
-        or source_hashes.get("iole_source_bundle_sha256")
-        != hashlib.sha256(source_bundle_path.read_bytes()).hexdigest()
+        or source_hashes.get("source_bundle_digest")
+        != source_bundle.get("bundle_digest")
     ):
         raise ValueError("component lock targets another source bundle")
-    if implementation_plan.get("schema") != "icp.implementation.plan.v1":
-        raise ValueError("implementation plan v1 is required")
     component_lock_sha = hashlib.sha256(component_lock_path.read_bytes()).hexdigest()
     if implementation_plan.get("component_lock_sha256") != component_lock_sha:
         raise ValueError("implementation plan targets another component lock")
 
-    source_context = component_lock.get("source_context")
-    lock_members = source_context.get("members") if isinstance(source_context, dict) else None
+    implementation_contract = component_lock.get("implementation_contract")
+    source_identity = (
+        implementation_contract.get("source_identity")
+        if isinstance(implementation_contract, dict)
+        else None
+    )
+    if (
+        not isinstance(source_identity, dict)
+        or source_identity.get("source_id") != source_id
+        or source_identity.get("root_title") != root_title
+        or source_identity.get("bundle_digest") != source_bundle.get("bundle_digest")
+    ):
+        raise ValueError("component lock targets another source bundle")
+    lock_members = source_identity.get("members")
     if not isinstance(lock_members, list):
         raise ValueError("component lock source context is invalid")
     lock_members_by_title: dict[str, dict[str, object]] = {}
@@ -2183,10 +2283,16 @@ def compile_execution_plan(
     if set(lock_members_by_title) != set(bundle_members):
         raise ValueError("component lock source members differ from source bundle")
     for title, bundle_member in bundle_members.items():
-        if lock_members_by_title[title].get("change_scope") != bundle_member.get(
-            "change_scope"
+        lock_member = lock_members_by_title[title]
+        source_contract = bundle_member.get("source_contract")
+        if not isinstance(source_contract, dict):
+            raise ValueError(f"source bundle member contract is invalid: {title}")
+        if (
+            lock_member.get("change_scope") != bundle_member.get("change_scope")
+            or lock_member.get("contract_digest")
+            != source_contract.get("contract_digest")
         ):
-            raise ValueError(f"component lock member scope changed: {title}")
+            raise ValueError(f"component lock member identity changed: {title}")
 
     page_keys = implementation_plan.get("page_keys")
     pages = implementation_plan.get("pages")

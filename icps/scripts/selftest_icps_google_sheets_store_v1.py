@@ -49,6 +49,17 @@ class FakeSheetsService:
 
 
 class GoogleSheetStoreTests(unittest.TestCase):
+    def test_registers_read_only_active_flow_inspection_tool(self) -> None:
+        tools = {tool.name: tool for tool in asyncio.run(mcp.list_tools())}
+
+        self.assertIn("inspect_active_flow_claims", tools)
+        schema = tools["inspect_active_flow_claims"].inputSchema
+        self.assertFalse(
+            {"flow_id", "lease_token", "expected_values"}.intersection(
+                set(schema["required"])
+            )
+        )
+
     def test_registers_guarded_flow_release_tool(self) -> None:
         tools = {tool.name: tool for tool in asyncio.run(mcp.list_tools())}
 

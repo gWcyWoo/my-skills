@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import struct
 import subprocess
@@ -8,10 +9,16 @@ import sys
 import tempfile
 import unittest
 import zlib
+import builtins
 from pathlib import Path
+from unittest.mock import patch
+
+from PIL import Image, ImageDraw
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "extract.py"
+sys.path.insert(0, str(SCRIPT.parent))
+from icp.extract.scripts import extract as EXTRACT
 
 
 def png_chunk(kind: bytes, data: bytes) -> bytes:
@@ -96,6 +103,173 @@ def sample_design() -> dict[str, object]:
 
 
 class ExtractCliTest(unittest.TestCase):
+    def test_topology_projection_collects_reversed_and_sibling_edges_in_one_scan(self) -> None:
+        semantic_draft = {
+            "blocks": [
+                {"block_id": "page", "parent_block_id": None},
+                {"block_id": "offer", "parent_block_id": "page"},
+                {"block_id": "secondary", "parent_block_id": "page"},
+            ]
+        }
+        facts = {
+            "nodes": {
+                "root": {"id": "root", "parent_id": None, "child_ids": ["group"]},
+                "group": {
+                    "id": "group",
+                    "parent_id": "root",
+                    "child_ids": ["button", "badge"],
+                },
+                "button": {"id": "button", "parent_id": "group", "child_ids": []},
+                "badge": {"id": "badge", "parent_id": "group", "child_ids": []},
+            }
+        }
+        assignments = {
+            "root": {"status": "mapped", "block_id": "page"},
+            "group": {"status": "mapped", "block_id": "offer"},
+            "button": {"status": "absorbed", "block_id": "page"},
+            "badge": {"status": "mapped", "block_id": "secondary"},
+        }
+
+        projection = EXTRACT.build_source_block_topology_projection(
+            semantic_draft,
+            facts,
+            ["root", "group", "button", "badge"],
+            assignments,
+        )
+
+        self.assertFalse(projection["ok"])
+        self.assertEqual(
+            [item["code"] for item in projection["issues"]],
+            [
+                "source_edge_reverses_block_hierarchy",
+                "source_edge_crosses_sibling_blocks",
+            ],
+        )
+        self.assertEqual(
+            [item["source_child_id"] for item in projection["issues"]],
+            ["button", "badge"],
+        )
+
+    def test_topology_projection_collapses_non_rendering_source_containers(self) -> None:
+        semantic_draft = {
+            "blocks": [
+                {"block_id": "page", "parent_block_id": None},
+                {"block_id": "action", "parent_block_id": "page"},
+            ]
+        }
+        facts = {
+            "nodes": {
+                "root": {"id": "root", "parent_id": None, "child_ids": ["wrapper"]},
+                "wrapper": {
+                    "id": "wrapper",
+                    "parent_id": "root",
+                    "child_ids": ["button"],
+                },
+                "button": {"id": "button", "parent_id": "wrapper", "child_ids": []},
+            }
+        }
+        assignments = {
+            "root": {"status": "mapped", "block_id": "page"},
+            "wrapper": {"status": "non_rendering", "block_id": None},
+            "button": {"status": "mapped", "block_id": "action"},
+        }
+
+        projection = EXTRACT.build_source_block_topology_projection(
+            semantic_draft, facts, ["root", "wrapper", "button"], assignments
+        )
+
+        self.assertTrue(projection["ok"])
+        self.assertEqual(
+            projection["edges"],
+            [
+                {
+                    "source_parent_id": "root",
+                    "source_child_id": "button",
+                    "collapsed_source_ids": ["wrapper"],
+                    "parent_block_id": "page",
+                    "child_block_id": "action",
+                    "source_sibling_index": 0,
+                    "relation": "descendant_block",
+                }
+            ],
+        )
+
+    def test_missing_pillow_is_reported_as_a_structured_extract_dependency_error(self) -> None:
+        original_import = builtins.__import__
+
+        def without_pillow(name, *args, **kwargs):
+            if name == "PIL":
+                raise ImportError("missing Pillow")
+            return original_import(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=without_pillow):
+            with self.assertRaisesRegex(
+                EXTRACT.ContractError, "Pillow is required"
+            ):
+                EXTRACT.require_pillow_image()
+
+    def test_reference_crop_path_preserves_the_missing_pillow_error(self) -> None:
+        facts = {
+            "source_sha256": "a" * 64,
+            "node_order": ["icon", "shape"],
+            "nodes": {
+                "icon": {
+                    "payload": {
+                        "type": "symbolInstance",
+                        "componentName": "Icon",
+                        "frame": {"left": 0, "top": 0, "width": 2, "height": 2},
+                    },
+                    "child_ids": ["shape"],
+                },
+                "shape": {"payload": {"type": "shapeLayer"}, "child_ids": []},
+            },
+        }
+        missing = EXTRACT.ContractError("missing_dependency", "Pillow is required")
+
+        with patch.object(EXTRACT, "require_pillow_image", side_effect=missing):
+            with self.assertRaises(EXTRACT.ContractError) as raised:
+                EXTRACT.build_reference_crop_assets(
+                    facts,
+                    b"reference",
+                    {"logical_scale": "1", "sha256": "b" * 64},
+                )
+
+        self.assertEqual(raised.exception.code, "missing_dependency")
+
+    def test_reference_crop_does_not_require_pillow_without_a_crop_candidate(self) -> None:
+        facts = {
+            "source_sha256": "a" * 64,
+            "node_order": ["root"],
+            "nodes": {
+                "root": {
+                    "payload": {"type": "artboard"},
+                    "child_ids": [],
+                }
+            },
+        }
+
+        with patch.object(
+            EXTRACT,
+            "require_pillow_image",
+            side_effect=AssertionError("Pillow must not be loaded"),
+        ):
+            assets, files = EXTRACT.build_reference_crop_assets(
+                facts,
+                b"not-needed",
+                {"logical_scale": "1", "sha256": "b" * 64},
+            )
+
+        self.assertEqual((assets, files), ([], []))
+
+    def test_reference_crop_verification_preserves_the_missing_pillow_error(self) -> None:
+        missing = EXTRACT.ContractError("missing_dependency", "Pillow is required")
+
+        with patch.object(EXTRACT, "require_pillow_image", side_effect=missing):
+            with self.assertRaises(EXTRACT.ContractError) as raised:
+                EXTRACT.reference_crop_pixel_sha(b"crop")
+
+        self.assertEqual(raised.exception.code, "missing_dependency")
+
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
         self.root = Path(self.temp_dir.name)
@@ -482,6 +656,174 @@ class ExtractCliTest(unittest.TestCase):
         )
         self.assertEqual(drifted.returncode, 2)
         self.assertIn("input_drift", drifted.stderr)
+
+    def test_prepare_derives_exact_reference_crop_for_unexported_icon_component(self) -> None:
+        source = {
+            "design_name": "登录-验证码",
+            "design_id": "design-otp",
+            "version_id": "version-otp",
+            "lanhu_url": "https://lanhu.example/design-1",
+            "figma_json": {
+                "artboard": {
+                    "id": "root:otp",
+                    "type": "artboard",
+                    "name": "登录-验证码",
+                    "frame": {"left": 0, "top": 0, "width": 390, "height": 852},
+                    "layers": [
+                        {
+                            "id": "2272:1184",
+                            "type": "symbolInstence",
+                            "name": "Repayment-Login",
+                            "componentName": "Repayment-Login",
+                            "realFrame": {
+                                "left": 286.25,
+                                "top": 744.25,
+                                "width": 47.5,
+                                "height": 47.5,
+                            },
+                            "hasExportImage": False,
+                            "hasExportDDSImage": False,
+                            "layers": [
+                                {
+                                    "id": "I2272:1184;2272:1165",
+                                    "type": "artboard",
+                                    "name": "Frame",
+                                    "frame": {
+                                        "left": 298,
+                                        "top": 756,
+                                        "width": 24,
+                                        "height": 24,
+                                    },
+                                    "layers": [
+                                        {
+                                            "id": "I2272:1184;2272:1166",
+                                            "type": "shapeLayer",
+                                            "name": "Vector",
+                                            "frame": {
+                                                "left": 298.00030517578125,
+                                                "top": 759.510498046875,
+                                                "width": 24,
+                                                "height": 16.97864532470703,
+                                            },
+                                            "hasExportImage": False,
+                                            "hasExportDDSImage": False,
+                                        }
+                                    ],
+                                }
+                            ],
+                        }
+                    ],
+                }
+            },
+        }
+        write_json(self.source, source)
+        reference = Image.new("RGBA", (780, 1704), (245, 250, 247, 255))
+        draw = ImageDraw.Draw(reference)
+        draw.rounded_rectangle((572, 1488, 667, 1583), radius=24, fill=(243, 247, 245, 255))
+        draw.rounded_rectangle((596, 1512, 643, 1559), radius=5, fill=(43, 109, 69, 255))
+        draw.rectangle((596, 1524, 643, 1529), fill=(255, 255, 255, 255))
+        draw.polygon(((610, 1543), (600, 1535), (610, 1527)), fill=(255, 255, 255, 255))
+        reference.save(self.reference, format="PNG")
+
+        result = self.prepare_workspace()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        stage = self.project / ".icp" / "extract" / "登录-验证码"
+        manifest = read_json(stage / "source-manifest.json")
+        self.assertEqual(len(manifest["derived_assets"]), 1)
+        asset = read_json(stage / "asset-index.json")["assets"][0]
+        self.assertEqual(asset["origin"], "reference_crop")
+        self.assertEqual(asset["source_references"], [
+            {"source_node_id": "2272:1184", "source_field": "reference.crop"}
+        ])
+        self.assertEqual(asset["reference_crop"], {
+            "reference_sha256": manifest["reference"]["sha256"],
+            "logical_rect": {"left": 286.25, "top": 744.25, "width": 47.5, "height": 47.5},
+            "pixel_rect": {"left": 572, "top": 1488, "width": 96, "height": 96},
+            "logical_scale": "2",
+            "rounding": "outward",
+        })
+        crop_path = stage / asset["local_path"]
+        with Image.open(crop_path) as crop:
+            self.assertEqual(crop.size, (96, 96))
+            self.assertEqual(crop.convert("RGBA").getpixel((48, 38)), (255, 255, 255, 255))
+
+        resumed = self.prepare_workspace()
+        self.assertEqual(resumed.returncode, 0, resumed.stderr)
+
+        original_builder = EXTRACT.build_reference_crop_assets
+
+        def differently_encoded(*args, **kwargs):
+            assets, files = original_builder(*args, **kwargs)
+            rewritten_assets = json.loads(json.dumps(assets))
+            rewritten_files = []
+            for local_path, raw in files:
+                image = Image.open(io.BytesIO(raw)).convert("RGBA")
+                encoded = io.BytesIO()
+                image.save(encoded, format="PNG", compress_level=0)
+                alternative = encoded.getvalue()
+                record = next(
+                    item for item in rewritten_assets if item["local_path"] == local_path
+                )
+                record["sha256"] = hashlib.sha256(alternative).hexdigest()
+                record["size"] = len(alternative)
+                rewritten_files.append((local_path, alternative))
+            return rewritten_assets, rewritten_files
+
+        with patch.object(
+            EXTRACT,
+            "build_reference_crop_assets",
+            side_effect=differently_encoded,
+        ):
+            EXTRACT.verify_frozen_sources(
+                stage.resolve(), read_json(stage / "state.json")
+            )
+
+        crop_path.write_bytes(b"tampered")
+        rejected = self.prepare_workspace()
+        self.assertEqual(rejected.returncode, 2)
+        self.assertIn("source_drift", rejected.stderr)
+
+    def test_reference_crop_candidate_outside_the_reference_fails_visibly(self) -> None:
+        facts = {
+            "source_sha256": "a" * 64,
+            "node_order": ["icon", "shape"],
+            "nodes": {
+                "icon": {
+                    "payload": {
+                        "type": "symbolInstance",
+                        "componentName": "Icon",
+                        "frame": {"left": 9, "top": 9, "width": 2, "height": 2},
+                    },
+                    "child_ids": ["shape"],
+                },
+                "shape": {
+                    "payload": {"type": "shapeLayer"},
+                    "child_ids": [],
+                },
+            },
+        }
+        reference = Image.new("RGBA", (10, 10), (255, 255, 255, 255))
+        buffer = io.BytesIO()
+        reference.save(buffer, format="PNG")
+        raw = buffer.getvalue()
+
+        with self.assertRaisesRegex(
+            EXTRACT.ContractError, "outside the frozen reference"
+        ):
+            EXTRACT.build_reference_crop_assets(
+                facts,
+                raw,
+                {"logical_scale": "1", "sha256": hashlib.sha256(raw).hexdigest()},
+            )
+
+    def test_reference_crop_accepts_the_fraction_scale_frozen_by_lanhu(self) -> None:
+        self.assertEqual(
+            EXTRACT._scaled_pixel_rect(
+                {"left": 1, "top": 2, "width": 3, "height": 4}, "3/2"
+            ),
+            {"left": 1, "top": 3, "width": 5, "height": 6},
+        )
 
     def test_prepare_rejects_a_design_url_that_does_not_match_the_source(self) -> None:
         result = self.run_cli(
@@ -1089,6 +1431,141 @@ class ExtractCliTest(unittest.TestCase):
             "non_rendering_classifications_correct", review_template["cross_block_review"]
         )
 
+    def test_bindings_return_every_source_edge_that_reverses_the_block_hierarchy(self) -> None:
+        self.assertEqual(self.prepare_workspace().returncode, 0)
+        state = read_json(self.extract_dir / "state.json")
+        draft = {
+            "schema": "icp.extract.semantic-draft.v1",
+            "source_manifest_sha256": state["source_manifest_sha256"],
+            "blocks": [
+                {
+                    "block_id": "page",
+                    "name": "Checkout page",
+                    "role": "page",
+                    "role_basis": "entailed",
+                    "role_evidence": ["The rendered artboard is one page."],
+                    "parent_block_id": None,
+                    "child_block_ids": ["offer"],
+                    "appearance": {
+                        "background": "Light page surface.",
+                        "border": "No page-level border.",
+                        "spacing": "Vertical content rhythm.",
+                    },
+                    "content_summary": "Checkout content.",
+                    "composition": "Heading followed by an offer.",
+                    "relations": [],
+                },
+                {
+                    "block_id": "offer",
+                    "name": "Primary offer",
+                    "role": "primary_offer",
+                    "role_basis": "interpreted",
+                    "role_evidence": ["The card groups details and one action."],
+                    "parent_block_id": "page",
+                    "child_block_ids": [],
+                    "appearance": {
+                        "background": "Contrasting card surface.",
+                        "border": "Rounded boundary.",
+                        "spacing": "Separated content and action.",
+                    },
+                    "content_summary": "Offer details and action.",
+                    "composition": "Action belongs to the offer.",
+                    "relations": [],
+                },
+            ],
+        }
+        draft_path = self.root / "reversed-topology-draft.json"
+        write_json(draft_path, draft)
+        drafted = self.run_stage_cli("record-draft", "--draft", str(draft_path))
+        self.assertEqual(drafted.returncode, 0, drafted.stderr)
+
+        state = read_json(self.extract_dir / "state.json")
+        bindings = {
+            "schema": "icp.extract.bindings.v1",
+            "source_manifest_sha256": state["source_manifest_sha256"],
+            "semantic_draft_sha256": state["semantic_draft_sha256"],
+            "assignments": [
+                {
+                    "source_node_id": "root:1",
+                    "status": "mapped",
+                    "block_id": "page",
+                    "geometry_basis": "frame",
+                    "content_role": "static_visual",
+                    "rationale": "The artboard defines the page.",
+                },
+                {
+                    "source_node_id": "text:1",
+                    "status": "absorbed",
+                    "block_id": "page",
+                    "geometry_basis": "frame",
+                    "content_role": "static_copy",
+                    "rationale": "The title belongs to the page.",
+                },
+                {
+                    "source_node_id": "group:1",
+                    "status": "mapped",
+                    "block_id": "offer",
+                    "geometry_basis": "frame",
+                    "content_role": "static_visual",
+                    "rationale": "The source group defines the offer.",
+                },
+                {
+                    "source_node_id": "button:1",
+                    "status": "absorbed",
+                    "block_id": "page",
+                    "geometry_basis": "real_frame",
+                    "content_role": "static_visual",
+                    "rationale": "This intentionally reverses the source hierarchy.",
+                },
+            ],
+        }
+        bindings_path = self.root / "reversed-topology-bindings.json"
+        write_json(bindings_path, bindings)
+
+        recorded = self.run_stage_cli(
+            "record-bindings", "--bindings", str(bindings_path)
+        )
+
+        self.assertEqual(recorded.returncode, 0, recorded.stderr)
+        coverage = read_json(self.extract_dir / "coverage.json")
+        self.assertFalse(coverage["complete"])
+        self.assertEqual(
+            coverage["topology_projection"]["issues"],
+            [
+                {
+                    "code": "source_edge_reverses_block_hierarchy",
+                    "source_parent_id": "group:1",
+                    "source_child_id": "button:1",
+                    "parent_block_id": "offer",
+                    "child_block_id": "page",
+                    "source_parent_path": ["root:1", "group:1"],
+                    "source_child_path": ["root:1", "group:1", "button:1"],
+                    "source_sibling_index": 0,
+                    "expected": "child Block must equal or descend from parent Block",
+                }
+            ],
+        )
+        topology_packet = coverage["topology_repair_packets"]["button:1"]
+        self.assertEqual(topology_packet["source_parent"]["id"], "group:1")
+        self.assertEqual(topology_packet["source_child"]["id"], "button:1")
+        self.assertEqual(topology_packet["parent_block"]["block_id"], "offer")
+        self.assertEqual(topology_packet["child_block"]["block_id"], "page")
+        self.assertEqual(
+            topology_packet["allowed_repairs"],
+            [
+                "bind_to_existing_block",
+                "split_semantic_block",
+                "merge_semantic_blocks",
+                "create_semantic_block",
+                "fix_parent_child_relation",
+                "classify_non_rendering",
+            ],
+        )
+        self.assertEqual(
+            read_json(self.extract_dir / "state.json")["state"], "repair_required"
+        )
+        self.assertFalse((self.extract_dir / "semantic-review.input.json").exists())
+
     def test_bindings_reject_a_geometry_basis_whose_source_field_is_missing(self) -> None:
         self.assertEqual(self.prepare_workspace().returncode, 0)
         state = read_json(self.extract_dir / "state.json")
@@ -1549,10 +2026,24 @@ class ExtractCliTest(unittest.TestCase):
                 "no_duplicate_bindings": True,
                 "no_synthetic_source_ids": True,
                 "semantic_blocks_reconstruct_complete_design_json": True,
+                "source_parent_child_projection_exact": True,
                 "reverse_json_semantic_audit": True,
                 "visual_json_group_reconciliation": True,
                 "semantic_review_passed": True,
             },
+        )
+        semantic_blocks = read_json(extract_dir / "semantic-blocks.json")
+        self.assertTrue(semantic_blocks["source_topology_projection"]["ok"])
+        self.assertEqual(
+            [
+                (item["source_parent_id"], item["source_child_id"], item["relation"])
+                for item in semantic_blocks["source_topology_projection"]["edges"]
+            ],
+            [
+                ("root:1", "text:1", "same_block"),
+                ("root:1", "group:1", "same_block"),
+                ("group:1", "button:1", "same_block"),
+            ],
         )
         manifest = read_json(extract_dir / "source-manifest.json")
         self.assertEqual(

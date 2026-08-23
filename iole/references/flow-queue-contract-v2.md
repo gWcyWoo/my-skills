@@ -13,8 +13,11 @@ the Sheet author to change quotation marks or add parser syntax. Do not require,
 read, compare, or validate a page number. Keep the design URL in the referenced
 row; do not copy it into interaction prose.
 
-Start with `inspect_ready_flow_root`, semantically normalize the root outside the
-repository, then run `extract-refs` on that normalized copy. Read only the inferred
+Start with `inspect_active_flow_claims`. Only its response may establish an active
+flow; a flow ID, lease, locator, plan, or result from an archive, a prior tool call,
+or conversation is historical evidence and cannot be resumed. When there is no live
+claim, start with `inspect_ready_flow_root`, semantically normalize the root outside
+the repository, then run `extract-refs` on that normalized copy. Read only the inferred
 exact candidate titles with `inspect_flow_rows`. Continue only when each candidate
 resolves to exactly one normalized Sheet title, and use those exact returned titles
 in every deterministic input. Repeat semantic normalization and extraction until
@@ -95,14 +98,17 @@ closed directed title graph derived from the normalized interaction copies. Cycl
 are valid source relationships. The bundle contains no component decisions,
 project inventory, ownership paths, claim guards, leases, PRs, or error cells.
 
-Pass the bundle unchanged to ICP. IOLE must not infer visual Blocks, components,
+Pass the bundle once to ICP Stage 1, which freezes it at
+`.icp/source/source-bundle.json`. Stage 2 reads only that frozen project artifact;
+Stage 3 receives only Stage 1 design facts and Stage 2's closed implementation
+contract, never the bundle or original business prose. IOLE must not infer visual Blocks, components,
 props, slots, variants, states, or events. Empty mapped business cells are valid:
 ICP may infer visible semantics from verified designs or omit unsupported behavior,
 but neither stage may invent an API or invisible interaction.
 
-## New v2 execution compilation
+## Current execution compilation
 
-After ICP verifies `icp.component-design.lock.v6`, run Stage 3 `begin`, author the
+After ICP verifies the current component lock, run Stage 3 `begin`, author the
 generated implementation plan, and pass it to `record-plan`. Compile the execution
 boundary directly from the unchanged source bundle and the two verified ICP
 artifacts:
@@ -115,9 +121,11 @@ python3 ~/.agents/skills/iole/scripts/iole_flow_contract_v2.py \
   > /absolute/flow-execution-plan.json
 ```
 
-Require `iole.flow-execution-plan.v4`. The compiler verifies the exact source
-bundle hash in the component lock, the component-lock hash in the implementation
+Require the hash-bound execution plan returned by the compiler. The compiler verifies the canonical
+bundle digest plus stable source/member contract joins in the component lock, the component-lock hash in the implementation
 plan, every modify-member/page join, the execution DAG, and exact file ownership.
+Equivalent JSON formatting is valid; semantically changed content remains invalid
+even when its digest chain is recomputed.
 It derives `claim_page_titles`; IOLE does not independently reconstruct them.
 
 The DAG has one `foundation` node, one node per modify page, and one final
@@ -128,17 +136,18 @@ case-local RED→GREEN slice at a time; future-page tests are not materialized u
 their node starts. Component instance membership is order-insensitive coverage;
 only the frozen composition parent/slot/order controls rendering order.
 
-Use this v4 contract for branch naming, atomic claim guards, controlled-error
+Use this contract for branch naming, atomic claim guards, controlled-error
 writeback, verified review writeback, and execution. New source-bundle v2 work must
 not call `build-input`, `build-plan`, or `build-job`.
 
 ## Legacy execution input envelopes
 
 The following `flow-analysis-input.v1`/`flow-plan-input.v3` envelope remains only
-for pre-existing execution/recovery paths. A new ICP component-design handoff uses the
-source bundle above. Component decisions and ownership paths for a future new
-execution path must come from ICP's verified component/implementation contracts,
-not from IOLE source analysis.
+for inspecting pre-existing analysis artifacts. The current review-writeback
+command does not accept it: terminal delivery requires a newly compiled execution
+plan and the verified ICP stage result. Existing claimed work must be released or
+reclaimed through the current flow before terminal writeback. A new ICP
+component-design handoff uses the source bundle above.
 
 `build-input` has two separate JSON inputs. Do not wrap the raw rows in a
 `kind`/`rows` document. The raw-rows file is a JSON object whose keys are the
@@ -287,6 +296,14 @@ lock, require every row to remain `ready`; then update every member to `doing` w
 the same lease token and expiry in one Google Sheets `values.batchUpdate`. If any
 member is missing, duplicated, changed, or not ready, mutate no member.
 
+`flow_id` identifies the compiled flow definition; it is not proof of a live run.
+Only the current active-claim inspection establishes recoverable runtime state. A
+`claim-prepared` locator is recoverable when all members are still uniformly ready
+or already owned by its lease. A `claimed` locator requires all committed members
+to match its lease. Pending expansion members must be uniformly ready or uniformly
+owned; mixed state fails closed. The inspection exposes pending member identities
+and their state so that exact expansion is recovered before later execution.
+
 The guard snapshot must cover every member, include its inspected PR value, and
 exclude status, lease, and error fields. Persist its per-member digests in the
 locator and require the exact same values on retries. Expansion binds the new
@@ -312,8 +329,8 @@ pre-write failure is safely replayable; partial state fails closed.
 
 ## User-directed release and restart
 
-`release_flow_claim` is the only supported connector restart boundary for one v2
-flow. IOLE may call it only after the user explicitly says `重新开始` for the exact
+`release_flow_claim` is the primary connector restart boundary for one v2 flow.
+IOLE may call it only after the user explicitly says `重新开始` for the exact
 persisted flow. Pass its original flow ID, shared lease token, and complete bound
 immutable guard snapshot.
 
@@ -324,12 +341,32 @@ status. Restore all members in one batch to `ready`, clear only the selected rol
 lease token, lease expiry, and error, and preserve its PR plus all business and
 other-role columns. Then atomically move the active locator to a durable release
 archive. Repeated calls for the same released lease reconstruct success; the next
-claim for that flow must create a fresh lease.
+claim for that flow must create a fresh lease. Locator creation is an atomic
+publish. If execution stops after the locator enters `released` but before its
+archive move, active inspection omits it and an identical release/reconciliation
+retry completes only that move; it must not inspect or mutate a later lease.
 
 On identity, guard, PR, terminal-state, or foreign-lease drift, mutate neither the
 Sheet nor locator. An unattended tick never releases a claim. After release, IOLE
 archives the failed ICP execution evidence and starts a fresh execution instead of
 resuming a terminal failed DAG.
+
+If ordinary release returns a controlled member identity, input, or release-lease
+ownership mismatch, the same explicit restart may call `reconcile_flow_claim` once
+with the exact same flow ID, lease, and guard snapshot. It has two closed outcomes:
+
+- when the original lease still exists, every bound member must retain its exact
+  locator identity, immutable guard, lease token, and lease expiry and be stuck at
+  `review`; atomically restore all members to `ready` and clear only selected-role
+  lease/error fields;
+- when the original lease no longer exists anywhere in the selected role's lease
+  column, archive the orphaned locator without any Sheet mutation, even if its old
+  row number, identity, or business fields have since drifted.
+
+Fail closed if the original lease exists outside the exact locator membership, the
+locator digest does not match the supplied snapshot, or any same-lease member does
+not satisfy the closed half-transition state. Preserve PR, business, and other-role
+fields. Repeated reconciliation must reconstruct the same archived result.
 
 ## Terminal transitions
 
@@ -337,10 +374,13 @@ Keep every member `doing` throughout implementation. Partial node success never
 writes `review`. On a controlled failure, call `record_flow_error` so every active
 member retains `doing` and the shared lease while receiving the same bounded error.
 
-After ICP returns `icp.flow-handoff-result.v2`, run
-`build-review-writeback --mr MR --icp-result` first, passing `--pr-url` only for
-`mr=2`. It rejects wrong flow/member identity,
-generic pass claims, invalid digests, and any required/covered clause difference.
+After ICP writes its actual `.icp/implementation/stage-result.json`, run
+`build-review-writeback --mr MR --icp-result` first, passing that exact path and
+passing `--pr-url` only for `mr=2`. It rejects a result targeting another compiled
+plan, changed TDD/manifest/runtime artifacts, incomplete implementation state or
+checklist, a final checklist receipt not bound to the current Stage result,
+failed verification commands, or failed visual results. IOLE does not require or
+invent a second ICP handoff format and does not compare ICP-internal schema numbers.
 After that gate and the delivery action required by `mr` succeeds, call
 `complete_flow_rows` with every member's immutable guards. Under one lock, require
 every row to remain `doing` with the shared lease and unchanged guards, then set
@@ -352,6 +392,9 @@ Reconstruct a lost completion response only when every member has `review`,
 cleared lease/error fields, matching immutable guards, and either the preserved PR
 for `mr=0|1` or intended MR for `mr=2`. IOLE never
 writes `done`; review and merge own that transition.
+Completion uses a local write-ahead locator before the Sheet batch update. If
+inspection reports `completion_state=prepared` or `completion_state=terminal`,
+retry the identical completion call; mixed member state remains a hard failure.
 
 ## Atomicity boundary
 

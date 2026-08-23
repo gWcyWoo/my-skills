@@ -9,7 +9,7 @@ from pathlib import Path
 
 EXTRACT_SCRIPT = Path(__file__).resolve().parents[2] / "extract" / "scripts" / "extract.py"
 PNG_1X1 = base64.b64decode(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGOIjnn0HwAFSAKZeroNiAAAAABJRU5ErkJggg=="
 )
 URL_A = (
     "https://lanhuapp.com/web/#/item/project/detailDetach?"
@@ -74,9 +74,9 @@ def source_for(name: str, suffix: str, url: str) -> dict:
                                     {
                                         "enabled": True,
                                         "color": {
-                                            "r": 0.125,
-                                            "g": 0.25,
-                                            "b": 0.5,
+                                            "r": 0.3568627450980392,
+                                            "g": 0.3607843137254902,
+                                            "b": 0.8862745098039215,
                                             "a": 1,
                                         },
                                     }

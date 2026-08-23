@@ -22,6 +22,7 @@ all Block members plus the non-rendering set reconstruct the complete design JSO
 every independent source subtree remains an independent semantic group when required
 source parent-child relations agree with the semantic hierarchy
 every exported source field resolves to one hashed local asset
+every small unexported icon component with no nested export resolves to one exact hashed reference crop
 reference pixels = logical artboard × one exact uniform scale
 every expected design is complete
 ```
@@ -96,6 +97,13 @@ It also creates the complete input-derived Stage-1 checklist and records only
 `bindings`, `semantic-review`, and `verify` nodes; `run.verify` depends on every
 design verify node.
 
+Every Stage-1 command is one serialized transaction. A retry with the same
+committed draft, complete bindings, or passing review repairs a missing checklist
+receipt without creating another revision. Incomplete bindings remain
+`repair_required` and never complete the bindings receipt. The stage lock has no
+artifact representation and therefore cannot create `.icp` output for rejected
+input.
+
 For IOLE, do not create a second run-input projection. Pass its complete bundle
 directly to Stage 1 once:
 
@@ -106,6 +114,19 @@ python3 <icp-skill>/extract/scripts/extract.py begin-run \
 ```
 
 ## 2. Acquire and freeze each design
+
+Stage 1 requires Pillow for exact reference-image dimensions and source-frame
+crop derivation. Run acquisition, preparation, and verification with an
+environment that can import Pillow; a missing dependency is a hard
+`missing_dependency` failure, never permission to skip crop evidence. The
+stage regression command is CWD-independent and pins the runtime dependency:
+
+```bash
+ICP_SKILL="${HOME}/.agents/skills/icp"
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${HOME}/.agents/skills" \
+uv run --with 'pillow>=10,<13' python -m unittest discover -v \
+  -s "${ICP_SKILL}/extract/tests"
+```
 
 For every URL in `run-manifest.json`, acquire complete materials into a temporary directory:
 
@@ -126,7 +147,7 @@ python3 <icp-skill>/extract/scripts/extract.py prepare \
   --design-url "<lanhu-url>"
 ```
 
-Use the returned `design_name` for all remaining commands. `prepare` revalidates every acquisition byte and identity, then copies immutable evidence to `.icp/extract/<design-name>/`. It also creates `asset-index.json`, where every export URL is joined to its exact source node field, local path, size, and hash. `source-manifest.json.reference` freezes the reference PNG size, logical artboard size, and exact uniform scale. Byte-identical input resumes; drift never overwrites evidence.
+Use the returned `design_name` for all remaining commands. `prepare` revalidates every acquisition byte and identity, then copies immutable evidence to `.icp/extract/<design-name>/`. It also creates `asset-index.json`, where every export URL is joined to its exact source node field, local path, size, and hash. `source-manifest.json.reference` freezes the reference PNG size, logical artboard size, and exact uniform scale. For a small icon-sized symbol instance with no text or nested exported asset, `prepare` deterministically crops its exact source frame from the frozen reference and records the crop coordinates, reference hash, bytes, and source-node relation in the same asset index. Byte-identical input resumes; drift never overwrites evidence.
 
 These are hard referential-integrity rules, not convenience metadata:
 
@@ -134,6 +155,10 @@ These are hard referential-integrity rules, not convenience metadata:
 source node + source field → remote export URL → asset_id → local file + hash
 logical source coordinate × logical_scale → reference image pixel coordinate
 ```
+
+`logical_scale` is the exact rational value frozen by acquisition (for example,
+`2` or `3/2`). Crop derivation must parse that rational exactly and apply outward
+floor/ceiling rounding; decimal-only or floating-point parsing is not valid.
 
 No exported source field, local asset, semantic block, source node, or reference mapping may be dangling or inferred from a filename.
 
@@ -201,6 +226,26 @@ Whether authored directly or expanded, every assignment selects exactly one stat
 - `unresolved`: evidence is insufficient; use `block_id: null` and enter repair.
 
 For rendering nodes choose `frame`, `real_frame`, or `combined`; these refer exactly to source payload fields `frame`, `realFrame`, and `combinedFrame`. A basis whose field is absent fails. Rotated nodes with `realFrame` require `real_frame` or `combined`. Non-rendering and unresolved nodes use `not_applicable`. Every semantic leaf must receive at least one mapped or absorbed source node; parent containers may be reachable through their children.
+
+After exact assignment coverage, the script deterministically projects source
+containment into the semantic Block tree before any model-authored review is
+accepted. Visual semantics may merge several source nodes into one Block or split
+one source group into nested Blocks. Along every rendered source ancestry path,
+however, the child assignment must remain in the same Block or descend from the
+parent assignment's Block. A child projected back into an ancestor Block or
+across sibling Blocks is a structural contradiction, not a review judgment.
+Non-rendering source containers are collapsed to the nearest rendered ancestor,
+while the complete traversed source path and sibling position remain frozen.
+
+`record-bindings` scans the complete source order and writes every contradiction
+to `coverage.json.topology_projection.issues` in one pass. It also writes one
+`topology_repair_packets` entry per failed child containing both complete source
+nodes, both Blocks, exact paths, and allowed semantic repairs. Any issue keeps the
+stage in `repair_required`; `semantic-review.input.json` is not generated. After
+the model repairs the draft or bindings, rerun the complete binding projection
+from the first source node. Only an issue-free projection may enter semantic
+review, and the same projection is frozen in `semantic-blocks.json` for later
+stages.
 
 ```bash
 python3 <icp-skill>/extract/scripts/extract.py record-bindings \

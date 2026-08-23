@@ -114,7 +114,9 @@ or an API dependency. When both sources support one meaning, record
 
 Require both:
 
-1. A complete `.icp/extract/run-result.json` whose live `verify-run` succeeds.
+1. A complete `.icp/extract/run-result.json` frozen by Stage 1. Stage 2 validates
+   its declared completion and artifact hashes directly; it never invokes
+   `extract.py`, reruns `verify-run`, or otherwise re-enters Stage 1.
    Every design must expose its verified `semantic-blocks.json`; component design
    reads those self-contained Blocks directly and never rejoins raw source facts,
    bindings, and assets into a new visual grouping. Its frozen `ui_supplement`
@@ -230,6 +232,13 @@ The lock is OS-backed, so process exit releases ownership and a leftover lock fi
 is not a stale owner. The same transaction boundary covers last-page registry
 materialization and group abstraction check-then-write operations.
 
+`state.json` plus its artifact hashes is the commit record; `checklist.json` is a
+derived execution receipt. If a committed page draft, passing page review, or
+group abstraction is missing only its receipt, retry the same command and input:
+the command verifies the committed files, restores only that receipt, and does not
+increment the page revision. If `begin` artifacts exist without `state.json`, they
+are uncommitted and `begin` deterministically rebuilds them from the frozen inputs.
+
 ## Pass 1 — draft, review, and seal each page independently
 
 Start only after the complete extract batch exists:
@@ -303,11 +312,14 @@ A `component_relation` fact also declares one closed intent and target:
 
 - `local_boundary` targets `{kind: self_candidate, id: <this candidate>}` and
   records a page-local component boundary only;
-- `shared_candidate` targets that same self candidate and is the only single-
-  candidate source declaration that may authorize a new shared extraction;
+- `shared_candidate` targets that same self candidate and directly authorizes a
+  single-candidate shared extraction;
 - `shared_usage` targets `{kind: source_member, id: <exact related member title>}`.
   The target member must exist and the current member-to-target edge must already
-  be closed by IOLE's source relation graph.
+  be closed by IOLE's source relation graph. An independently reviewed inbound
+  `shared_usage` may authorize a single-candidate shared extraction only when the
+  target member owns exactly one candidate; a member-level reference never
+  guesses among several target candidates.
 
 Design-visible evidence may only declare `local_boundary`; appearance never
 authorizes sharing. Do not encode a vague “component relation” and defer its
@@ -666,7 +678,8 @@ python3 <icp-skill>/component-design/scripts/component_design.py verify \
   --project-root "<project>"
 ```
 
-`verify` re-runs live extract/source checks, page hashes, full candidate coverage,
+`verify` revalidates the frozen Stage-1 result and artifact hashes without invoking
+Stage 1, then checks page hashes, full candidate coverage,
 the abstraction contract, cache fold, replacement projection, and structural
 completion gates. It never treats words such as `TODO` or angle-bracketed text in
 the exact business source as a model placeholder. Before writing the lock it
