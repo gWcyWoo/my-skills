@@ -60,10 +60,10 @@ Stage 2 全部冻结产物 + 目标仓库(分支基线哈希记录在案)。
 - `resolved: null` → `mock: true`，Repository 返回硬编码数据，DTO 字段从设计稿文案推断
 - 无 API (纯 UI) → 不生成 Repository，组件参数由调用方传入
 
-auth 映射 (Apifox `security` → 项目 `AuthPolicy`):
+auth 映射 (`resolved.auth` → 项目 `AuthPolicy`，确定性映射):
 - `"public"` → `AuthPolicy.PUBLIC`
-- `"bearer"` → `AuthPolicy.REQUIRED`（登录后才能调的接口）
-- 前端可选登录 (如反馈: 未登录也能提但 401 时提示登录) → `AuthPolicy.OPTIONAL`，由交互描述判定
+- `"bearer"` → `AuthPolicy.REQUIRED`
+- `"optional"` → `AuthPolicy.OPTIONAL`
 
 不做: 不生成代码,不含平台语法。
 

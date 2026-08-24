@@ -154,9 +154,12 @@ Sheet `api` 列只有语义提示（如 `/support`、`/feedback/types`），路�
    - `/support` → `GET /support/customerService`（语义匹配：客服）
    - `/auth/otp-requests` → `POST /auth/sendVerifyCode`（语义匹配：发送验证码）
    - `/feedback` → `POST /feedback/record`（语义匹配：意见反馈）
-3. 用 `read_project_oas_ref_resources` 拉匹配到的端点详情，提取：
+3. 用 `read_project_oas_ref_resources` 拉匹配到的端点详情（完整定义：method、path、
+   headers、parameters、security、requestBody、responses、deprecated、descriptions）。
+   模型理解完整定义 + 项目已有网络层代码（API client、auth 模式、DTO 风格），综合产出 `resolved`：
    - `path` + `method`：真实路径
-   - `auth`：`security: []` → `"public"`；`security: [{bearer}]` → `"bearer"`
+   - `auth`：综合 `security`、`parameters` 中的 `Authorization` header、描述文本判定：
+     无鉴权 → `"public"`；必须鉴权 → `"bearer"`；可选鉴权（如 `required: false`）→ `"optional"`
    - `request`：requestBody schema 的顶层字段 + 类型
    - `response`：responses.200 schema 的 `data` 字段结构
    - `deprecated`：是否废弃（废弃端点标注替代方案）
@@ -170,7 +173,7 @@ Sheet `api` 列只有语义提示（如 `/support`、`/feedback/types`），路�
 | `resolved` | Apifox 解析结果，null 表示未匹配 |
 | `resolved.path` | Apifox 真实路径（代码里用这个） |
 | `resolved.method` | GET/POST |
-| `resolved.auth` | `"public"` / `"bearer"` |
+| `resolved.auth` | `"public"` / `"bearer"` / `"optional"` |
 | `resolved.request` | 请求体字段 schema（GET 则为 query params） |
 | `resolved.response` | 响应体 `data` 字段 schema |
 | `resolved.deprecated` | 是否废弃；废弃时附 `alternative` 说明替代方案 |
