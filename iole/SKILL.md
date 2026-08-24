@@ -58,6 +58,7 @@ link → source(工厂) → 该 skill 读行 → 得到本页数据
 既有 `点击mastercard，显示"如何支付-mastercard" 页面信息` 这类不带标记的跳转,
 也有 `toggle: 反馈上传弹弹` 这类错别字,都要按语义识别。
 `API:` 只是接口,不产生子节点。共用组件(`reference:`)不构成先后顺序,不成边。
+`global:` 全局能力(如语言切换、主题),不产生子节点——见「全局能力注入」。
 
 同时要带出触发条件与参数:哪个按钮触发、什么前提(如 `home_status=5`)、传什么值
 (如 `参数为IIN码和e164手机号`、`target=1`)——icp 实现交互时要用。
@@ -133,6 +134,14 @@ icp 每次只处理一个页面,不接受批量输入——并行粒度在 iole 
       `row=null` 表示该标题不在此表——可能来自其它来源,按异构节点处理
    c. 每读回一批就 `record` 落盘;`record` 返回的 `undiscovered` 即下一层待取标题
    d. 对每个新取回的行再解析交互描述,重复 b-c 直到 `undiscovered` 为空
+   e. 全局能力注入:交互描述中出现 `global: <标题>` 时,
+      调 `inspect --title <标题>` 读取该行的 `ui_description` 和 `interaction_description`,
+      分别追加到引用页的对应字段,替换原 `global:` 引用为带 `(global)` 标记的完整描述。
+      全局行在任务表中 `设计稿地址` 列填 `global`(归一化后保留为 `["global"]`),
+      角色 status 为空(不可领取),不产生节点、不被 icp 处理。
+      多个页面引用同一 `global:` 时都获得相同数据;
+      第一个被 icp 处理的页面创建共享组件(Stage 2 扫描代码未找到 → `new`),
+      后续页面扫描到已有实现 → `existing_shared`。
    **边建边落盘**,中途断了不用从头重建。
 4. `status --format table` 给人看计划
 5. 循环 `next`:
