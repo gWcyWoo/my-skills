@@ -55,8 +55,9 @@ def _collect_source(gen_dir: Path) -> str:
 
 def _extract_string_literals(source: str) -> list[str]:
     """从 Kotlin 源码中提取所有字符串字面量。"""
-    # 匹配 "..." 中的内容（不含转义引号）
-    return re.findall(r'"([^"\\]*(?:\\.[^"\\]*)*)"', source)
+    # Kotlin raw strings ("""...""") 的内嵌引号会打乱下面的 "..." 正则配对,先剥离
+    stripped = re.sub(r'"""[\s\S]*?"""', '', source)
+    return re.findall(r'"([^"\\]*(?:\\.[^"\\]*)*)"', stripped)
 
 
 def cmd_check_codegen(args):

@@ -137,7 +137,7 @@ icp 每次只处理一个页面,不接受批量输入——并行粒度在 iole 
    e. 全局能力注入:交互描述中出现 `global: <标题>` 时,
       调 `inspect --title <标题>` 读取该行的 `ui_description` 和 `interaction_description`,
       分别追加到引用页的对应字段,替换原 `global:` 引用为带 `(global)` 标记的完整描述。
-      全局行在任务表中 `设计稿地址` 列填 `global`(归一化后保留为 `["global"]`),
+      全局行有设计稿就填 URL(icp 正常取设计),没有则留空;
       角色 status 为空(不可领取),不产生节点、不被 icp 处理。
       多个页面引用同一 `global:` 时都获得相同数据;
       第一个被 icp 处理的页面创建共享组件(Stage 2 扫描代码未找到 → `new`),

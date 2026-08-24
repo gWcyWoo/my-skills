@@ -78,6 +78,7 @@ auth 映射 (Apifox `security` → 项目 `AuthPolicy`):
 产出: 代码文件 (Screen/ViewModel/API 接口)
 
 前置扫描 (模型在生成前必须完成):
+- 读该 route 已有的全部实现(Screen/ViewModel/Repository/DTO),理解当前功能与结构;新页面此项为空
 - 扫描目标项目的包结构,确定新文件放置路径
 - 找到路由注册点 (NavGraph/Router),确定注册方式
 - 找到网络层 (API client/Retrofit/Ktor),确定调用约定和 AuthPolicy 枚举

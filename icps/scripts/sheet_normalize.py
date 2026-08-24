@@ -109,9 +109,7 @@ def split_urls(raw):
     out = []
     for line in raw.replace("\r", "\n").split("\n"):
         line = line.strip()
-        if line.lower() == "global":
-            out.append("global")
-        elif line.startswith("http://") or line.startswith("https://"):
+        if line.startswith("http://") or line.startswith("https://"):
             out.append(line)
     return out
 
