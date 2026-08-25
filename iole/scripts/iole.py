@@ -218,15 +218,17 @@ def cmd_next(args):
     if missing:  # 建树没完,现在发顺序会漏页
         return emit(False, {"errors": [dict(code="undiscovered_child", **m) for m in missing]}, 1)
 
-    order, _, _ = plan(run)
+    order, cycle_edges, _ = plan(run)
 
     children = child_map(run["nodes"])
+    back = {(a, b) for a, b in cycle_edges}
     target = None
     for nid in order:
         st = run["progress"][nid]["status"]
         if st != "pending":
             continue
-        if all(run["progress"][k]["status"] == "done" for k in children[nid]):
+        if all(run["progress"][k]["status"] == "done"
+               for k in children[nid] if (nid, k) not in back):
             target = nid
             break
     if target is None:
