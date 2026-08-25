@@ -1,5 +1,4 @@
 """Tests for blueprint.py — layout inference and data extraction."""
-import json
 import unittest
 import sys
 from pathlib import Path
@@ -9,9 +8,7 @@ from blueprint import (
     _count_distinct_bands,
     infer_layout,
     infer_width_constraint,
-    find_container_frame,
     is_background_layer,
-    classify_members,
     extract_text,
     extract_fill,
     parse_artboard_meta,

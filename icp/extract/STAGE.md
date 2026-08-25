@@ -20,6 +20,7 @@ Step 3  bind: 按分组绑定设计数据 → 完备性检查
 Step 4  clean: 删除系统组件(Status Bar / Home Indicator)
   ↓
 Step 5  enrich: 合并蓝湖切片数据(多倍率 URL) + 标记缺失图片资源
+         (后代含 textLayer 的节点不附加切片,保留图层数据供逐层还原)
   ↓
 Step 6  crop: 按 frame 坐标从整页截图裁切图标 → 写回 asset_path
   ↓

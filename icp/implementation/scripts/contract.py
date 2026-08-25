@@ -62,7 +62,11 @@ def build_contract(binding: dict) -> dict:
             "affected": c.get("affected"),
         })
 
-    interactions = extract_interactions(binding)
+    raw_interactions = binding.get("interactions")
+    if isinstance(raw_interactions, list) and raw_interactions:
+        interactions = raw_interactions
+    else:
+        interactions = extract_interactions(binding)
 
     contract = {
         "platform": platform,

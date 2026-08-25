@@ -2,7 +2,7 @@
 """ICP Stage 3 — validate: 验证代码生成产物是否匹配蓝图意图。
 
 子命令:
-  check-codegen   验证生成代码的 widget 覆盖、文案覆盖、布局覆盖
+  check-codegen   验证生成代码的文案覆盖、DTO 覆盖
 """
 
 import argparse
@@ -11,59 +11,61 @@ import re
 import sys
 from pathlib import Path
 
-# blueprint role → 生成代码中必须出现的 Compose widget 关键字
-ROLE_WIDGET_MAP = {
-    "form": {
-        "keywords": ["TextField", "OutlinedTextField", "BasicTextField"],
-        "label": "表单输入组件",
-    },
-    "action": {
-        "keywords": ["Button", "TextButton", "IconButton", "FilledTonalButton",
-                      "ElevatedButton", "OutlinedButton", "FloatingActionButton"],
-        "label": "按钮组件",
-    },
-    "navigation": {
-        "keywords": ["TopAppBar", "CenterAlignedTopAppBar", "MediumTopAppBar",
-                      "NavigationBar", "BottomNavigation", "IconButton"],
-        "label": "导航组件",
-    },
-    "list": {
-        "keywords": ["LazyColumn", "LazyRow", "LazyVerticalGrid"],
-        "label": "列表组件",
-    },
-    "modal": {
-        "keywords": ["ModalBottomSheet", "AlertDialog", "Dialog",
-                      "BottomSheetScaffold", "clickable"],
-        "label": "弹窗/遮罩组件",
-    },
+PLATFORMS = ["android-views", "compose", "flutter", "swiftui", "uikit"]
+
+
+def _snake_to_camel(name: str) -> str:
+    parts = name.split("_")
+    return parts[0] + "".join(p.capitalize() for p in parts[1:])
+
+
+def _extract_response_fields(schema):
+    """递归提取 resolved.response 的所有字段名,返回 (snake_case, camelCase) 对。"""
+    fields = []
+    for key, val in schema.items():
+        fields.append((key, _snake_to_camel(key)))
+        if isinstance(val, dict):
+            fields.extend(_extract_response_fields(val))
+        elif isinstance(val, list) and val and isinstance(val[0], dict):
+            fields.extend(_extract_response_fields(val[0]))
+    return fields
+
+
+_CODE_EXTS = {
+    ".kt", ".java", ".swift", ".m", ".h", ".dart",
 }
 
-# blueprint layout → Compose 布局关键字
-LAYOUT_WIDGET_MAP = {
-    "row": ["Row"],
-    "stack": ["Box", "Stack"],
-}
+_RESOURCE_EXTS = {".xml", ".storyboard", ".xib", ".strings"}
 
 
-def _collect_source(gen_dir: Path) -> str:
-    """读取 gen_dir 下所有 .kt 文件，拼成一个大字符串用于关键字搜索。"""
+def _collect_files(gen_dir: Path, exts: set) -> str:
     parts = []
-    for kt in sorted(gen_dir.rglob("*.kt")):
-        parts.append(kt.read_text(encoding="utf-8"))
+    for f in sorted(gen_dir.rglob("*")):
+        if not f.is_file() or f.suffix not in exts:
+            continue
+        try:
+            parts.append(f.read_text(encoding="utf-8"))
+        except UnicodeDecodeError:
+            print(f"warning: skipped {f} (not UTF-8)", file=sys.stderr)
     return "\n".join(parts)
 
 
-def _extract_string_literals(source: str) -> list[str]:
-    """从 Kotlin 源码中提取所有字符串字面量。"""
-    # Kotlin raw strings ("""...""") 的内嵌引号会打乱下面的 "..." 正则配对,先剥离
+def _extract_string_literals(source: str, platform: str = "") -> list[str]:
+    """从源码中提取字符串字面量。单引号仅对 flutter(Dart) 启用。"""
     stripped = re.sub(r'"""[\s\S]*?"""', '', source)
-    return re.findall(r'"([^"\\]*(?:\\.[^"\\]*)*)"', stripped)
+    doubles = re.findall(r'"([^"\\]*(?:\\.[^"\\]*)*)"', stripped)
+    if platform == "flutter":
+        stripped = re.sub(r"'''[\s\S]*?'''", '', stripped)
+        stripped = re.sub(r'"[^"\\]*(?:\\.[^"\\]*)*"', '', stripped)
+        doubles += re.findall(r"'([^'\\]*(?:\\.[^'\\]*)*)'", stripped)
+    return doubles
 
 
 def cmd_check_codegen(args):
     blueprint = json.loads(Path(args.blueprint).read_text(encoding="utf-8"))
     contract = json.loads(Path(args.contract).read_text(encoding="utf-8"))
     gen_dir = Path(args.gen_dir)
+    platform = args.platform
 
     if not gen_dir.exists():
         print(json.dumps({"ok": False, "errors": [
@@ -71,7 +73,9 @@ def cmd_check_codegen(args):
         ]}, ensure_ascii=False))
         sys.exit(1)
 
-    source = _collect_source(gen_dir)
+    source = _collect_files(gen_dir, _CODE_EXTS)
+    resource_source = _collect_files(gen_dir, _RESOURCE_EXTS)
+    full_source = source + "\n" + resource_source
     if not source.strip():
         print(json.dumps({"ok": False, "errors": [
             {"type": "empty_source", "path": str(gen_dir)}
@@ -81,51 +85,9 @@ def cmd_check_codegen(args):
     errors = []
     warnings = []
 
-    # --- 1. Role → Widget 覆盖 ---
     bp_comps = blueprint.get("components", [])
-    roles_present = {c.get("role", "content") for c in bp_comps}
 
-    for role, spec in ROLE_WIDGET_MAP.items():
-        if role not in roles_present:
-            continue
-        found = any(kw in source for kw in spec["keywords"])
-        if not found:
-            errors.append({
-                "type": "missing_widget_for_role",
-                "role": role,
-                "expected_any_of": spec["keywords"],
-                "label": spec["label"],
-            })
-
-    # --- 2. Layout 覆盖 ---
-    for comp in bp_comps:
-        layout = comp.get("layout", "single")
-        if layout in LAYOUT_WIDGET_MAP:
-            found = any(kw in source for kw in LAYOUT_WIDGET_MAP[layout])
-            if not found:
-                errors.append({
-                    "type": "missing_layout_widget",
-                    "component": comp.get("name", "?"),
-                    "layout": layout,
-                    "expected_any_of": LAYOUT_WIDGET_MAP[layout],
-                })
-
-    # --- 3. 组件分区覆盖 ---
-    content_groups = [c for c in bp_comps if c.get("role") not in ("decoration",)]
-    if len(content_groups) > 1:
-        # 需要多个容器分隔 — 检查 Card/Surface/CommonCard/Column+padding 出现次数
-        container_keywords = ["CommonCard", "Card(", "Surface(", "ElevatedCard",
-                              "OutlinedCard"]
-        container_count = sum(source.count(kw) for kw in container_keywords)
-        if container_count < 2:
-            errors.append({
-                "type": "insufficient_sections",
-                "expected_groups": len(content_groups),
-                "found_containers": container_count,
-                "detail": f"蓝图有 {len(content_groups)} 个非装饰组, 代码只有 {container_count} 个容器",
-            })
-
-    # --- 4. 文案覆盖率 ---
+    # --- 文案覆盖率 ---
     bp_texts = []
     for comp in bp_comps:
         for t in comp.get("texts", []):
@@ -134,28 +96,19 @@ def cmd_check_codegen(args):
                 bp_texts.append(v)
 
     if bp_texts:
-        code_strings = _extract_string_literals(source)
-        code_text_set = set(code_strings)
+        code_strings = _extract_string_literals(full_source, platform)
 
         matched = 0
         missing = []
         for bt in bp_texts:
-            # 精确匹配
-            if bt in code_text_set:
+            if bt[:20] in full_source:
                 matched += 1
-            # 蓝图文案前缀出现在某个代码字符串中（截断容忍）
-            elif any(bt[:20] in cs for cs in code_strings if len(cs) >= 3):
-                matched += 1
-            # 代码中某个字符串是蓝图文案的子串（annotatedString 拆分容忍）
             elif any(cs in bt for cs in code_strings if len(cs) >= 6):
-                matched += 1
-            # 全源码搜索（处理 buildAnnotatedString 等拼接场景）
-            elif bt[:20] in source:
                 matched += 1
             else:
                 missing.append(bt[:60])
 
-        coverage = matched / len(bp_texts) if bp_texts else 1.0
+        coverage = matched / len(bp_texts)
         if coverage < 0.8:
             errors.append({
                 "type": "low_text_coverage",
@@ -174,66 +127,28 @@ def cmd_check_codegen(args):
                 "sample_missing": missing[:3],
             })
 
-    # --- 5. 颜色覆盖 ---
-    bp_colors = set()
-    for comp in bp_comps:
-        for t in comp.get("texts", []):
-            c = (t.get("style") or {}).get("color")
-            if c and isinstance(c, str) and c.startswith("rgba"):
-                bp_colors.add(c)
-        for cf in comp.get("child_fills", []):
-            c = cf.get("color")
-            if c and isinstance(c, str) and c.startswith("rgba"):
-                bp_colors.add(c)
-
-    if bp_colors:
-        color_refs = re.findall(r'Color\(0x[0-9A-Fa-f]+\)', source)
-        if len(color_refs) < min(3, len(bp_colors)):
-            warnings.append({
-                "type": "low_color_coverage",
-                "blueprint_colors": len(bp_colors),
-                "code_colors": len(color_refs),
-            })
-
-    # --- 6. API 覆盖 ---
+    # --- DTO 覆盖 resolved.response ---
     apis = contract.get("apis", [])
-    resolved_apis = [a for a in apis if a.get("resolved")]
-    mock_apis = [a for a in apis if not a.get("resolved")]
-
-    def _api_label(a):
-        return a.get("semantic_hint") or a.get("endpoint") or "?"
-
-    if resolved_apis:
-        has_repository = "Repository" in source
-        has_network = any(kw in source for kw in ["NetworkClient", "Retrofit",
-                                                    "HttpClient", "OkHttp", "URL("])
-        if not has_repository:
+    for api in apis:
+        resolved = api.get("resolved")
+        if not resolved:
+            continue
+        resp = resolved.get("response")
+        if not isinstance(resp, dict):
+            continue
+        hint = api.get("semantic_hint") or api.get("endpoint") or "?"
+        field_pairs = _extract_response_fields(resp)
+        missing_fields = list(dict.fromkeys(
+            camel for snake, camel in field_pairs
+            if len(snake) >= 3 and snake not in source and camel not in source
+        ))
+        if missing_fields:
             errors.append({
-                "type": "missing_repository",
-                "apis": [_api_label(a) for a in resolved_apis],
+                "type": "missing_dto_field",
+                "api": hint,
+                "missing": missing_fields,
+                "detail": "DTO 缺少 resolved.response 中的字段",
             })
-        if not has_network:
-            errors.append({
-                "type": "missing_network_call",
-                "apis": [_api_label(a) for a in resolved_apis],
-            })
-    if mock_apis:
-        has_mock = "Mock" in source or "mock" in source or "Repository" in source
-        if not has_mock:
-            warnings.append({
-                "type": "missing_mock_repository",
-                "apis": [_api_label(a) for a in mock_apis],
-            })
-
-    # --- 7. 交互覆盖 ---
-    interactions = contract.get("interactions", [])
-    if interactions:
-        has_viewmodel = "ViewModel" in source
-        has_stateflow = "StateFlow" in source or "MutableState" in source
-        if not has_viewmodel:
-            errors.append({"type": "missing_viewmodel"})
-        if not has_stateflow:
-            errors.append({"type": "missing_state_management"})
 
     ok = len(errors) == 0
     result = {"ok": ok, "errors": errors}
@@ -252,6 +167,9 @@ def main():
     p_cg.add_argument("--blueprint", required=True, help="layout-blueprint.json")
     p_cg.add_argument("--contract", required=True, help="api-contract.json")
     p_cg.add_argument("--gen-dir", required=True, help="生成代码所在目录")
+    p_cg.add_argument("--platform", required=True,
+                       choices=PLATFORMS,
+                       help="目标平台")
 
     args = parser.parse_args()
     if args.command == "check-codegen":

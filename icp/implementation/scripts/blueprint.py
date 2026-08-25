@@ -57,30 +57,13 @@ def infer_layout(children_frames: list[dict]) -> str:
             if v_overlap and h_overlap:
                 overlaps += 1
     total_pairs = n * (n - 1) // 2
-    if total_pairs > 0 and overlaps / total_pairs > 0.5:
+    if overlaps / total_pairs > 0.5:
         return "stack"
     top_bands = _count_distinct_bands([f["top"] for f in children_frames])
     left_bands = _count_distinct_bands([f["left"] for f in children_frames])
     if top_bands >= left_bands:
         return "column"
     return "row"
-
-
-def compute_padding(child_frame: dict, parent_frame: dict) -> dict:
-    return {
-        "start": round(child_frame["left"] - parent_frame["left"], 1),
-        "top": round(child_frame["top"] - parent_frame["top"], 1),
-        "end": round(
-            (parent_frame["left"] + parent_frame["width"])
-            - (child_frame["left"] + child_frame["width"]),
-            1,
-        ),
-        "bottom": round(
-            (parent_frame["top"] + parent_frame["height"])
-            - (child_frame["top"] + child_frame["height"]),
-            1,
-        ),
-    }
 
 
 def compute_spacing(frames: list[dict], layout: str) -> list[float]:
@@ -181,8 +164,8 @@ def is_background_layer(member: dict, container_frame: dict) -> bool:
 
 def classify_members(
     members: list[dict], container_frame: dict
-) -> tuple[list[dict], list[dict], list[dict]]:
-    """Split members into content, background layers, and pure wrappers."""
+) -> tuple[list[dict], list[dict]]:
+    """Split members into content and background layers."""
     content = []
     backgrounds = []
     for m in members:
@@ -194,8 +177,8 @@ def classify_members(
                 continue
         content.append(m)
     if not content:
-        return members, backgrounds, []
-    return content, backgrounds, []
+        return members, []
+    return content, backgrounds
 
 
 def build_component_blueprint(component: dict, artboard_frame: dict) -> dict:
@@ -213,7 +196,7 @@ def build_component_blueprint(component: dict, artboard_frame: dict) -> dict:
     if not container_frame:
         container_frame = artboard_frame
 
-    content_members, bg_layers, _ = classify_members(child_members, container_frame)
+    content_members, bg_layers = classify_members(child_members, container_frame)
 
     texts = []
     fills = []
@@ -239,7 +222,7 @@ def build_component_blueprint(component: dict, artboard_frame: dict) -> dict:
         if fl:
             fills.insert(0, {"name": bg["name"], "layer": "background", **fl})
 
-    layout = infer_layout(child_frames) if child_frames else "single"
+    layout = infer_layout(child_frames)
     width = infer_width_constraint(container_frame, artboard_frame)
 
     inner_padding = {}

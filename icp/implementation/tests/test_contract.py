@@ -71,6 +71,40 @@ class TestBuildContract(unittest.TestCase):
         self.assertEqual(contract["metrics"]["contract_components"], 0)
 
 
+class TestInteractionPassthrough(unittest.TestCase):
+    def test_stage2_interactions_preferred(self):
+        stage2_ix = [
+            {"id": "ix_1", "component": "LoginForm", "type": "data",
+             "condition": None, "trigger": "点击发送", "behavior": "loading",
+             "result": "发送验证码", "api": "/auth/otp", "triggers": ["ix_2"]},
+        ]
+        binding = {
+            "platform": {}, "apis": [{"endpoint": "/auth/otp", "trigger": "click"}],
+            "components": [{"component_name": "LoginForm", "component_type": "new",
+                            "group_name": "g", "params": ["onClick"]}],
+            "interactions": stage2_ix,
+        }
+        contract = build_contract(binding)
+        self.assertEqual(contract["interactions"], stage2_ix)
+        self.assertIn("triggers", contract["interactions"][0])
+
+    def test_fallback_when_no_interactions(self):
+        binding = {
+            "platform": {}, "apis": [{"endpoint": "/pay", "trigger": "submit"}],
+            "components": [],
+        }
+        contract = build_contract(binding)
+        self.assertEqual(contract["interactions"][0]["type"], "api_call")
+
+    def test_fallback_when_empty_interactions(self):
+        binding = {
+            "platform": {}, "apis": [{"endpoint": "/pay", "trigger": "submit"}],
+            "components": [], "interactions": [],
+        }
+        contract = build_contract(binding)
+        self.assertEqual(contract["interactions"][0]["type"], "api_call")
+
+
 class TestGateStage2Incomplete(unittest.TestCase):
     def _run_cli(self, binding_data):
         with tempfile.TemporaryDirectory() as td:

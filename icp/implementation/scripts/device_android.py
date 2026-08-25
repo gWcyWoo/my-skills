@@ -1,4 +1,4 @@
-"""Shared emulator utilities for smoke_test.py and probe.py."""
+"""Android device operations — adb + emulator."""
 from __future__ import annotations
 
 import os
@@ -6,19 +6,14 @@ import subprocess
 import time
 from pathlib import Path
 
+from device import run
+
 _ah = os.environ.get("ANDROID_HOME", "").strip()
 SDK = Path(_ah) if _ah else Path.home() / "Library" / "Android" / "sdk"
 ADB = str(SDK / "platform-tools" / "adb")
 EMULATOR = str(SDK / "emulator" / "emulator")
 
 BOOT_TIMEOUT = 120
-
-
-def run(cmd, timeout=60, check=True):
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-    if check and r.returncode != 0:
-        raise RuntimeError(f"cmd failed: {' '.join(cmd)}\nstderr: {r.stderr[:500]}")
-    return r
 
 
 def running_devices():
@@ -41,12 +36,18 @@ def wait_boot(serial, timeout=BOOT_TIMEOUT):
     return False
 
 
-def boot_emulator(avd):
+def boot_device(name=None):
     devices = running_devices()
     if devices:
-        return devices[0], None
+        return devices[0]
+    if not name:
+        r = run([EMULATOR, "-list-avds"], check=False)
+        avds = [a.strip() for a in r.stdout.strip().splitlines() if a.strip()]
+        if not avds:
+            raise RuntimeError("no running device, no --device given, and no AVDs found")
+        name = avds[0]
     proc = subprocess.Popen(
-        [EMULATOR, "-avd", avd, "-no-audio", "-no-window", "-gpu", "swiftshader_indirect"],
+        [EMULATOR, "-avd", name, "-no-audio", "-no-window", "-gpu", "swiftshader_indirect"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
     time.sleep(5)
@@ -55,13 +56,16 @@ def boot_emulator(avd):
         for d in devs:
             if d.startswith("emulator-"):
                 if wait_boot(d):
-                    return d, proc
+                    return d
         time.sleep(3)
     proc.kill()
-    return None, proc
+    return None
 
 
-def find_apk(project: Path) -> str:
+def find_artifact(project: Path) -> str:
+    flutter_apk = project / "build" / "app" / "outputs" / "flutter-apk" / "app-debug.apk"
+    if flutter_apk.exists():
+        return str(flutter_apk)
     output_dir = project / "app" / "build" / "outputs" / "apk" / "debug"
     apks = list(output_dir.glob("*.apk")) if output_dir.exists() else []
     if not apks:
@@ -69,32 +73,47 @@ def find_apk(project: Path) -> str:
     return str(apks[0])
 
 
-def build_apk(project: Path) -> str:
+def build(project: Path) -> str:
+    if (project / "pubspec.yaml").exists():
+        run(["flutter", "build", "apk", "--debug"], timeout=600, cwd=str(project))
+        return find_artifact(project)
     gradlew = project / "gradlew"
     if not gradlew.exists():
         raise FileNotFoundError(f"gradlew not found at {gradlew}")
     run([str(gradlew), "-p", str(project), "assembleDebug"], timeout=300)
-    return find_apk(project)
+    return find_artifact(project)
 
 
-def install_apk(serial, apk_path):
-    run([ADB, "-s", serial, "install", "-r", "-t", apk_path], timeout=60)
+def install(device_id, artifact_path):
+    run([ADB, "-s", device_id, "install", "-r", "-t", artifact_path], timeout=60)
 
 
-def screenshot(serial, out_path: Path) -> int:
+def launch(device_id, package, route=None):
+    run([ADB, "-s", device_id, "shell", "am", "force-stop", package], check=False)
+    if route:
+        run([ADB, "-s", device_id, "shell", "am", "start",
+             "-a", "android.intent.action.VIEW",
+             "-d", f"app://{route}",
+             "-n", f"{package}/.MainActivity"], check=False)
+    else:
+        run([ADB, "-s", device_id, "shell", "monkey", "-p", package,
+             "-c", "android.intent.category.LAUNCHER", "1"])
+
+
+def screenshot(device_id, out_path: Path) -> int:
     remote = "/sdcard/probe_screenshot.png"
-    run([ADB, "-s", serial, "shell", "screencap", "-p", remote])
-    run([ADB, "-s", serial, "pull", remote, str(out_path)])
-    run([ADB, "-s", serial, "shell", "rm", remote], check=False)
+    run([ADB, "-s", device_id, "shell", "screencap", "-p", remote])
+    run([ADB, "-s", device_id, "pull", remote, str(out_path)])
+    run([ADB, "-s", device_id, "shell", "rm", remote], check=False)
     return out_path.stat().st_size
 
 
-def dump_view_tree(serial, out_path: Path):
+def dump_view_tree(device_id, out_path: Path):
     remote = "/sdcard/probe_window_dump.xml"
-    run([ADB, "-s", serial, "shell", "rm", remote], check=False)
-    run([ADB, "-s", serial, "shell", "uiautomator", "dump", remote])
-    run([ADB, "-s", serial, "pull", remote, str(out_path)])
-    run([ADB, "-s", serial, "shell", "rm", remote], check=False)
+    run([ADB, "-s", device_id, "shell", "rm", remote], check=False)
+    run([ADB, "-s", device_id, "shell", "uiautomator", "dump", remote])
+    run([ADB, "-s", device_id, "pull", remote, str(out_path)])
+    run([ADB, "-s", device_id, "shell", "rm", remote], check=False)
 
 
 def count_view_nodes(xml_path: Path) -> int:
@@ -102,5 +121,5 @@ def count_view_nodes(xml_path: Path) -> int:
     return content.count("<node ")
 
 
-def kill_emulator(serial):
-    run([ADB, "-s", serial, "emu", "kill"], check=False)
+def kill_device(device_id):
+    run([ADB, "-s", device_id, "emu", "kill"], check=False)

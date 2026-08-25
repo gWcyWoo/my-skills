@@ -496,6 +496,18 @@ def _needs_asset(member, design_idx):
     return False
 
 
+def _has_text_descendant(nid, design_idx):
+    """递归检查节点后代是否含 textLayer。"""
+    raw = design_idx.get(nid, {})
+    for child in raw.get("layers", []):
+        if child.get("type") == "textLayer":
+            return True
+        child_id = child.get("id")
+        if child_id and _has_text_descendant(child_id, design_idx):
+            return True
+    return False
+
+
 def cmd_enrich(args):
     """合并切片数据到已绑定组件，标记缺失资源。
 
@@ -554,7 +566,7 @@ def cmd_enrich(args):
         for member in comp.get("members", []):
             mid = member.get("id")
 
-            if mid in slice_idx:
+            if mid in slice_idx and not _has_text_descendant(mid, design_idx):
                 sl = slice_idx[mid]
                 member["scale_urls"] = sl.get("scale_urls")
                 member["svg_url"] = sl.get("svg_url")

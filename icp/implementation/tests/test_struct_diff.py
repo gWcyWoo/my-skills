@@ -1,5 +1,4 @@
 """Tests for struct_diff.py — text matching and hierarchy checking."""
-import json
 import os
 import tempfile
 import unittest

@@ -77,7 +77,7 @@ def extract_step8(work_dir: Path) -> dict:
     data = read_json(work_dir / "attribution-ledger.json")
     if not data:
         return {"status": "no_fixes_needed"}
-    entries = data if isinstance(data, list) else data.get("entries", [])
+    entries = data
     breakdown = {}
     for e in entries:
         attr = e.get("attribution", "unknown")
@@ -118,7 +118,7 @@ def main():
     parser = argparse.ArgumentParser(description="Stage 3 指标汇总")
     parser.add_argument("--work-dir", required=True, help="page work directory")
     parser.add_argument("--title", required=True, help="page title")
-    parser.add_argument("--platform", default="android", help="target platform")
+    parser.add_argument("--platform", required=True, help="target platform")
     parser.add_argument("--output", required=True, help="output stage3-metrics.json path")
     args = parser.parse_args()
 
@@ -131,7 +131,8 @@ def main():
 
     steps_present = sum(
         1 for k, v in metrics.items()
-        if k.startswith("step") and isinstance(v, dict) and v.get("status") not in ("missing", None)
+        if k.startswith("step") and isinstance(v, dict) and v
+        and v.get("status") not in ("missing", "not_run")
     )
     print(json.dumps({"ok": True, "steps_with_data": steps_present}, ensure_ascii=False))
     return 0

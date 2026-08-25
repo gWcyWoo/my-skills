@@ -66,7 +66,7 @@ Step 1: blueprint_components, blueprint_texts, blueprint_assets, blueprint_layou
 Step 2: contract_apis, contract_interactions, contract_components
 Step 3: gen_files, gen_platform, gen_unit_strategy, gen_route_registered
 Step 4: compile_rounds, compile_errors, compile_time_ms
-Step 5: render_ok, render_navigation, render_time_ms, render_view_nodes
+Step 5: render_ok, render_time_ms, render_view_nodes
 Step 6: struct_texts_matched, struct_components_matched, struct_hierarchy_ok
 Step 7: visual_pass, visual_issues
 Step 6-7 loop: attribution_rounds, attribution_breakdown

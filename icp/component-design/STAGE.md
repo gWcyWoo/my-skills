@@ -161,7 +161,9 @@ Sheet `api` 列只有语义提示（如 `/support`、`/feedback/types`），路�
    - `auth`：综合 `security`、`parameters` 中的 `Authorization` header、描述文本判定：
      无鉴权 → `"public"`；必须鉴权 → `"bearer"`；可选鉴权（如 `required: false`）→ `"optional"`
    - `request`：requestBody schema 的顶层字段 + 类型
-   - `response`：responses.200 schema 的 `data` 字段结构
+   - `response`：responses.200 schema 的 `data` 字段结构，用 JSON 原生类型表达：
+     简单字段写类型字符串(`"string"`/`"integer"`/`"number"`/`"boolean"`)，
+     嵌套对象写 `{}`，数组写 `[{}]`；`check-interactions` 校验格式
    - `deprecated`：是否废弃（废弃端点标注替代方案）
 4. 无法匹配 → `resolved: null`，Stage 3 生成 mock Repository
 

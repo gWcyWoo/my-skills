@@ -2,13 +2,14 @@
 """Step 5: 渲染采集 — 构建+安装+启动+导航+截图+dump视图树
 
 用法:
-    python3 probe.py --project <android-root> --out-dir <dir> --package <pkg> \
-        [--route <route>] [--blueprint <path>] [--avd <name>] [--serial <serial>] \
-        [--skip-build] [--skip-boot] [--keep-emulator]
+    python3 probe.py --project <project-root> --out-dir <dir> --package <pkg> \
+        --target <android|ios|web> \
+        [--route <route>] [--blueprint <path>] [--device <name>] [--serial <id>] \
+        [--skip-build] [--skip-boot] [--keep-device]
 
 产出 (写入 --out-dir):
-    screenshot.png   — 目标页截图
-    view_tree.xml    — UI Automator dump
+    screenshot.png    — 目标页截图
+    view_tree.xml     — 视图树 dump
     probe-result.json — 结构化结果
 """
 from __future__ import annotations
@@ -19,49 +20,12 @@ import sys
 import time
 from pathlib import Path
 
-from emulator_utils import (
-    ADB,
-    boot_emulator,
-    build_apk,
-    count_view_nodes,
-    dump_view_tree,
-    find_apk,
-    install_apk,
-    kill_emulator,
-    run,
-    running_devices,
-    screenshot,
-)
+import device
 
 LAUNCH_SETTLE = 3
-RENDER_SETTLE = 2
-
-
-def navigate_to_route(serial, package, route):
-    """Navigate to target page. Returns (method, success)."""
-    run([ADB, "-s", serial, "shell", "am", "force-stop", package], check=False)
-    time.sleep(0.5)
-
-    # Try VerifyActivity first
-    run([ADB, "-s", serial, "shell", "am", "start",
-         "-n", f"{package}/.debug.VerifyActivity",
-         "--es", "route", route], check=False)
-    time.sleep(RENDER_SETTLE)
-    r = run([ADB, "-s", serial, "shell", "dumpsys", "activity", "top"], check=False)
-    if "VerifyActivity" in r.stdout:
-        return "verify_activity", True
-
-    # Try deep link
-    run([ADB, "-s", serial, "shell", "am", "start",
-         "-a", "android.intent.action.VIEW",
-         "-d", f"app://{route}",
-         "-n", f"{package}/.MainActivity"], check=False)
-    time.sleep(RENDER_SETTLE)
-    return "deep_link", True
 
 
 def verify_navigation(vt_path: Path, blueprint_path: Path | None) -> dict:
-    """Check if the rendered page matches the blueprint (at least one text matches)."""
     if not blueprint_path or not blueprint_path.exists():
         return {"verified": False, "reason": "no_blueprint"}
 
@@ -90,98 +54,94 @@ def verify_navigation(vt_path: Path, blueprint_path: Path | None) -> dict:
 
 def main():
     parser = argparse.ArgumentParser(description="Step 5: 渲染采集")
-    parser.add_argument("--project", required=True, help="Android project root")
+    parser.add_argument("--project", required=True, help="project root")
     parser.add_argument("--out-dir", required=True, help="output directory")
-    parser.add_argument("--package", required=True, help="app package name")
+    parser.add_argument("--package", required=True, help="app package/bundle id")
+    parser.add_argument("--target", required=True, choices=sorted(device.TARGET_MODULES), help="device target")
     parser.add_argument("--route", default=None, help="route to navigate to")
-    parser.add_argument("--blueprint", default=None, help="layout-blueprint.json for nav verification")
-    parser.add_argument("--avd", default=None, help="AVD name")
-    parser.add_argument("--serial", default=None, help="already-running device serial")
+    parser.add_argument("--blueprint", default=None, help="layout-blueprint.json")
+    parser.add_argument("--device", default=None, help="device/AVD/simulator name")
+    parser.add_argument("--serial", default=None, help="already-running device id")
     parser.add_argument("--skip-build", action="store_true")
     parser.add_argument("--skip-boot", action="store_true")
-    parser.add_argument("--keep-emulator", action="store_true")
+    parser.add_argument("--keep-device", action="store_true")
     args = parser.parse_args()
 
+    dev = device.load(args.target)
     project = Path(args.project)
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    result = {"steps": {}, "timings": {}}
+    result = {"steps": {}, "timings": {}, "target": args.target}
     t_start = time.time()
-    serial = None
+    device_id = None
 
     try:
         # Boot
         if args.serial:
-            serial = args.serial
+            device_id = args.serial
         elif args.skip_boot:
-            devices = running_devices()
+            devices = dev.running_devices()
             if not devices:
                 print(json.dumps({"ok": False, "error": "no running device and --skip-boot"}))
                 return 1
-            serial = devices[0]
+            device_id = devices[0]
         else:
             t = time.time()
-            serial, _proc = boot_emulator(args.avd or "CreditSun_API_24")
-            if not serial:
-                print(json.dumps({"ok": False, "error": "emulator did not boot"}))
+            device_id = dev.boot_device(args.device)
+            if not device_id:
+                print(json.dumps({"ok": False, "error": "device did not boot"}))
                 return 1
             result["timings"]["boot_ms"] = int((time.time() - t) * 1000)
-        result["serial"] = serial
+        result["device_id"] = device_id
 
         # Build
         if not args.skip_build:
             t = time.time()
-            apk_path = build_apk(project)
+            artifact = dev.build(project)
             result["timings"]["build_ms"] = int((time.time() - t) * 1000)
         else:
-            apk_path = find_apk(project)
-        result["apk"] = apk_path
+            artifact = dev.find_artifact(project)
+        result["artifact"] = artifact
 
         # Install
         t = time.time()
-        install_apk(serial, apk_path)
+        dev.install(device_id, artifact)
         result["timings"]["install_ms"] = int((time.time() - t) * 1000)
 
         # Launch + navigate
         t = time.time()
-        if args.route:
-            nav_method, _ok = navigate_to_route(serial, args.package, args.route)
-            result["render_navigation"] = nav_method
-        else:
-            run([ADB, "-s", serial, "shell", "am", "start",
-                 "-n", f"{args.package}/.MainActivity"], check=False)
-            result["render_navigation"] = "main_activity"
+        dev.launch(device_id, args.package, route=args.route)
         time.sleep(LAUNCH_SETTLE)
         result["timings"]["launch_ms"] = int((time.time() - t) * 1000)
 
         # Screenshot
         ss_path = out_dir / "screenshot.png"
         t = time.time()
-        ss_size = screenshot(serial, ss_path)
+        ss_size = dev.screenshot(device_id, ss_path)
         result["timings"]["screenshot_ms"] = int((time.time() - t) * 1000)
         result["steps"]["screenshot"] = {"path": str(ss_path), "size": ss_size}
 
         # View tree
         vt_path = out_dir / "view_tree.xml"
         t = time.time()
-        dump_view_tree(serial, vt_path)
-        node_count = count_view_nodes(vt_path)
+        dev.dump_view_tree(device_id, vt_path)
+        node_count = dev.count_view_nodes(vt_path)
         result["timings"]["dump_ms"] = int((time.time() - t) * 1000)
         result["steps"]["view_tree"] = {"path": str(vt_path), "nodes": node_count}
 
-        # Navigation verification (hard error if route was specified but page didn't render)
+        # Navigation verification
         bp_path = Path(args.blueprint) if args.blueprint else None
         nav_check = verify_navigation(vt_path, bp_path)
         result["navigation_check"] = nav_check
-        if args.route and not nav_check.get("verified", True):
+        if args.route and nav_check.get("reason") == "navigation_failed":
             result["render_ok"] = False
-            result["error"] = f"navigation_failed: 0/{nav_check.get('expected_texts', '?')} blueprint texts found in view tree"
+            result["error"] = f"navigation_failed: 0/{nav_check.get('expected_texts', '?')} blueprint texts found"
             result["render_view_nodes"] = node_count
             result["render_time_ms"] = int((time.time() - t_start) * 1000)
             with open(out_dir / "probe-result.json", "w") as f:
                 json.dump(result, f, indent=2, ensure_ascii=False)
-            print(json.dumps({"ok": False, **{k: result[k] for k in ("error", "render_navigation")}}, ensure_ascii=False))
+            print(json.dumps({"ok": False, "error": result["error"]}, ensure_ascii=False))
             return 1
 
         result["render_ok"] = True
@@ -194,8 +154,8 @@ def main():
         print(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False))
         return 1
     finally:
-        if not args.keep_emulator and not args.serial and not args.skip_boot and serial:
-            kill_emulator(serial)
+        if not args.keep_device and not args.serial and not args.skip_boot and device_id:
+            dev.kill_device(device_id)
 
     with open(out_dir / "probe-result.json", "w") as f:
         json.dump(result, f, indent=2, ensure_ascii=False)
@@ -203,7 +163,6 @@ def main():
     print(json.dumps({
         "ok": True,
         "render_ok": True,
-        "render_navigation": result.get("render_navigation"),
         "render_view_nodes": node_count,
         "render_time_ms": result["render_time_ms"],
     }))

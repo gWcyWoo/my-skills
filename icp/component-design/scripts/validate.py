@@ -15,6 +15,8 @@ from pathlib import Path
 VALID_TYPES = {"existing_shared", "extract_shared", "platform_builtin", "new"}
 SHARED_TYPES = {"existing_shared", "extract_shared"}
 INTERACTIVE_ROLES = {"action", "form"}
+VALID_RESPONSE_LEAF_TYPES = {"string", "integer", "number", "boolean"}
+VALID_AUTH_VALUES = {"public", "bearer", "optional"}
 
 
 def _project_root(binding_path: str) -> Path:
@@ -162,9 +164,26 @@ def cmd_check_interactions(args):
         if role in INTERACTIVE_ROLES:
             errors.append({"type": "idle_interactive_component", "component_name": cn, "role": role})
         elif not role:
-            # role 已知且非交互(decoration/content/…)按设计就该空闲;只有 role 未知才值得看一眼
             warnings.append({"type": "idle_component", "component_name": cn})
 
+    # --- resolved 格式校验 ---
+    for api in binding.get("apis", []):
+        hint = api.get("semantic_hint") or api.get("endpoint") or "?"
+        resolved = api.get("resolved")
+        if resolved is None:
+            continue
+        auth = resolved.get("auth")
+        if auth is not None and auth not in VALID_AUTH_VALUES:
+            errors.append({"type": "invalid_auth", "api": hint, "auth": auth,
+                           "allowed": sorted(VALID_AUTH_VALUES)})
+        resp = resolved.get("response")
+        if resp is not None:
+            if not isinstance(resp, dict):
+                errors.append({"type": "invalid_response_schema", "api": hint,
+                               "detail": "resolved.response 必须是 object 或 null"})
+            else:
+                bad = _check_response_schema(resp, hint)
+                errors.extend(bad)
 
     ok = len(errors) == 0
     result = {"ok": ok}
@@ -174,6 +193,32 @@ def cmd_check_interactions(args):
         result["warnings"] = warnings
     print(json.dumps(result, ensure_ascii=False))
     return 0 if ok else 1
+
+
+def _check_response_schema(obj, api_hint, path=""):
+    """递归校验 resolved.response 只含合法类型。"""
+    errors = []
+    for key, val in obj.items():
+        field_path = f"{path}.{key}" if path else key
+        if isinstance(val, str):
+            if val not in VALID_RESPONSE_LEAF_TYPES:
+                errors.append({"type": "invalid_response_schema", "api": api_hint,
+                               "field": field_path, "value": val,
+                               "detail": f"叶子值必须是 {sorted(VALID_RESPONSE_LEAF_TYPES)} 之一"})
+        elif isinstance(val, dict):
+            errors.extend(_check_response_schema(val, api_hint, field_path))
+        elif isinstance(val, list):
+            if len(val) != 1 or not isinstance(val[0], dict):
+                errors.append({"type": "invalid_response_schema", "api": api_hint,
+                               "field": field_path,
+                               "detail": "数组必须写成 [{...}] 形式(恰好一个对象元素描述 item schema)"})
+            else:
+                errors.extend(_check_response_schema(val[0], api_hint, f"{field_path}[]"))
+        else:
+            errors.append({"type": "invalid_response_schema", "api": api_hint,
+                           "field": field_path,
+                           "detail": f"不支持的类型 {type(val).__name__}"})
+    return errors
 
 
 def main():

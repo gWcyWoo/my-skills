@@ -1,6 +1,6 @@
 # Stage 3 — implementation
 
-> 前置条件:模拟器采集回路先通过独立冒烟测试(启动→安装→截屏→dump视图树→退出,全程无人工)。
+> 前置条件:模拟器采集回路可用(probe.py 能完成 启动→安装→截屏→dump视图树→退出,全程无人工)。
 
 ## 输入
 
@@ -96,20 +96,26 @@ auth 映射 (`resolved.auth` → 项目 `AuthPolicy`，确定性映射):
 
 约束: 不得新增交互原子;蓝图里没有的组件不生成。不得用批量脚本/模板替代模型逐页生成。
 
-验证 (代码写入后立即执行):
-```
-validate.py check-codegen --blueprint layout-blueprint.json --contract api-contract.json --gen-dir <feature-dir>
-```
-7 项检查:
-1. role→widget: blueprint 的 form/action/navigation/list/modal 角色在代码中有对应 Compose widget
-2. layout→布局: blueprint 的 row/stack 布局在代码中有 Row{}/Box{} 对应
-3. 组件分区: 多个非装饰组 → 代码中有对应数量的容器 (Card/Surface)
-4. 文案覆盖: ≥80% 的 blueprint 文案出现在代码字符串字面量中
-5. 颜色覆盖: blueprint 色值在代码中有 Color() 引用
-6. API 覆盖: contract 有 resolved API → 代码有 Repository + 真实网络调用 (路径匹配 resolved.path)；mock API → 代码有 MockRepository + 硬编码数据
-7. 交互覆盖: contract 有交互 → 代码有 ViewModel + StateFlow
+验证 (代码写入后立即执行,两个通道):
 
-errors → 修代码 → 重新验证,循环直到 ok。
+**确定性检查** (validate.py check-codegen):
+```
+validate.py check-codegen --blueprint layout-blueprint.json --contract api-contract.json --gen-dir <feature-dir> --platform <compose|swiftui|flutter|uikit|android-views>
+```
+2 项确定性检查:
+- 文案覆盖: ≥80% 的 blueprint 文案出现在代码中 (含资源文件)
+- DTO 覆盖: resolved API 的 response 字段在代码中有对应 DTO 属性 (snake_case 或 camelCase 均可)
+
+**语义检查** (模型判断,读 blueprint + contract + 生成代码):
+1. role→widget: blueprint 的 form/action/navigation/list/modal 角色在代码中有对应平台 widget
+2. layout→布局: blueprint 的 row/stack 布局在代码中有对应平台布局组件
+3. 组件分区: 多个非装饰组 → 代码中有对应数量的容器分区
+4. API 覆盖: resolved API → ViewModel 通过 Repository 获取数据,Repository 请求路径字面值匹配 resolved.path,auth 匹配 resolved.auth; mock API → MockRepository 返回的硬编码数据与设计稿文案一致
+5. 交互覆盖: contract 有交互 → 代码有平台对应的状态管理组件,且 UI 从 ViewModel/State 读取动态数据 (不硬编码 API 返回值)
+6. 颜色覆盖: blueprint 色值在代码中有对应的颜色定义 (值匹配,非仅存在颜色 API)
+7. 组件复用: component_type=existing_shared 的组件在代码中 import 了 source_path 的类; platform_builtin 使用了平台标准实现; extract_shared 创建了可复用组件
+
+有问题 → 修代码 → 两个通道都重新执行,循环直到 ok。
 
 记录:
 - `gen_files`: 生成的文件列表 + 行数
@@ -121,7 +127,7 @@ errors → 修代码 → 重新验证,循环直到 ok。
 
 ### Step 4: 编译闸门 (确定性)
 
-构建 APK/IPA。编译错 → 修 → 重新构建,循环直到通过。
+构建产物 (Android: APK, iOS: .app, Web: dist/)。编译错 → 修 → 重新构建,循环直到通过。
 
 记录:
 - `compile_rounds`: 编译修复轮数
@@ -133,16 +139,15 @@ errors → 修代码 → 重新验证,循环直到 ok。
 安装 → 启动 → 导航到目标页 → dump 视图树 + 截图。
 产出: `view_tree.xml` + `screenshot.png`
 
-导航策略 (按优先级):
-1. deep link: `am start -a VIEW -d "app://route"` — 需要项目注册了 deep link
-2. adb 模拟操作: 通过 input tap 导航到目标页 — 需要知道导航路径
-3. VerifyActivity: debug-only Activity, 直接渲染目标 Composable — 需要在 Step 3 生成
+导航策略 (按平台):
+- Android: deep link (`am start -a VIEW -d app://<route>`)
+- iOS: deep link (`xcrun simctl openurl app://<route>`)
+- Web: 直接导航到 URL path
 
 导航失败 (目标页未渲染) 是 hard error, 不是 silent fallback — 归因为 environment 或 codegen,停止后续步骤。验证方法: 截图后检查视图树是否包含至少一条 blueprint 里的文案;如果 0 条匹配,判定为导航失败。
 
 记录:
 - `render_ok`: 是否成功渲染
-- `render_navigation`: 使用的导航方式
 - `render_time_ms`: 从安装到截图完成的耗时
 - `render_view_nodes`: 视图树节点数
 
@@ -178,7 +183,9 @@ errors → 修代码 → 重新验证,循环直到 ok。
 - 内部子元素层级是否正确
 - 滚动内容: 如该组件在 LazyColumn 中且不可见 → 滚动截图或滚动 dump,不能跳过
 
-通过标准: 组件存在 + 层级正确 + 定位正确
+- 容器背景色/填充: 与设计稿一致 (blueprint child_fills/fill 的色值)
+
+通过标准: 组件存在 + 层级正确 + 定位正确 + 填充色正确
 
 **维度 2: 图标**
 - 该组件内的每个图标是否存在
@@ -190,7 +197,7 @@ errors → 修代码 → 重新验证,循环直到 ok。
 **维度 3: 文案**
 - 该组件内的每条文案是否与设计稿逐字一致
 - 文本样式: 下划线/加粗/颜色 必须与设计稿一致
-- 动态数据 (API 返回) 在 VerifyActivity 中必须有 mock 值,不能空白
+- 动态数据 (API 返回) 必须有 mock 值,不能空白
 - hint/placeholder 文案必须一致
 
 通过标准: 文案内容正确 + 样式正确 + 动态数据有 mock 值
@@ -318,28 +325,48 @@ struct_diff.py --view-tree view_tree.xml --blueprint layout-blueprint.json --out
 
 ### Step 7: 行为验证
 
-按 api-contract.json 的交互原子列表逐个验证:
+从 api-contract.json 的 interactions 列表逐条推导测试用例并执行:
 
-| 交互类型 | 验证方法 |
-|---|---|
-| 按钮可点击 | view_tree 的 clickable 属性 |
-| 点击→导航 | adb input tap + dumpsys activity top,检查当前 Activity/route 是否切换 |
-| 点击→API调用 | adb 设代理 + 抓包,或检查 logcat 中的网络请求日志 |
-| 表单输入 | adb input text + 检查视图树中输入框 text 属性变化 |
-| 状态变化 | 操作后重新 dump 视图树,对比前后差异 |
+测试用例推导:
+1. 每条 interaction 转为一个用例:
+   - 前置: interaction.condition (null 则无前置)
+   - 操作: interaction.trigger (点击/输入/滑动等设备交互)
+   - 预期行为: interaction.behavior (UI 变化: 按钮禁用、loading 等)
+   - 预期结果: interaction.result (状态变更/路由跳转/API 调用)
+2. interaction.triggers 链构成多步场景 (ix_1→ix_2→ix_3),按链顺序依次执行
+3. type=data 的 interaction 额外验证 (interaction.api 与 apis[] 按路径匹配,取 resolved 状态): resolved API → 代码中对该路径有网络调用; mock API (resolved=null) → 代码中有 MockRepository 返回对应数据
+
+验证方法:
+
+| 交互类型 | 操作 | 断言 |
+|---|---|---|
+| 按钮可点击 | 无 (静态检查) | 视图树中 clickable=true / accessible |
+| 点击→导航 | 设备 tap 触发按钮 | dump 视图树,当前 route 切换到预期页面 |
+| 点击→API调用 (resolved) | 设备 tap 触发按钮 | 日志中出现对 interaction.api 路径的网络请求 |
+| 点击→API调用 (mock) | 设备 tap 触发按钮 | ViewModel 状态更新 (mock 无网络请求,验证 UI 数据变化) |
+| 表单输入 | 设备输入文本 | dump 视图树,输入框 text 属性包含输入值 |
+| 状态变化 | 执行 trigger 操作 | dump 前后视图树,UI 变化匹配 interaction.behavior |
+
+每个用例: 执行操作 → 采集实际结果 → 与预期比对 → 记录 pass/fail。
 
 失败 → 归因 → 修 → 回 Step 4 重编译渲染。
 
-记录:
-- `behavior_total`: 交互原子总数
-- `behavior_passed`: 通过数
-- `behavior_failed`: 失败列表 [{interaction, expected, actual, attribution}]
+产出 `behavior-result.json`:
+```json
+{
+  "behavior_total": 3,
+  "behavior_passed": 2,
+  "behavior_failed": [
+    {"interaction": "ix_1", "trigger": "点击发送验证码", "expected": "按钮禁用+loading", "actual": "按钮未变化", "attribution": "codegen"}
+  ]
+}
+```
 
 ## 产出文件
 
 | 文件 | 说明 |
 |---|---|
-| 代码文件 | Screen.kt / ViewModel.kt / ... |
+| 代码文件 | 平台对应的 UI/状态管理文件 |
 | layout-blueprint.json | Step 1 蓝图 |
 | api-contract.json | Step 2 接口契约 |
 | screenshot.png | Step 5 渲染截图 |
@@ -347,6 +374,7 @@ struct_diff.py --view-tree view_tree.xml --blueprint layout-blueprint.json --out
 | struct-diff.json | Step 6 辅助预检报告 (文案覆盖率) |
 | visual-diff.json | Step 6 逐组件四维验证工作日志 (含每轮差异+修复记录) |
 | attribution-ledger.json | Step 6-7 归因账本 |
+| behavior-result.json | Step 7 交互验证结果 |
 | stage3-metrics.json | 全流程指标汇总 |
 
 ## stage3-metrics.json
@@ -358,22 +386,18 @@ struct_diff.py --view-tree view_tree.xml --blueprint layout-blueprint.json --out
   "title": "单期还款",
   "platform": "android",
   "timestamp": "...",
-  "step1": { "blueprint_components": 5, "blueprint_texts": 11, "..." : "..." },
-  "step2": { "contract_apis": 1, "contract_interactions": 1 },
-  "step3": { "gen_files": [...], "gen_platform": "android/compose" },
-  "step4": { "compile_rounds": 2, "compile_errors": [...] },
-  "step5": { "render_ok": true, "render_view_nodes": 28 },
-  "step6": { "struct_texts_matched": 11, "struct_texts_missing": [] },
-  "step6": {
-    "pass": true,
-    "total_rounds": 2,
-    "total_diffs_found": 5,
-    "total_diffs_fixed": 5,
-    "by_component": {"header": 1, "form": 2, "footer": 2},
-    "by_dimension": {"structure": 1, "icon": 2, "text": 1, "interaction": 1},
-    "by_severity": {"critical": 1, "major": 3, "minor": 1}
+  "step1_blueprint": { "blueprint_components": 5, "blueprint_texts": 11 },
+  "step2_contract": { "contract_apis": 1, "contract_interactions": 1 },
+  "step3": { "gen_files": ["..."], "gen_platform": "android/compose" },
+  "step4": { "compile_rounds": 2, "compile_errors": ["..."] },
+  "step5_probe": { "render_ok": true, "render_view_nodes": 28 },
+  "step6_struct_diff": { "matched": 11, "total": 11, "missing": [] },
+  "step7_visual_diff": {
+    "visual_pass": true,
+    "visual_issues": []
   },
-  "step7": { "behavior_total": 1, "behavior_passed": 1 }
+  "step8_attribution": { "total_rounds": 2, "attributions": {"codegen": 3, "environment": 1} },
+  "step9_behavior": { "behavior_total": 1, "behavior_passed": 1 }
 }
 ```
 
@@ -383,10 +407,9 @@ struct_diff.py --view-tree view_tree.xml --blueprint layout-blueprint.json --out
 |---|---|---|
 | 编译修复轮数 | step4.compile_rounds | 高 → 代码生成 prompt/约束需改进 |
 | 编译错误类型分布 | step4.compile_errors | 集中在某类 → 针对性加 prompt 约束 |
-| 文案覆盖率 | step6.matched/expected | 低 → 蓝图提取或代码生成遗漏文案 |
-| 逐组件修复轮数 | step6.total_rounds | 高 → 初次生成与设计稿还原能力弱 |
-| 组件差异分布 | step6.by_component | 集中在某组件 → 该类组件的生成 prompt 需改进 |
-| 维度差异分布 | step6.by_dimension | icon 多 → 图标还原弱; text 多 → 文案/样式覆盖不全 |
+| 文案覆盖率 | step6_struct_diff.matched | 低 → 蓝图提取或代码生成遗漏文案 |
+| 视觉修复轮数 | step7_visual_diff | visual_issues 多 → 初次生成与设计稿还原能力弱 |
+| 归因分布 | step8_attribution.attributions | codegen 占比高 → 代码生成 prompt 需改进 |
 | 严重度分布 | step6.by_severity | critical 多 → 结构性缺陷; major 多 → 需针对性改进 |
 | 行为通过率 | step7.passed/total | 低 → 交互实现能力或接口契约质量 |
 | 单页总耗时 | timestamp diff | 基线,跨页面对比 |

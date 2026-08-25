@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Step 6: 结构对照 — view_tree.xml + layout-blueprint.json → struct-diff.json
+"""Step 6: 结构对照 — view_tree (XML/JSON/HTML) + layout-blueprint.json → struct-diff.json
 
 确定性对照:文案覆盖、组件出现性、层级匹配。
+支持 Android (uiautomator XML)、iOS (idb JSON)、Web (HTML)。
 
 用法:
     python3 struct_diff.py --view-tree <path> --blueprint <path> --output <path>
@@ -9,6 +10,7 @@
 from __future__ import annotations
 
 import argparse
+import html as html_mod
 import json
 import re
 import sys
@@ -16,20 +18,73 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 
-def parse_view_tree(xml_path: Path) -> list[dict]:
+def parse_view_tree(path: Path) -> list[dict]:
+    content = path.read_text(errors="replace").lstrip("﻿").strip()
+    if not content:
+        raise ValueError(f"view tree file is empty: {path}")
+    if content.startswith(("<?xml", "<hierarchy", "<node")):
+        return _parse_xml(path)
+    if content.startswith(("{", "[")):
+        return _parse_json(content)
+    if content.startswith("<"):
+        return _parse_html(content)
+    raise ValueError(f"unrecognized view tree format: {path}")
+
+
+def _parse_xml(xml_path: Path) -> list[dict]:
     tree = ET.parse(xml_path)
     nodes = []
     for elem in tree.iter("node"):
         node = {
-            "class": elem.get("class", ""),
             "text": elem.get("text", ""),
             "resource_id": elem.get("resource-id", ""),
             "content_desc": elem.get("content-desc", ""),
             "clickable": elem.get("clickable") == "true",
-            "bounds": elem.get("bounds", ""),
-            "children": [],
         }
         nodes.append(node)
+    return nodes
+
+
+def _parse_json(content: str) -> list[dict]:
+    data = json.loads(content)
+    nodes = []
+    def walk(obj):
+        if isinstance(obj, dict):
+            nodes.append({
+                "text": obj.get("AXLabel") or "",
+                "resource_id": obj.get("AXUniqueId") or "",
+                "content_desc": obj.get("AXValue") or obj.get("role_description") or "",
+                "clickable": obj.get("type") == "Button" or obj.get("role") == "AXButton",
+            })
+            for child in obj.get("children", []):
+                walk(child)
+        elif isinstance(obj, list):
+            for item in obj:
+                walk(item)
+    walk(data)
+    return nodes
+
+
+def _parse_html(content: str) -> list[dict]:
+    cleaned = re.sub(r'<(script|style)\b[^>]*>[\s\S]*?</\1>', '', content, flags=re.IGNORECASE)
+    nodes = []
+    for m in re.finditer(r'<([a-zA-Z][a-zA-Z0-9-]*)\b([^>]*)>([^<]*)', cleaned):
+        tag, attrs, text = m.group(1), m.group(2), html_mod.unescape(m.group(3).strip())
+        rid = ""
+        desc = ""
+        id_m = re.search(r'\bid=["\']([^"\']*)["\']', attrs)
+        if id_m:
+            rid = html_mod.unescape(id_m.group(1))
+        aria_m = re.search(r'\baria-label=["\']([^"\']*)["\']', attrs)
+        if aria_m:
+            desc = html_mod.unescape(aria_m.group(1))
+        tag_l = tag.lower()
+        clickable = tag_l in ("button", "a") or tag_l.endswith("-button")
+        if text or rid or desc or clickable:
+            nodes.append({
+                "text": text, "resource_id": rid,
+                "content_desc": desc, "clickable": clickable,
+            })
     return nodes
 
 
@@ -184,7 +239,7 @@ def build_diff(blueprint: dict, view_tree_nodes: list[dict]) -> dict:
 
 def main():
     parser = argparse.ArgumentParser(description="Step 6: 结构对照")
-    parser.add_argument("--view-tree", required=True, help="view_tree.xml path")
+    parser.add_argument("--view-tree", required=True, help="view tree path (XML/JSON/HTML)")
     parser.add_argument("--blueprint", required=True, help="layout-blueprint.json path")
     parser.add_argument("--output", required=True, help="output struct-diff.json path")
     parser.add_argument("--threshold", type=float, default=0.8,
@@ -200,8 +255,6 @@ def main():
     diff = build_diff(blueprint, nodes)
 
     Path(args.output).parent.mkdir(parents=True, exist_ok=True)
-    with open(args.output, "w") as f:
-        json.dump(diff, f, indent=2, ensure_ascii=False)
 
     m = diff["metrics"]
     expected = m["struct_texts_expected"]
