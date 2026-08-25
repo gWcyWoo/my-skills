@@ -52,13 +52,15 @@ class TestSourceFactory(unittest.TestCase):
 class Ledger(unittest.TestCase):
 
     def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp())
-        self.run_f = self.tmp / "run.json"
+        self.base = Path(tempfile.mkdtemp())
+        doc_dir = self.base / "iole" / "testdoc"
+        doc_dir.mkdir(parents=True)
+        self.run_f = doc_dir / "run.json"
         self.seq = 0
 
     def record(self, nodes, root=None, expect=0, **kw):
         self.seq += 1
-        f = self.tmp / f"n{self.seq}.json"
+        f = self.base / f"n{self.seq}.json"
         f.write_text(json.dumps({"nodes": nodes}, ensure_ascii=False), encoding="utf-8")
         argv = ["record", "--run", str(self.run_f), "--nodes", str(f)]
         if root:
@@ -74,6 +76,15 @@ class Ledger(unittest.TestCase):
         for k in ("pr", "error"):
             if kw.get(k):
                 argv += [f"--{k}", kw[k]]
+        if status == "done" and not kw.get("skip_evidence"):
+            run_data = json.loads(self.run_f.read_text())
+            if nid not in run_data["nodes"]:
+                return run(*argv, expect=expect)
+            title = run_data["nodes"][nid].get("title", nid)
+            icp_dir = self.base / "icp" / title
+            icp_dir.mkdir(parents=True, exist_ok=True)
+            for f in ("layout-blueprint.json", "api-contract.json"):
+                (icp_dir / f).write_text("{}")
         return run(*argv, expect=expect)
 
     def status(self, fmt="json", expect=0):
@@ -186,6 +197,22 @@ class TestOneAtATime(Ledger):
         self.chain()
         self.assertEqual(self.mark("ghost", "done", expect=1)["errors"][0]["code"],
                          "unknown_node")
+
+    def test_mark_done_missing_evidence_rejected(self):
+        self.chain()
+        out = self.mark("c", "done", expect=1, skip_evidence=True)
+        self.assertEqual(out["errors"][0]["code"], "missing_evidence")
+
+    def test_mark_done_with_valid_evidence_accepted(self):
+        self.chain()
+        out = self.mark("c", "done")
+        self.assertEqual(out["status"], "done")
+
+    def test_mark_done_missing_title_rejected(self):
+        self.record({"x": {"source_skill": "icps", "route": "x",
+                           "row": {}, "children": []}}, root="x")
+        out = self.mark("x", "done", expect=1, skip_evidence=True)
+        self.assertEqual(out["errors"][0]["code"], "missing_title")
 
 
 class TestTreeShape(Ledger):

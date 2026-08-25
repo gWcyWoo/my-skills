@@ -267,6 +267,20 @@ def cmd_mark(args):
     if args.status == "failed" and not args.error:
         return emit(False, {"errors": [{"code": "missing_error",
                                         "detail": "标记 failed 必须给 --error"}]}, 1)
+    if args.status == "done":
+        title = run["nodes"][args.node].get("title", "")
+        if not title:
+            return emit(False, {"errors": [{"code": "missing_title",
+                                            "detail": "节点缺少 title,无法定位 icp 工作目录"}]}, 1)
+        iole_doc_dir = Path(args.run).resolve().parent
+        base = iole_doc_dir.parent.parent
+        icp_dir = base / "icp" / title
+        required = ["layout-blueprint.json", "api-contract.json"]
+        missing = [f for f in required if not (icp_dir / f).exists()]
+        if missing:
+            return emit(False, {"errors": [{"code": "missing_evidence",
+                        "icp_dir": str(icp_dir),
+                        "detail": f"icp 产物缺失: {missing}"}]}, 1)
 
     cell = run["progress"][args.node]
     cell["status"] = args.status
