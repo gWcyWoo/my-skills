@@ -6,7 +6,7 @@
   record   把节点(含 icpx 取到的行数据)落盘。重录只覆盖数据,不动进度。
   status   计划 + 进度 + 还没录入的子节点。
   next     按叶优先顺序交出下一个待做节点,并标记 doing。
-  mark     标记 done / failed / pending(重试)。
+  mark     标记 done / partial / failed / pending(重试)。
 
 台账让长流程可中断续跑:处理一个标记一个,进度不丢、节点不漏、不重做。
 
@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 SCHEMA = "iole.run"
-STATUSES = ("pending", "doing", "done", "failed")
+STATUSES = ("pending", "doing", "done", "partial", "failed")
 LOG_DIR = Path.home() / ".claude" / "logs" / "iole"
 
 # 工厂表:域名模式 → (kind, skill)。新增来源只加一行。
@@ -227,23 +227,22 @@ def cmd_next(args):
         st = run["progress"][nid]["status"]
         if st != "pending":
             continue
-        if all(run["progress"][k]["status"] == "done"
+        if all(run["progress"][k]["status"] in ("done", "partial", "failed")
                for k in children[nid] if (nid, k) not in back):
             target = nid
             break
     if target is None:
         doing = [n for n in order if run["progress"][n]["status"] == "doing"]
-        failed = [n for n in order if run["progress"][n]["status"] == "failed"]
         pending = sum(1 for n in order if run["progress"][n]["status"] == "pending")
-        remaining = len(doing) + len(failed) + pending
-        if doing or failed:
+        remaining = len(doing) + pending
+        if doing or pending:
             result = {"done": False, "remaining": remaining}
             if doing:
                 result["waiting"] = doing
-            if failed:
-                result["failed"] = failed
             return emit(True, result)
-        return emit(True, {"done": True, "remaining": 0})
+        failed = [n for n in order if run["progress"][n]["status"] == "failed"]
+        return emit(True, {"done": True, "remaining": 0,
+                           **({"skipped": failed} if failed else {})})
 
     run["progress"][target]["status"] = "doing"
     save_run(args.run, run)
@@ -253,7 +252,7 @@ def cmd_next(args):
              "route": run["nodes"][k].get("route"),
              "pr": run["progress"][k].get("pr")}
             for k in children[target]]
-    remaining = sum(1 for n in order if run["progress"][n]["status"] != "done")
+    remaining = sum(1 for n in order if run["progress"][n]["status"] not in ("done", "partial", "failed"))
     return emit(True, {"node_id": target, "node": node, "depends_on": deps,
                        "remaining": remaining})
 
@@ -267,7 +266,7 @@ def cmd_mark(args):
     if args.status == "failed" and not args.error:
         return emit(False, {"errors": [{"code": "missing_error",
                                         "detail": "标记 failed 必须给 --error"}]}, 1)
-    if args.status == "done":
+    if args.status in ("done", "partial"):
         title = run["nodes"][args.node].get("title", "")
         if not title:
             return emit(False, {"errors": [{"code": "missing_title",
@@ -284,7 +283,7 @@ def cmd_mark(args):
 
     cell = run["progress"][args.node]
     cell["status"] = args.status
-    cell["error"] = args.error if args.status == "failed" else None
+    cell["error"] = args.error if args.status in ("failed", "partial") else None
     if args.pr:
         cell["pr"] = args.pr
     save_run(args.run, run)
@@ -292,14 +291,14 @@ def cmd_mark(args):
     order, _, _ = plan(run)
     return emit(True, {"node_id": args.node, "status": args.status,
                        "remaining": sum(1 for n in order
-                                        if run["progress"][n]["status"] != "done")})
+                                        if run["progress"][n]["status"] not in ("done", "partial", "failed"))})
 
 
 def render(run, out):
     nodes, progress = run["nodes"], run["progress"]
     kids = child_map(nodes)
     name = lambda i: nodes.get(i, {}).get("title", i)
-    mark = {"pending": "·", "doing": "▶", "done": "✓", "failed": "✗"}
+    mark = {"pending": "·", "doing": "▶", "done": "✓", "partial": "△", "failed": "✗"}
     lines = [f"root={name(run['root'])}  role={run.get('role')}  mr={run.get('mr')}  "
              + "  ".join(f"{k}={v}" for k, v in out["counts"].items()),
              "", "| # | 状态 | node | 标题 | 来源 | route | 依赖(先实现) | pr |",

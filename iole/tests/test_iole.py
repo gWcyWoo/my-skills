@@ -101,7 +101,8 @@ class TestRecord(Ledger):
         out = self.record({"a": node("A")}, root="a")
         self.assertEqual(out["added"], ["a"])
         self.assertEqual(self.status()["counts"], {"pending": 1, "doing": 0,
-                                                   "done": 0, "failed": 0})
+                                                   "done": 0, "partial": 0,
+                                                   "failed": 0})
 
     def test_row_data_from_icpx_is_persisted(self):
         self.record({"a": node("A", row={"route": "signin", "ui_description": "结构分为4部份"})},
@@ -171,22 +172,20 @@ class TestOneAtATime(Ledger):
         out = self.next(expect=1)
         self.assertEqual(out["errors"][0]["code"], "undiscovered_child")
 
-    def test_failure_blocks_dependents_not_siblings(self):
-        """failed 节点只阻塞依赖它的祖先,无关兄弟仍可派发。"""
+    def test_failure_does_not_block_parent(self):
+        """failed 节点不阻塞祖先——兄弟 done 后父节点可派发。"""
         self.record({"a": node("A", ["b", "c"]),
                       "b": node("B"), "c": node("C")}, root="a")
         first = self.next()["node_id"]
-        self.mark(first, "failed", error="analyze 失败")
-        second = self.next()
+        self.mark(first, "failed", error="设计稿解析失败")
         sibling = "c" if first == "b" else "b"
-        self.assertEqual(second["node_id"], sibling)
-        self.assertNotIn("failed", second)
+        self.assertEqual(self.next()["node_id"], sibling)
         self.mark(sibling, "done")
+        self.assertEqual(self.next()["node_id"], "a")
+        self.mark("a", "done")
         out = self.next()
-        self.assertFalse(out["done"])
-        self.assertIn(first, out["failed"])
-        self.mark(first, "pending")
-        self.assertEqual(self.next()["node_id"], first)
+        self.assertTrue(out["done"])
+        self.assertEqual(out["skipped"], [first])
 
     def test_mark_failed_requires_a_reason(self):
         self.chain()

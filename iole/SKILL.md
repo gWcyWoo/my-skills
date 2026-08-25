@@ -58,7 +58,7 @@ link → source(工厂) → 该 skill 读行 → 得到本页数据
 既有 `点击mastercard，显示"如何支付-mastercard" 页面信息` 这类不带标记的跳转,
 也有 `toggle: 反馈上传弹弹` 这类错别字,都要按语义识别。
 `API:` 只是接口,不产生子节点。共用组件(`reference:`)不构成先后顺序,不成边。
-`global:` 全局能力(如语言切换、主题),不产生子节点——见「全局能力注入」。
+`global:` 非独立全局能力(如底部 Tab),自身不成为节点,解析时原地展开到引用页——见步骤 3a。
 
 同时要带出触发条件与参数:哪个按钮触发、什么前提(如 `home_status=5`)、传什么值
 (如 `参数为IIN码和e164手机号`、`target=1`)——icp 实现交互时要用。
@@ -85,7 +85,7 @@ record --run <f> --nodes <f> [--root --link --role --mr]   # 节点+行数据入
        # 外层必须有 nodes 键，裸 {node_id:{…}} 报 empty_nodes 停机
 status --run <f> [--format table]                          # 计划 + 进度 + 未录入子节点
 next   --run <f>                                           # 交出下一个待做节点,标记 doing
-mark   --run <f> --node <id> --status done|failed|pending [--pr] [--error]
+mark   --run <f> --node <id> --status done|partial|failed|pending [--pr] [--error]
 ```
 
 台账存放:`{project}/.claude/iole/<doc_id>/run.json`。`doc_id` 来自 `source` 返回值。
@@ -94,12 +94,14 @@ mark   --run <f> --node <id> --status done|failed|pending [--pr] [--error]
 
 - **重录不回退进度**:`record` 覆盖节点数据,但已 `done` 的节点保持 done 及其 pr。
 - **建树没完不发顺序**:有子节点被引用却未 record → `next` 报 `undiscovered_child` 停机,否则会漏页。
-- **跳过 doing**:`next` 只派发 `pending` 且所有 children 为 `done` 的节点;`doing` 节点由对应 agent 负责,`next` 不重复派发。
+- **跳过 doing**:`next` 只派发 `pending` 且所有 children 为 `done`/`partial`/`failed` 的节点;
+  `doing` 节点由对应 agent 负责,`next` 不重复派发。
   所有可派发节点用尽但仍有 `doing` 节点 → 返回 `{done: false, waiting: [doing 节点列表]}`。
   崩溃恢复:`mark --status pending` 显式重置卡住的 `doing` 节点后重新 `next`。
-- **失败隔离**:`mark --status failed --error <因>` 后,该节点的祖先被阻塞(children 未全 done),
-  无关分支不受影响;`next` 返回 `{done: false, failed: [节点列表]}`。
-  修好后 `mark --status pending` 重试。标 failed 必须给 `--error`。
+- **partial**:已实现但有待修复项。`--error` 可选,记录待修复摘要;
+  详细问题记在 icp 产物里。不阻塞祖先,下轮可 `mark --status pending` 重入修复。
+- **failed**:输入不可用(如设计稿解析失败),跳过本节点。不阻塞祖先;
+  标 failed 必须给 `--error`。全部完成时 `next` 返回 `{done: true, skipped: [failed 节点]}`。
 - `next` 随节点一并交出 `depends_on`——已实现子节点的 `route` 与 `pr`,供 icp 绑定跳转。
 
 ## 实现顺序
@@ -119,29 +121,25 @@ DFS 后序只约束有依赖的节点(子节点先于父节点),同层无依赖�
 iole 用 Agent tool 并发派多个 agent,每个 agent 独立跑一个页面的完整 icp 三阶段流程。
 icp 每次只处理一个页面,不接受批量输入——并行粒度在 iole 层,不在 icp 层。
 
-并行条件:节点的所有 `children` 均已 `done`(依赖已满足)。
+并行条件:节点的所有 `children` 均已 `done`/`partial`/`failed`(不再阻塞)。
 `next` 一次只返回一个节点;并行时多次调用 `next` 获取多个就绪节点,各自派 agent。
-任一 agent 失败 → `mark --status failed`,该节点的祖先被阻塞(children 未全 done),无关分支不受影响;
-修好后 `mark --status pending` 重试。
 
 ## 一次 loop
 
 1. `source --link` → 存储 skill
 2. 该 skill `inspect --status ready --claim doing` 原子读+锁根行;`row=null` 则本轮结束
 3. 递归建树:
-   a. 解析根行的交互描述,识别跳转/弹窗目标的页面标题
+   a. 解析一行的交互描述——若含 `global: <标题>`,先展开:
+      调 `inspect --title <标题>`,在引用页 row 中原地替换为该全局行的描述(标记 `(global)`)。
+      从完整交互描述中识别跳转/弹窗目标,作为当前页的 children。
    b. 逐个标题调用该 skill `inspect --title <标题>`,取回行数据;
       `row=null` 表示该标题不在此表——可能来自其它来源,按异构节点处理
-   c. 每读回一批就 `record` 落盘;`record` 返回的 `undiscovered` 即下一层待取标题
-   d. 对每个新取回的行再解析交互描述,重复 b-c 直到 `undiscovered` 为空
-   e. 全局能力注入:交互描述中出现 `global: <标题>` 时,
-      调 `inspect --title <标题>` 读取该行的 `ui_description` 和 `interaction_description`,
-      分别追加到引用页的对应字段,替换原 `global:` 引用为带 `(global)` 标记的完整描述。
-      全局行有设计稿就填 URL(icp 正常取设计),没有则留空;
-      角色 status 为空(不可领取),不产生节点、不被 icp 处理。
-      多个页面引用同一 `global:` 时都获得相同数据;
-      第一个被 icp 处理的页面创建共享组件(Stage 2 扫描代码未找到 → `new`),
-      后续页面扫描到已有实现 → `existing_shared`。
+   c. `record` 落盘:包含引用页(展开后的 row)及新发现的子节点;
+      `record` 返回的 `undiscovered` 即下一层待取标题
+   d. 对每个新取回的行再从 a 开始处理,重复直到 `undiscovered` 为空
+   多个页面引用同一 `global:` 时都获得相同展开数据;
+   第一个被 icp 处理的页面创建共享组件(Stage 2 扫描代码未找到 → `new`),
+   后续页面扫描到已有实现 → `existing_shared`。
    **边建边落盘**,中途断了不用从头重建。
 4. `status --format table` 给人看计划
 5. 循环 `next`:
@@ -149,14 +147,12 @@ icp 每次只处理一个页面,不接受批量输入——并行粒度在 iole 
      `claim --status review --row-ids <node_row_id> --pr <pr地址>` 改 canonical，
      再按该 skill 的写回步骤把改动同步回源表（icps 见其 SKILL.md「写回 Google Sheets」）→
      `mark --status done --pr <pr地址>`
-   - 返回 `done: true` → 全部完成,进入交付
+   - 返回 `done: true` → 全部完成,进入交付(若有 `skipped` 则附带跳过的节点列表)
    - 返回 `done: false, waiting: [...]` → 有节点在其他 agent 处理中,等待完成后再 `next`
-   - 返回 `done: false, failed: [...]` → 有失败节点阻塞部分分支;
-     `mark --status pending` 重置后再 `next`,无关分支继续
 6. 按 `mr` 档位交付:0 不提交 / 1 提交当前分支 / 2 提 MR 合入 `dev`
-7. 任一页失败 `mark --status failed --error <因>`,
+7. 输入不可用(设计稿解析失败)→ `mark --status failed --error <因>`,
    并经 skill `claim --status ready --row-ids <node_row_id> --error <因>` 释放租约;
-   无关分支继续,全部分支完成或阻塞后进入交付
+   不阻塞其他节点,继续 `next`
 
 按 `interval` 重复。Claude Code 用 `/loop <interval>` 驱动。
 
