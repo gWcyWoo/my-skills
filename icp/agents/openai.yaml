@@ -1,4 +1,0 @@
-interface:
-  display_name: "ICP"
-  short_description: "Extract, design components, and implement with TDD"
-  default_prompt: "Use $icp to extract verified design evidence, lock page-isolated component semantics, then implement the frozen lock with strict interaction TDD, responsive runtime checks, and visual MAE verification."

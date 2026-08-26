@@ -1,4 +1,0 @@
-interface:
-  display_name: "ICPS"
-  short_description: "Atomic Google Sheets storage adapter for IOLE"
-  default_prompt: "Use $icps only as IOLE's exact-row Google Sheets read, claim, recovery, and writeback adapter."

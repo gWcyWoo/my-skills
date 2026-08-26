@@ -1,4 +1,0 @@
-interface:
-  display_name: "IOLE"
-  short_description: "Close task-row graphs and orchestrate delivery"
-  default_prompt: "Use $iole to read this ready task, close its related-row graph, and pass the lossless source bundle to ICP."

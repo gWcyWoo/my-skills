@@ -1,558 +1,419 @@
-# Implementation stage
+# Stage 3 — implementation
 
-## Outcome
+> 前置条件:模拟器采集回路可用(probe.py 能完成 启动→安装→截屏→dump视图树→退出,全程无人工)。
 
-Implement production code from the frozen Stage 1 Blocks and Stage 2 component
-lock's closed `implementation_contract`. Stage 3 must not read the IOLE source
-bundle, raw rows, or original UI/interaction/API/UT/IT/E2E prose directly or
-indirectly, and must not repeat Stage 2 semantic interpretation. This stage may choose target-platform primitives and file layout, but it may
-not change component boundaries, page scope, semantic facts, Block ownership,
-interaction graphs, API contracts, presentation relations, or source authority.
+## 输入
 
-The implementation stage is a prompt plus deterministic scripts:
+Stage 2 全部冻结产物 + 目标仓库(分支基线哈希记录在案)。
 
-- the model reads one page `codegen-packet` and writes the planned production and
-  test files;
-- `begin` freezes the skill-owned implementation prompt; the model queries the
-  current codebase while implementing and reuses suitable public components;
-- scripts freeze the complete obligation universe, validate the plan, enforce
-  case-local RED before its implementation and GREEN afterward, check every code anchor, execute
-  lint/build/integration commands, require compact and expanded runtime evidence,
-  and calculate diagnostic PNG MAE.
+| 文件 | 来源 | 用途 |
+|---|---|---|
+| enriched.json | Stage 1 | 组件结构 + 设计值(frame/text/fills) |
+| component-binding.json | Stage 2 | 组件名/类型/参数/API/交互 |
+| cover.png | Stage 1 | 视觉对照基准 |
+| design.json meta | Stage 1 | artboard 元信息(width/height/scale) |
+| assets/ | Stage 1 | 切图资产 |
 
-Whole-image MAE on 0–255 RGB channels is diagnostic only. It never controls stage
-completion because authoritative interaction state and natural platform text flow
-may intentionally differ from a static artboard. At the exact reference viewport,
-completion requires color, component-structure, spacing, and font-size checks.
-Compact, expanded, and other sizes require adaptive-behavior checks. All gates are
-exact identities, complete sets, command exit status, or boolean runtime checks.
+## 不变量
 
-## Authority order
+- 不得新增交互原子;缺失 → `blocking_stage2_defect` 停止。
+- 设计值不转换:蓝图保留设计稿原值,单位转换在代码生成时按平台策略执行。
+- 无归因不重试:每次失败必须归类后才能修复或重试。
+- 验证产物全部入档:截图、视图树、对照报告、归因账本。
 
-1. Stage 2's closed same-page contract, derived from IOLE UI, interaction, API,
-   UT, IT, and E2E descriptions, owns business copy, values, validation, behavior,
-   state, navigation outcomes, APIs, and documented test obligations. Stage 3
-   receives the closed result, never the original prose.
-2. The target project's root `common-rules.md` supplies project-wide policy only
-   where the same page is silent or ambiguous. It never overrides an explicit
-   same-page clause.
-3. Verified Stage 1 Blocks/source facts own hierarchy, visual treatment, geometry,
-   assets, and the static/dynamic/platform content classification.
-4. Frozen Stage 2 definitions, instances, facts, compositions, interaction graphs,
-   API contracts, and presentation usages own component boundaries and behavior/
-   data contracts.
-5. [Android Kotlin best practices](references/platform-best-practices/android-kotlin.md)
-   fill only platform mechanics left unspecified by 1–4.
+## 流程
 
-A screenshot input value is `dynamic_content`, not a validation rule. A rule from
-page A never constrains page B. Platform practices cannot invent endpoints,
-limits, success copy, navigation targets, or business states.
+### Step 1: 蓝图提取 (脚本,确定性)
 
-## Runtime layout
+输入: enriched.json + design.json(meta)
+产出: `layout-blueprint.json`
 
-```text
-.icp/implementation/
-├── checklist.json
-├── coverage-universe.json
-├── common-rules.md
-├── platform-best-practices.md
-├── implementation-prompt.md
-├── implementation-plan.input.json
-├── implementation-plan.json
-├── codegen-packets/<page-key>.json
-├── tdd-evidence.json
-├── implementation-manifest.json
-├── runtime-evidence.json
-├── visual-difference-report.json
-├── stage-result.json
-└── state.json
+内容:
+- artboard 元信息: width, height, scale (从 design.json meta.device 解析)
+- 每个组件的布局意图: layout(column/row/stack), 从 frame 坐标推导
+- 每个组件的约束: width(fill/fixed/wrap), 从 frame vs 父 frame 推导
+- padding/spacing: 从相邻节点间距推导
+- 设计值原样保留: frame, text.spans, fills — 不转换单位
+- 资产清单: 需要图片的节点 + 对应 assets/ 文件名
+
+不做: 不改数值,不选单位,不含平台语法。
+
+记录:
+- `blueprint_components`: 组件数
+- `blueprint_texts`: 文案数
+- `blueprint_assets`: 资产数
+- `blueprint_layouts`: 推导出的布局类型分布 {column: N, row: N, stack: N}
+
+### Step 2: 接口契约提取 (脚本,确定性)
+
+输入: component-binding.json
+产出: `api-contract.json`
+
+内容:
+- 每个 API：`resolved` 有值时为真实端点 (path/method/auth/request/response)；`resolved` 为 null 时标记 `mock: true`
+- 每个组件的参数签名
+- 交互原子列表: 点击→导航, 点击→API调用, 输入→状态绑定
+
+数据策略 (Stage 2 的 `apis[].resolved` 决定 Stage 3 如何生成数据层):
+- `resolved` 有值 + `deprecated: false` → Repository 用 `resolved.path`，DTO 字段按 `resolved.response` 映射
+- `resolved` 有值 + `deprecated: true` → 优先用 `resolved.alternative`；无替代则标注废弃，Repository 仍用原路径
+- `resolved: null` → `mock: true`，Repository 返回硬编码数据，DTO 字段从设计稿文案推断
+- 无 API (纯 UI) → 不生成 Repository，组件参数由调用方传入
+
+auth 映射 (`resolved.auth` → 项目 `AuthPolicy`，确定性映射):
+- `"public"` → `AuthPolicy.PUBLIC`
+- `"bearer"` → `AuthPolicy.REQUIRED`
+- `"optional"` → `AuthPolicy.OPTIONAL`
+
+不做: 不生成代码,不含平台语法。
+
+记录:
+- `contract_apis`: API 端点数 (resolved N / mock M)
+- `contract_interactions`: 交互原子数
+- `contract_components`: 组件数 (含 new/existing/platform_builtin 分布)
+
+### Step 3: 代码生成 (模型)
+
+输入: layout-blueprint.json + api-contract.json + 目标平台 + 项目结构
+产出: 代码文件 (Screen/ViewModel/API 接口)
+
+前置扫描 (模型在生成前必须完成):
+- 读该 route 已有的全部实现(Screen/ViewModel/Repository/DTO),理解当前功能与结构;新页面此项为空
+- 扫描目标项目的包结构,确定新文件放置路径
+- 找到路由注册点 (NavGraph/Router),确定注册方式
+- 找到网络层 (API client/Retrofit/Ktor),确定调用约定和 AuthPolicy 枚举
+- 找到已有组件 (component_type=existing 的 source_path),确认接口
+- 找到已有 Repository 实现,确认 DTO 风格和网络调用约定
+
+模型的任务:
+- 按平台选择单位转换策略 (设计值 → dp/sp 或 pt)
+- 按蓝图布局意图翻译成平台代码
+- 按接口契约生成数据层:
+  - resolved API → Repository 类 + DTO data class，路径/字段/auth 严格按 `resolved` 的值
+  - mock API → MockRepository 实现同一接口，返回与设计稿文案匹配的硬编码数据
+  - 纯 UI → 不生成 Repository，组件参数由调用方直接传入
+- 将代码文件写入项目 + 注册路由
+
+约束: 不得新增交互原子;蓝图里没有的组件不生成。不得用批量脚本/模板替代模型逐页生成。
+
+验证 (代码写入后立即执行,两个通道):
+
+**确定性检查** (validate.py check-codegen):
+```
+validate.py check-codegen --blueprint layout-blueprint.json --contract api-contract.json --gen-dir <feature-dir> --platform <compose|swiftui|flutter|uikit|android-views>
+```
+2 项确定性检查:
+- 文案覆盖: ≥80% 的 blueprint 文案出现在代码中 (含资源文件)
+- DTO 覆盖: resolved API 的 response 字段在代码中有对应 DTO 属性 (snake_case 或 camelCase 均可)
+
+**语义检查** (模型判断,读 blueprint + contract + 生成代码):
+1. role→widget: blueprint 的 form/action/navigation/list/modal 角色在代码中有对应平台 widget
+2. layout→布局: blueprint 的 row/stack 布局在代码中有对应平台布局组件
+3. 组件分区: 多个非装饰组 → 代码中有对应数量的容器分区
+4. API 覆盖: resolved API → ViewModel 通过 Repository 获取数据,Repository 请求路径字面值匹配 resolved.path,auth 匹配 resolved.auth; mock API → MockRepository 返回的硬编码数据与设计稿文案一致
+5. 交互覆盖: contract 有交互 → 代码有平台对应的状态管理组件,且 UI 从 ViewModel/State 读取动态数据 (不硬编码 API 返回值)
+6. 颜色覆盖: blueprint 色值在代码中有对应的颜色定义 (值匹配,非仅存在颜色 API)
+7. 组件复用: component_type=existing_shared 的组件在代码中 import 了 source_path 的类; platform_builtin 使用了平台标准实现; extract_shared 创建了可复用组件
+
+有问题 → 修代码 → 两个通道都重新执行,循环直到 ok。
+
+记录:
+- `gen_files`: 生成的文件列表 + 行数
+- `gen_platform`: 目标平台 + 框架
+- `gen_unit_strategy`: 使用的单位转换策略
+- `gen_route_registered`: 路由是否已注册到 NavGraph
+- `check_codegen_rounds`: check-codegen 验证轮数
+- `check_codegen_errors`: 每轮错误 [{round, errors}]
+
+### Step 4: 编译闸门 (确定性)
+
+构建产物 (Android: APK, iOS: .app, Web: dist/)。编译错 → 修 → 重新构建,循环直到通过。
+
+记录:
+- `compile_rounds`: 编译修复轮数
+- `compile_errors`: 每轮错误类型 + 数量 [{round, errors: [{type, message, file, line}]}]
+- `compile_time_ms`: 每轮构建耗时
+
+### Step 5: 渲染采集
+
+安装 → 启动 → 导航到目标页 → dump 视图树 + 截图。
+产出: `view_tree.xml` + `screenshot.png`
+
+导航策略 (按平台):
+- Android: deep link (`am start -a VIEW -d app://<route>`)
+- iOS: deep link (`xcrun simctl openurl app://<route>`)
+- Web: 直接导航到 URL path
+
+导航失败 (目标页未渲染) 是 hard error, 不是 silent fallback — 归因为 environment 或 codegen,停止后续步骤。验证方法: 截图后检查视图树是否包含至少一条 blueprint 里的文案;如果 0 条匹配,判定为导航失败。
+
+记录:
+- `render_ok`: 是否成功渲染
+- `render_time_ms`: 从安装到截图完成的耗时
+- `render_view_nodes`: 视图树节点数
+
+### Step 6: 逐组件对比 + 修复循环 (硬闸门)
+
+输入: screenshot.png + cover.png + enriched.json + component-binding.json + layout-blueprint.json + api-contract.json + view_tree.xml
+产出: `visual-diff.json` (工作日志) + 修复后的代码
+
+**这是闭环验证步骤,不是观察步骤。** 按 Stage 2 的组件分解,逐个组件对比设计稿与渲染结果,发现差异 → 分析根因 → 修代码 → 重编译渲染 → 再次对比,循环直到所有组件在四个维度全部通过。
+
+#### 对比粒度: 逐组件
+
+不是拿整张截图与整张设计稿做一次大 diff。而是:
+
+1. 从 component-binding.json 取组件列表 (Stage 2 已分解)
+2. 每个组件在 enriched.json 中有 frame (x, y, width, height)
+3. 对每个组件:
+   a. 在 cover.png 中定位该组件区域 (用 enriched.json frame + artboard scale)
+   b. 在 screenshot.png 中定位对应区域 (用 view_tree.xml bounds 或坐标映射)
+   c. 对该组件区域做四维检查
+4. 额外检查: 页面级问题 (整体布局、组件间距、全局导航栏)
+
+好处:
+- 精确定位: 每个差异归属到具体组件
+- 高效: 模型聚焦小区域,不遗漏细节
+- 利用 Stage 2: 组件分解已完成,不重复劳动
+
+#### 四维检查 (每个组件)
+
+**维度 1: 结构**
+- 该组件在截图中是否存在
+- 定位方式是否正确 (弹窗: BottomSheet vs Dialog 必须与设计稿一致)
+- 内部子元素层级是否正确
+- 滚动内容: 如该组件在 LazyColumn 中且不可见 → 滚动截图或滚动 dump,不能跳过
+
+- 容器背景色/填充: 与设计稿一致 (blueprint child_fills/fill 的色值)
+
+通过标准: 组件存在 + 层级正确 + 定位正确 + 填充色正确
+
+**维度 2: 图标**
+- 该组件内的每个图标是否存在
+- 形状是否与设计稿一致 (不能用方块/圆点/emoji 近似)
+- 品牌 Logo 必须用图片资产或精确 Canvas 还原,不能用纯文本
+
+通过标准: 所有图标存在 + 形状匹配
+
+**维度 3: 文案**
+- 该组件内的每条文案是否与设计稿逐字一致
+- 文本样式: 下划线/加粗/颜色 必须与设计稿一致
+- 动态数据 (API 返回) 必须有 mock 值,不能空白
+- hint/placeholder 文案必须一致
+
+通过标准: 文案内容正确 + 样式正确 + 动态数据有 mock 值
+
+**维度 4: 交互元素**
+- 该组件内的按钮/链接/输入框/选择器是否存在且类型正确
+- 控件样式: Slider/Checkbox/Switch 外观必须与设计稿匹配,不能用 Material 默认样式了事
+
+通过标准: 交互元素存在 + 类型正确 + 样式匹配
+
+#### 验证流程
+
+```
+round = 0
+while true:
+    round += 1
+    components = load(component-binding.json)
+
+    all_diffs = []
+    for comp in components:
+        1. 定位 comp 在 cover.png 和 screenshot.png 中的区域
+        2. 对该区域做四维检查
+        3. 发现差异 → 记录到 all_diffs[], 标注所属组件
+
+    4. 页面级检查: 组件间距、全局导航栏、整体布局
+       差异 → 追加到 all_diffs[]
+
+    5. 将 all_diffs 写入 visual-diff.json 当前轮
+       每条: component, dimension, location, design, actual, severity, cause, fix, status
+
+    6. 如果 0 差异 → pass = true, break
+
+    7. 对每条差异做根因分析:
+       - 什么导致了这个差异? (cause — 定位到代码逻辑)
+       - 改哪个文件哪一行? (fix)
+    8. 按分析结果修改代码
+    9. 回 Step 4 → Step 5 → Step 6: 重编译 → 重渲染 → 重逐组件对比
+    10. 下一轮检查上轮差异是否已消除,标记 status: fixed/open
+
+    if round > 5:
+        记录未收敛原因,停止
 ```
 
-Do not edit computed artifacts. If a gate identifies a Stage 1 or Stage 2 defect,
-stop and repair that owning stage; do not compensate in generated code.
+visual-diff.json 是模型的工作日志。模型每轮读上一轮记录,确认修复是否生效,发现新差异则追加。
 
-## 1. Freeze the implementation universe
+#### 辅助工具: struct-diff (脚本预检)
 
-```bash
-python3 <icp-skill>/implementation/scripts/implementation.py begin \
-  --project-root "<project>" \
-  --platform android-kotlin
+每轮对比前先跑 struct_diff.py 做文案覆盖率快速检查:
 ```
-
-`begin` verifies only Stage 2's sealed `state.json`, `stage-result.json`,
-`component-lock.json`, and `block-component-bindings.json` identities and hashes;
-it does not invoke Stage 2, reopen `.icp/source/source-bundle.json`, or reread
-original business prose. Stage 2's full verify already completed before this
-boundary. Stage 3 then freezes only `modify` pages. It derives every component instance, Block, rendering source node, semantic
-fact, component-bound interaction graph, API contract, interaction obligation,
-presentation usage, and design reference. A source
-node without a reviewed Stage 1 `content_role` fails. It also requires and freezes
-the project's UTF-8 `common-rules.md`; later changes fail as stage drift. Every
-codegen packet contains the exact common-rule content and hash before the advisory
-platform practices. It also freezes `implementation-prompt.md`. Codebase search is
-performed live by the implementing model so it can understand current symbols,
-call sites, behavior, and reuse opportunities.
-
-`begin` also freezes the complete Stage-3 checklist from the coverage universe:
-plan, every obligation's RED then GREEN, code/asset coverage, compact and expanded
-responsive evidence, every production visual capture including runtime probes,
-frozen verification commands, and final verify. The script records nodes only
-after their deterministic gate succeeds.
-
-Every Stage-3 CLI command holds one OS-backed stage write lock through its state
-transaction. A duplicate `begin` with the same platform and frozen inputs resumes
-the committed stage; a `begin` interrupted before `state.json` is published
-rebuilds only that uncommitted implementation directory. A lock timeout returns
-`stage_busy` without publishing Stage-3 artifacts. Checklist receipts never
-replace state or artifact hashes as completion authority.
-
-## 2. Author and record the implementation plan
-
-Copy `implementation-plan.input.json` to a separate authoring file. For every
-page declare:
-
-- one page root and source file;
-- one page DTO and UI-state model;
-- one mock fixture that maps into the DTO;
-- an API adapter symbol whenever the page has a frozen API contract;
-- constraint-driven responsive strategy;
-- the complete set of frozen component instance IDs. This list is coverage only;
-  rendering order comes exclusively from the composition's parent, slot, and order.
-
-Declare one foundation-owned `runtime_probe_provider` with its production source
-file, symbol, `publish_method_symbol`, and the exact app-private output path
-`files/icp-runtime-probes.json`. The source must exist before capture; the capture
-commands then prove that the installed production process publishes the current
-state, and code coverage requires a production renderer to call that exact method,
-so the declaration is not itself runtime evidence. Follow
-[runtime-probe-contract.md](references/runtime-probe-contract.md) exactly.
-
-`layout_selection_inputs` is a deterministic projection of Stage 2's bound
-`layout_inputs`. Author one complete `layout_decisions` set per design state from
-its decision obligations and evidence. Do not author `layout_contracts`;
-`record-plan` derives them with the position/layout algorithm and freezes the
-result into the plan and each page packet. A failed attempt returns the complete
-structured problem set for every affected design state, so regenerate each
-affected page as a whole. At most three failed whole-page attempts are recorded;
-exhaustion means Stage 1 or Stage 2 must be repaired, not bypassed.
-
-Coverage lists in the implementation plan are identity sets, not storage-order
-contracts: per-page `component_instance_ids`, the lock's global
-`component_instances` storage order, per-component `block_obligation_ids`,
-per-interaction `component_instance_ids`, and per-case `basis_fact_ids` each
-accept the same complete ID set in any order, reject duplicate/missing/unexpected
-IDs with an exact sorted diff, and are normalized to the authoritative expected
-order when the plan is frozen. Order-sensitive contracts — `page_keys` business
-order, interaction traces, command argv, and append-only event history — stay
-strict.
-
-Also declare a topological execution DAG with exactly one `foundation` node, one
-`page` node per modify page, and one final `flow-integration` node. Assign every
-planned production, test, asset, manifest, and navigation-entry file to exactly one
-node in `file_owners`. Shared components, shared assets, and app-wide configuration
-belong to `foundation`; page-local code and a distinct page-local test file belong
-to that page node; cross-page navigation and final entry wiring belong to
-`flow-integration`. Dependencies may read an owner's files but never write them.
-This is single-writer/multi-reader ownership; do not split one page across workers
-merely because its files have different types.
-
-Map every component instance, Block, design element, semantic fact, interaction
-test, and presentation usage exactly once. Component selection must follow the
-whole page composition and platform morphology. Keep the generated `ICP:*`
-anchors beside the code that implements their obligations; anchors are the
-auditable join, while build/runtime/visual evidence proves they are not enough by
-themselves.
-
-Map every frozen interaction exactly once to all bound component instances and one
-production owner symbol. Map every API contract exactly once to the page adapter
-file and one distinct method symbol. The adapter file is separate from both
-`dto_file` and the consuming interaction/component source so a declaration cannot
-masquerade as a call. An
-`api_call` interaction must contain an executable call form in its production
-interaction source; a declaration, comment, string, or unused method does not
-complete the interaction. Runtime acceptance still comes from the integration
-case observing the exact outbound request.
-
-Before mapping code, query the live codebase once per frozen component definition
-using its responsibility, owned/excluded scope, capabilities, slots, data roles,
-action roles, and visible variations. Reuse a suitable public component when it
-satisfies the required boundary and behavior; otherwise implement the frozen
-Stage 2 component. This is a model implementation decision, not another approval
-or diagnosis protocol.
-
-For every design element with source-bound assets, including deterministic
-reference crops for unexported icon components, select at least one frozen source
-asset in its `asset_mappings` and name the project-relative target resource. The
-selected source asset ID and SHA-256 must remain exact. Copy the original bytes;
-do not redraw, approximate, or substitute an icon. Final verification requires
-`source asset SHA-256 = target resource SHA-256`.
-Asset-internal ownership follows only the exact Stage 1 `parent_id` chain. Node-ID
-punctuation and prefixes are opaque identities, never hierarchy evidence.
-
-Declare the real production runtime entry after querying the codebase, then one
-`visual_capture_case` per design state: entry ID, package, locale, page key, the
-exact collision-resistant `visual_state_id`, environment/data-only
-`precondition_commands`, an entry-rooted `interaction_trace`, and one
-`production_render` containing the frozen component instance, source file, symbol,
-and unique root tag. Never use a transliterated display title as state identity.
-Never put a terminal state selector such as `icp_state` in preconditions or cold
-start, and never use a precondition to run adb, install an app, or start another
-Android surface. Device configuration is read again after all preconditions and
-must still equal the applied capture configuration. Do not assume the IOLE flow root is the application launcher. The trace
-starts at its declared runtime entry and every step must select an exact Stage 2
-interaction result edge; cross-page navigation and modal presentation are followed
-without importing source-page facts into the destination. Only the exact entry
-design may use an empty trace. Every other state must be reached by the real
-production controls named in its frozen integration cases. Test-only code may prepare data or navigate;
-it may not render a duplicate terminal UI.
-
-The entry file/symbol is the actual launcher, deep-link handler, or navigation
-coordinator; it is not required to equal the target page renderer. Declare the
-initial page/design separately, keep the entry file under one execution-node owner,
-and verify that its production symbol exists. A page Composable/View is not a
-surrogate entry unless it truly is the codebase entry.
-
-Each design-element mapping also carries its frozen `runtime_probe_tag` when Stage
-1 contains measurable reference facts. Attach it to the actual production element,
-not a preview or debug renderer. The production hierarchy publishes runtime bounds
-and element identity in the app-private `files/icp-runtime-probes.json` snapshot
-consumed through `run-as`. ICP derives the expected values from Stage 1; the
-authored implementation plan cannot choose them. Font size and line height each
-receive a deterministic `apk_resource_name`; the mapped production source must
-consume that `R.dimen`, and ICP reads its literal `sp` value from the uniquely
-matched clean-build APK. App-published typography cannot satisfy the gate.
-Every mapped design node must have exactly one executable
-`IcpBoundElement(...)` production element binding in its mapped owner source. The
-same call binds the frozen obligation, component instance, owner symbol, probe tag,
-font/line-height resources, and mapped Android target assets through `assetRefs` to
-the real rendered content; copied files, separate tokens, comments, declarations,
-no-op calls, and detached probes are not evidence.
-Every live production accessibility node may own only one obligation probe. The
-driver resolves the complete expected probe set in one hierarchy pass and rejects
-both directions of ambiguity: one tag on multiple nodes or multiple obligation
-probe tags on one node.
-For opaque colors, the app payload locates the hierarchy-bound element but does
-not decide pass/fail. The verifier finds the expected color in the real production
-screenshot and records the exact observed pixel coordinate and RGBA value. An
-exact-geometry node must cover its complete source-derived reference color footprint;
-a single matching decoy pixel cannot satisfy it. Adaptive text and dynamic content
-retain natural flow and require the expected color within their hierarchy-bound region.
-For responsive evidence, every component occurrence exposes its unique
-`occurrence_id` in the live UI hierarchy. The driver compares payload bounds with
-hierarchy bounds; a detached or fabricated app-private JSON payload is not
-evidence.
-
-```bash
-python3 <icp-skill>/implementation/scripts/implementation.py record-plan \
-  --project-root "<project>" \
-  --plan "<authored-plan.json>"
+struct_diff.py --view-tree view_tree.xml --blueprint layout-blueprint.json --output struct-diff.json --threshold 0.8
 ```
+- 文案覆盖率 < 80% → 说明代码遗漏大量文案,优先修文案再做视觉对比
+- struct-diff.json 的 missing 列表直接告诉模型缺了哪些文案
 
-Read each generated page packet completely before writing its code. Do not read a
-different page's facts as authority. Each packet contains the frozen prompt and
-the complete `Block -> design instance -> semantic component instance -> final
-component -> parent/slot` join. Follow the prompt in order: codebase reuse search,
-interaction tests, production implementation, complete design-element audit, then
-visual comparison and correction.
+这是辅助定位工具,不是独立闸门。最终通过标准是逐组件四维检查全过。
 
-## 3. Strict interaction TDD
+#### 差异记录格式
 
-Freeze every planned integration obligation before production implementation. The
-obligation set is the exact union of three sources:
+每条差异包含:
+- `component`: 所属组件名 (来自 component-binding.json)
+- `dimension`: structure / icon / text / interaction
+- `location`: 在组件内的位置 (如"关闭按钮"、"第3行文案")
+- `design`: 设计稿中是什么 (具体描述)
+- `actual`: 实际渲染是什么 (具体描述)
+- `severity`: critical / major / minor
+  - critical: 组件缺失、图标完全错误、文案内容错误
+  - major: 样式明显不符 (下划线缺失、图标形状偏差大)
+  - minor: 间距微调、圆角差异
+- `cause`: 根本原因 (如 "代码使用 Dialog 而设计稿是 BottomSheet")
+- `attribution`: codegen / environment / semantic
+- `fix`: 修复措施 (文件:行号, 改什么)
+- `status`: open / fixed
 
-1. atomic facts backed by the same page's `IT` description;
-2. one complete component-bound interaction-graph item assembled from the same
-   page's atomic `交互描述` facts and explicit inference bases;
-3. one model-inferred scenario for every frozen component instance, derived from
-   that instance's complete Stage 2 fact bindings, component contract, and page
-   composition.
+#### 归因分类
 
-Every obligation records `source_kind`, exact component instance, and its complete
-fact basis. Documented IT and interaction obligations remain separate even when
-their meanings overlap. Model inference fills component-contract coverage but may
-not replace, weaken, or invent a conflict with documented behavior. The test
-command is frozen in the plan and is executed without a shell.
+- `codegen`: 生成代码错 (图标形状错、文案样式缺、组件类型选错) → 修代码,回 Step 4
+- `environment`: 物理上无法在模拟器中重现的差异 → 调整渲染策略 (滚动拼接、注入 mock)
+- `semantic`: spec 本身错 → 回 Stage 1/2,停止
 
-For Android, every case names its exact `app/src/androidTest/` test and runs that
-exact case through a Gradle Android-device test task. A JVM `test...UnitTest`, a
-host script, or an unfiltered device suite is development feedback, not Stage-3
-integration evidence, and cannot be recorded as RED or GREEN. RED and GREEN are
-accepted only when the case has a closed `runtime_test` with one launcher
-`entry_tag`, ordered `preconditions`, real UI `actions`, and observable UI
-`assertions`. Every step uses a closed operator, stable production tag, optional
-value, and exact frozen `fact_ids`; every basis fact appears exactly once, trigger
-facts stay on actions, condition/current-state facts stay on preconditions, and
-behavior/result facts stay on assertions. ICP—not the implementation model—deterministically generates the
-test file from that contract. The generated test launches the production package,
-finds tags through Android's live accessibility hierarchy, performs the declared
-input, and reads the declared result from that hierarchy.
-When a case has actions, every result predicate must be false before the first
-action and true after the final action; merely observing the same final state, or
-observing one unrelated result change, is not transition evidence.
-Every lookup is restricted to that production package and collects all matches.
-`production UI tag is not unique` fails the case; the generated test never selects
-the first hierarchy match.
+**禁止**: 将 codegen 问题归因为 environment。图标缺失是 codegen,文案样式错是 codegen。
 
-Evidence is accepted only when this exact immutable generated file declares the selected
-`class#method` and a newly generated Android JUnit result reports that exact test
-failed or passed consistently with the command exit code.
-The command is exactly one committed `./gradlew` wrapper, one
-`connected*AndroidTest` task, and the one frozen selector. Unknown flags or tasks
-are rejected. ICP asks Gradle for the selected task's live type in the same
-invocation and accepts it only when Gradle identifies the exact module task as
-AGP's `DeviceProviderInstrumentTestTask`. The new report must be written after
-command start, carry a timestamp, and identify the device through consistent AGP
-suite metadata or the canonical per-device AGP report name; that same device must
-also appear in the Gradle execution output. The wrapper and test source remain
-unchanged through final verification.
-
-An interaction obligation also carries the complete five-field interaction,
-component-instance bindings, outgoing graph edges, explicit terminal outcomes,
-and any bound API contract.
-Each visual trace step names its frozen case, interaction, and selected outcome;
-ICP derives the complete ordered production action sequence from that case. The
-implementation plan does not duplicate or truncate multi-action input/click/back
-flows. When an edge targets another interaction, a following step must start from
-that exact target; the verifier rejects disconnected same-page lists.
-Its integration case drives the real trigger and observes the behavior, result, state
-transition, exact outbound request, response-to-DTO mapping, and success/failure
-continuation that are contract-significant.
-For `api_call`, the `runtime_test` must include a `network_expectation` joined to
-the exact frozen API contract: method, path, contract-significant request headers,
-semantic JSON request body, allowed response status/headers/body. ICP starts an
-independent HTTP recorder inside the instrumentation process before launching the
-production Activity and supplies its URL through the test-only
-`icp_api_base_url` entry extra. The production debug build must route the mapped
-adapter through this override; release code must ignore it. The generated test
-accepts the final UI assertion only after that recorder has observed and matched
-the real request and returned the frozen response. App-published request JSON,
-static adapter anchors, or a mocked owned adapter are not network evidence.
-The recorder holds the response after observing the request. Every declared
-result must still be false while that response is withheld. Only then does the
-test release the response. Its JSON contains exactly one
-`__ICP_RUNTIME_CANARY__`, replaced at device-test runtime with a fresh UUID that
-production code cannot know beforehand; the frozen `response_probe` must read
-that exact value back from the live production UI. This makes request occurrence,
-response consumption, and rendered result one causal observation instead of
-three unrelated passes.
-For an API failure edge, the same recorder must first observe and match the real
-request, prove the declared error result is still false, then close that socket
-without an HTTP response. Only the resulting production error state may satisfy
-the failure case. Source-level error branches and pre-existing error UI are not
-evidence.
-
-Every page also has exactly one non-API runtime Mock/DTO probe. Its frozen mock
-fixture contains the same single runtime-canary placeholder, is passed through
-the production debug entry as `icp_mock_payload`, and must appear at its declared
-live UI result tag. The project mock file must be JSON-semantically equal to this
-frozen input;
-merely parsing as JSON is not evidence. API and Mock probes exercise public page
-behavior. DTO class names and static call scans remain architecture/coverage
-checks and can never replace these device results.
-
-```bash
-python3 <icp-skill>/implementation/scripts/implementation.py run-case \
-  --project-root "<project>" --case-id "<case-id>" --phase red
-```
-
-The current case must return nonzero. The generated suite may already contain
-other syntactically closed cases, but the frozen selector runs only this case and
-their unimplemented behavior cannot block it. Implement the smallest vertical
-slice owned by the current page node, then run the exact same command:
-
-```bash
-python3 <icp-skill>/implementation/scripts/implementation.py run-case \
-  --project-root "<project>" --case-id "<case-id>" --phase green
-```
-
-Observe GREEN before executing the next case. A passing pre-implementation test
-or failing post-implementation test stops the current slice. There is no global or
-page-wide all-RED prerequisite: one case may complete RED→GREEN before its sibling
-starts. Final verification still requires one RED and one GREEN result for every
-frozen obligation.
-
-## 4. Code and runtime verification
-
-Each page must render through its DTO/UI state. Remote responses and mocks adapt
-to that DTO; UI code does not render transport response types. Use the frozen
-component composition to choose Compose primitives and responsive placement.
-
-Implement every `api_call` while implementing its interaction slice: trigger,
-conditions, pending state, adapter method, exact request mapping, response/error
-mapping, DTO update, and the next render/navigation/error interaction. Do not
-defer interfaces to a separate post-page step. In Android debug builds, read the
-generated test's `icp_api_base_url` launcher extra at the production entry and
-inject it as the mapped adapter's base URL; do not branch around the adapter or
-accept this override in release builds. For the one page Mock/DTO case, the debug
-entry must route `icp_mock_payload` through the same production DTO/UI-state path
-used by normal page data; release builds must ignore that extra.
-
-Run `capture-responsive` for exactly two measured viewports per page (`compact`
-and `expanded`) and reference those generated evidence files. Do not copy their
-measurements into the final input. Include one actual screenshot per design state.
-Authored pass/fail flags are forbidden:
-
+产出 `visual-diff.json`:
 ```json
 {
-  "schema": "icp.implementation.runtime-evidence.v1",
-  "implementation_plan_sha256": "<frozen hash>",
-  "responsive_runs": [
+  "pass": true,
+  "total_rounds": 2,
+  "rounds": [
     {
-      "page_key": "<page-key>",
-      "viewport": "compact",
-      "capture_evidence": ".icp/implementation/runtime/responsive/<page-key>-compact.capture.json"
+      "round": 1,
+      "diffs": [
+        {
+          "id": "d1",
+          "component": "header",
+          "dimension": "icon",
+          "location": "关闭按钮",
+          "design": "圆形深绿背景 + 白色X线条",
+          "actual": "无背景 + 绿色X线条",
+          "severity": "major",
+          "cause": "Canvas drawLine 缺少 drawCircle 背景",
+          "attribution": "codegen",
+          "fix": "PayVisaScreen.kt:42 添加 drawCircle",
+          "status": "fixed"
+        }
+      ],
+      "summary": {
+        "total": 3,
+        "by_dimension": {"structure": 0, "icon": 2, "text": 1, "interaction": 0},
+        "by_severity": {"critical": 0, "major": 2, "minor": 1}
+      }
     }
   ],
-  "visual_runs": [
-    {
-      "design_name": "<design>",
-      "actual_screenshot": ".icp/implementation/runtime/<design>.png",
-      "capture_evidence": ".icp/implementation/runtime/<design>.capture.json"
-    }
+  "issues_remaining": []
+}
+```
+
+记录 (每轮追加到 `attribution-ledger.json`):
+- `round`: 第几轮
+- `component`: 组件名
+- `dimension`: structure / icon / text / interaction
+- `attribution`: codegen / environment / semantic
+- `issue`: 差异描述 (设计稿 vs 实际)
+- `cause`: 根本原因
+- `fix`: 修复措施 (文件:行号)
+- `files_changed`: 修改的文件列表
+
+### Step 7: 行为验证
+
+从 api-contract.json 的 interactions 列表逐条推导测试用例并执行:
+
+测试用例推导:
+1. 每条 interaction 转为一个用例:
+   - 前置: interaction.condition (null 则无前置)
+   - 操作: interaction.trigger (点击/输入/滑动等设备交互)
+   - 预期行为: interaction.behavior (UI 变化: 按钮禁用、loading 等)
+   - 预期结果: interaction.result (状态变更/路由跳转/API 调用)
+2. interaction.triggers 链构成多步场景 (ix_1→ix_2→ix_3),按链顺序依次执行
+3. type=data 的 interaction 额外验证 (interaction.api 与 apis[] 按路径匹配,取 resolved 状态): resolved API → 代码中对该路径有网络调用; mock API (resolved=null) → 代码中有 MockRepository 返回对应数据
+
+验证方法:
+
+| 交互类型 | 操作 | 断言 |
+|---|---|---|
+| 按钮可点击 | 无 (静态检查) | 视图树中 clickable=true / accessible |
+| 点击→导航 | 设备 tap 触发按钮 | dump 视图树,当前 route 切换到预期页面 |
+| 点击→API调用 (resolved) | 设备 tap 触发按钮 | 日志中出现对 interaction.api 路径的网络请求 |
+| 点击→API调用 (mock) | 设备 tap 触发按钮 | ViewModel 状态更新 (mock 无网络请求,验证 UI 数据变化) |
+| 表单输入 | 设备输入文本 | dump 视图树,输入框 text 属性包含输入值 |
+| 状态变化 | 执行 trigger 操作 | dump 前后视图树,UI 变化匹配 interaction.behavior |
+
+每个用例: 执行操作 → 采集实际结果 → 与预期比对 → 记录 pass/fail。
+
+失败 → 归因 → 修 → 回 Step 4 重编译渲染。
+
+产出 `behavior-result.json`:
+```json
+{
+  "behavior_total": 3,
+  "behavior_passed": 2,
+  "behavior_failed": [
+    {"interaction": "ix_1", "trigger": "点击发送验证码", "expected": "按钮禁用+loading", "actual": "按钮未变化", "attribution": "codegen"}
   ]
 }
 ```
 
-Generate each screenshot through the reversible capture command:
+## 产出文件
 
-```bash
-python3 <icp-skill>/implementation/scripts/implementation.py capture-visual \
-  --project-root "<project>" \
-  --design-name "<design>" \
-  --driver <icp-skill>/implementation/scripts/android_visual_driver.py
+| 文件 | 说明 |
+|---|---|
+| 代码文件 | 平台对应的 UI/状态管理文件 |
+| layout-blueprint.json | Step 1 蓝图 |
+| api-contract.json | Step 2 接口契约 |
+| screenshot.png | Step 5 渲染截图 |
+| view_tree.xml | Step 5 视图树 |
+| struct-diff.json | Step 6 辅助预检报告 (文案覆盖率) |
+| visual-diff.json | Step 6 逐组件四维验证工作日志 (含每轮差异+修复记录) |
+| attribution-ledger.json | Step 6-7 归因账本 |
+| behavior-result.json | Step 7 交互验证结果 |
+| stage3-metrics.json | 全流程指标汇总 |
+
+## stage3-metrics.json
+
+汇总所有步骤的记录项,一个页面一份。用于跨页面横向对比。
+
+```json
+{
+  "title": "单期还款",
+  "platform": "android",
+  "timestamp": "...",
+  "step1_blueprint": { "blueprint_components": 5, "blueprint_texts": 11 },
+  "step2_contract": { "contract_apis": 1, "contract_interactions": 1 },
+  "step3": { "gen_files": ["..."], "gen_platform": "android/compose" },
+  "step4": { "compile_rounds": 2, "compile_errors": ["..."] },
+  "step5_probe": { "render_ok": true, "render_view_nodes": 28 },
+  "step6_struct_diff": { "matched": 11, "total": 11, "missing": [] },
+  "step7_visual_diff": {
+    "visual_pass": true,
+    "visual_issues": []
+  },
+  "step8_attribution": { "total_rounds": 2, "attributions": {"codegen": 3, "environment": 1} },
+  "step9_behavior": { "behavior_total": 1, "behavior_passed": 1 }
+}
 ```
 
-Generate each responsive run through that same trusted driver, once per page and
-viewport:
+## 复盘数据点
 
-```bash
-python3 <icp-skill>/implementation/scripts/implementation.py capture-responsive \
-  --project-root "<project>" \
-  --page-key "<page-key>" \
-  --viewport compact \
-  --driver <icp-skill>/implementation/scripts/android_visual_driver.py
-```
+| 指标 | 来源 | 优化信号 |
+|---|---|---|
+| 编译修复轮数 | step4.compile_rounds | 高 → 代码生成 prompt/约束需改进 |
+| 编译错误类型分布 | step4.compile_errors | 集中在某类 → 针对性加 prompt 约束 |
+| 文案覆盖率 | step6_struct_diff.matched | 低 → 蓝图提取或代码生成遗漏文案 |
+| 视觉修复轮数 | step7_visual_diff | visual_issues 多 → 初次生成与设计稿还原能力弱 |
+| 归因分布 | step8_attribution.attributions | codegen 占比高 → 代码生成 prompt 需改进 |
+| 严重度分布 | step6.by_severity | critical 多 → 结构性缺陷; major 多 → 需针对性改进 |
+| 行为通过率 | step7.passed/total | 低 → 交互实现能力或接口契约质量 |
+| 单页总耗时 | timestamp diff | 基线,跨页面对比 |
 
-Repeat with `--viewport expanded`. Both capture commands run only after every
-frozen GREEN and production code/asset preflight passes. A caller-supplied driver
-is rejected. Immediately before touching device configuration, each command runs
-the same Android execution transaction: inventory prior build APKs, run the
-project's Gradle `clean`, prove no APK remains, then rerun one page-bound passing
-AGP device test through the attested device-provider task. The transaction hashes
-every APK produced after that clean and every APK actually installed for the
-production package; each installed hash must resolve to exactly one artifact from
-this build. It records the clean receipt, task, test source, wrapper, device
-result, build APK inventory, and installed identity in the capture evidence.
-Each responsive command then cold-starts the production entry, executes
-the frozen interaction trace, reads app-private measurements with `run-as`, binds
-every occurrence and its bounds to the live UI hierarchy, captures the real
-screenshot, restores the exact device configuration, and completes only its own
-checklist node with the generated run hash.
+## 交付
 
-When multiple Android devices are online, pass `--device-serial <adb-serial>` to
-every `run-case` invocation and both capture commands. ICP passes the selection to
-the AGP device-provider task through its subprocess-only `ANDROID_SERIAL`
-environment and passes `--serial` only to the trusted adb driver; `--serial` is
-not a Gradle option. The driver verifies that serial against live `adb devices`;
-environment variables cannot replace the adb binary or device.
-
-The trusted skill driver snapshots effective size/density plus whether each is an override,
-locale, font scale, and navigation mode. In a `finally` path it restores the exact
-snapshot. The first snapshot for a capture identity is frozen; a retry whose live
-device configuration differs fails before applying any change instead of silently
-restoring the device to an older configuration. ICP converts the emulator to the reference pixel size at
-`160 × logical_scale` density using the exact frozen rational scale (including
-values such as `3/2`) and applies the declared locale. It cold-starts the
-normal launcher with no terminal-state extra, proves the Activity/process/runtime
-are healthy and the resumed Activity belongs to the frozen package, executes the
-frozen production interaction trace, then attests the
-exact `visual_state_id` and production root tag in the real UI. It reads the
-runtime-probe payload from nodes owned by that same package and production hierarchy and compares exact-mode
-values with the immutable Stage 1-derived assertion. Intrinsic/container bounds
-come from the live hierarchy, opaque colors from captured pixels, and font metrics
-from the clean-build APK at the reference viewport; text and dynamic
-content bounds are measured in adaptive mode so natural wrapping is not forced.
-Missing probes, payload bounds that disagree with the live hierarchy, duplicate identities, invalid adaptive geometry, or exact-value
-mismatches fail before screenshot comparison. Only after those gates does it capture the
-full long artboard through an extended viewport, converts the PNG back to the
-frozen reference dimensions, and records exact restoration evidence. If capture
-or restore fails, or the cold-start gate fails, the design has no valid visual run.
-
-This conversion is only the reference-viewport visual-fidelity run. It checks the
-reference's color, component structure/bounds, spacing, font sizes, and line height
-from deterministic runtime measurements. Runtime evidence contains only the
-screenshot and generated capture-evidence path; human-authored fidelity booleans
-are invalid.
-It is not a runtime geometry template. Responsive runs use their own compact and
-expanded sizes. For every design state they record unique runtime occurrences,
-component topology and bounds, viewport coordinate space, safe insets, actual
-system-bar visibility/bounds, device configuration, and screenshot bytes. For
-every frozen scroll obligation the driver performs physical swipes until the live
-hierarchy stops changing, observes all required component occurrences, and
-restores the starting hierarchy. App-reported scroll extents and offsets are not
-completion evidence. The shared layout executor
-computes clipping, overlap, horizontal overflow, scroll reachability, topology,
-and component presence from those measurements, consuming the frozen horizontal
-scroll scopes including their descendants. It rejects authored `no_clip`,
-`operable`, or similar verdicts. MAE remains diagnostic only for the reference
-capture.
-
-Actual screenshots and generated capture evidence must be project-relative. Then
-run:
-
-```bash
-python3 <icp-skill>/implementation/scripts/implementation.py verify \
-  --project-root "<project>" \
-  --evidence "<runtime-evidence.json>"
-```
-
-Verification requires all code symbols and anchors, valid DTO mock fixtures,
-exact original-asset hashes at target resources, complete TDD evidence, successful
-planned lint/build/integration commands, both responsive runs, exact device
-conversion/restoration evidence, the production-path interaction/root attestation,
-complete adaptive-component evidence, and passing Stage 1-bound reference-viewport
-measurements.
-
-The final verifier completes checklist nodes only as their real validations pass.
-If any node is absent or an upstream evidence hash changed, it stops at the
-earliest pending node and requires every dependent node to be revalidated before
-Stage 3 can become complete. The final implementation state binds the completed
-checklist hash. It remains non-complete until `stage.verify` records the exact
-Stage-result hash; IOLE independently requires that completed checklist and hash
-before review writeback.
-
-Reference geometry may fix intrinsically sized visuals and controls, but must not
-be copied into text, card, section, or page heights merely to match one screenshot.
-Do not force wrapping with inserted line breaks or locale/copy-ID-specific font,
-letter-spacing, padding, offset, or geometry branches. Text wrapping must follow
-the selected project typography and available component width. A visual repair is
-valid only if compact and expanded behavior remains correct; never trade responsive
-behavior for a lower diagnostic MAE. Interaction tests own checked, enabled,
-disabled, selected, and other behavior-driven states; a static design state cannot
-override them.
-
-Visual comparison evaluates every design and writes `visual-difference-report.json`
-with diagnostic MAE, exact RGB difference bounds, and complete
-Block/design-element/code joins. Natural wrapping and resulting downstream flow
-are not visual failures. The model fixes code only when a source-bound measurement
-fails. If the report proves Stage 1 data or grouping is wrong, stop code
-changes, return to Stage 1 with the exact design/Block/source-node/field, repair
-the owning data, rerun Stage 2, then resume Stage 3. No separate diagnosis command,
-approval, repair packet, or state lock is required.
-
-`verify` consumes capture-command receipts; it never creates them. Every responsive
-run and visual capture must already have a completed checklist node whose evidence
-hash equals the exact generated run/capture artifact. A caller-authored JSON object,
-a copied reference PNG, or a valid-looking measurement payload cannot complete a
-runtime node.
-
-## Experiment discipline
-
-For prompt/contract testing in an existing project, use an isolated worktree from
-the intended baseline. Before each new experiment, discard only that experiment's
-tracked edits with `git checkout`/`git restore` and remove only run-owned untracked
-files. Preserve project-owned `common-rules.md` and project memory. Preserve
-`.icp/extract` and `.icp/component-design` unless the user explicitly asks to
-regenerate their owning stages. On the first real
-failure, stop and report the exact failed gate and evidence; do not patch the
-generated application and continue in the same experiment.
+mr=0 仅本地产物;mr=1 提交分支;mr=2 开 MR。默认从 mr=0 开始,升档由 IOLE 控制。
