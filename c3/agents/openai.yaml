@@ -1,4 +1,0 @@
-interface:
-  display_name: "C3"
-  short_description: "Coordinate Claude-Codex planning sessions."
-  default_prompt: "Use $c3 for session-name to discuss and converge on a plan with Claude."
