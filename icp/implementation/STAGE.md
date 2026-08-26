@@ -327,7 +327,11 @@ struct_diff.py --view-tree view_tree.xml --blueprint layout-blueprint.json --out
 
 从 api-contract.json 的 interactions 列表逐条推导测试用例并执行:
 
-测试用例推导:
+#### 测试用例推导
+
+每条 interaction 产生正例和反例两类用例:
+
+**正例** — 前置条件满足时,预期行为发生:
 1. 每条 interaction 转为一个用例:
    - 前置: interaction.condition (null 则无前置)
    - 操作: interaction.trigger (点击/输入/滑动等设备交互)
@@ -336,9 +340,36 @@ struct_diff.py --view-tree view_tree.xml --blueprint layout-blueprint.json --out
 2. interaction.triggers 链构成多步场景 (ix_1→ix_2→ix_3),按链顺序依次执行
 3. type=data 的 interaction 额外验证 (interaction.api 与 apis[] 按路径匹配,取 resolved 状态): resolved API → 代码中对该路径有网络调用; mock API (resolved=null) → 代码中有 MockRepository 返回对应数据
 
-验证方法:
+**反例** — 前置条件缺失时,系统优雅处理而非崩溃:
+1. 识别该 interaction 使用的框架 API 及其前置条件 (如 `rememberLauncherForActivityResult` 需要 `ActivityResultRegistryOwner`; 权限 API 需要授权状态; 网络请求需要连接)
+2. 每个前置条件产生一个反例: 该条件不满足时,实现必须有明确的降级/错误处理路径,不得 crash
+3. 反例断言: 系统显示错误提示 / 降级 UI / 保持可交互状态 (具体行为由实现决定,但必须非崩溃)
 
-| 交互类型 | 操作 | 断言 |
+反例的前置条件来源按优先级:
+- 框架 API 文档定义的 required 依赖 (如 CompositionLocal 的 Owner/Context)
+- 平台运行时条件 (权限、网络、存储)
+- interaction.condition 本身 (condition 不满足时的行为)
+
+#### Mock 边界约束
+
+不 mock 不拥有的类型。代码生成和测试中的 mock/fake/注入遵循:
+
+| 类型归属 | 允许 mock | 要求 |
+|---|---|---|
+| 业务代码 (本项目的 Repository/ViewModel/UseCase) | 是 | 无额外要求 |
+| 框架/三方类型 (Context/Owner/Navigation/Lifecycle/权限) | 否 | 用真实宿主; 若必须 fake 则配 contract test |
+| 外部系统 (网络请求/文件IO/硬件传感器) | 是 | mock 返回值与 api-contract 一致 |
+
+contract test: 同一组断言分别跑在 fake 和真实实现上,两边都过 fake 才合法。fake 与真实实现行为分叉时 contract test 失败,阻断交付。
+
+检查步骤 (代码生成后、行为验证前执行):
+1. 扫描测试代码中所有 mock/fake/provide/inject
+2. 逐项分类: 业务代码 → 通过; 外部系统 → 通过; 框架/三方类型 → 标记违规
+3. 违规项: 改为真实宿主,或补 contract test
+
+#### 验证方法
+
+| 交互类型 | 操作 | 正例断言 |
 |---|---|---|
 | 按钮可点击 | 无 (静态检查) | 视图树中 clickable=true / accessible |
 | 点击→导航 | 设备 tap 触发按钮 | dump 视图树,当前 route 切换到预期页面 |
@@ -347,6 +378,8 @@ struct_diff.py --view-tree view_tree.xml --blueprint layout-blueprint.json --out
 | 表单输入 | 设备输入文本 | dump 视图树,输入框 text 属性包含输入值 |
 | 状态变化 | 执行 trigger 操作 | dump 前后视图树,UI 变化匹配 interaction.behavior |
 
+反例验证: 注入前置条件缺失状态 → 执行操作 → 断言应用未崩溃 + 显示降级/错误 UI。
+
 每个用例: 执行操作 → 采集实际结果 → 与预期比对 → 记录 pass/fail。
 
 失败 → 归因 → 修 → 回 Step 4 重编译渲染。
@@ -354,11 +387,13 @@ struct_diff.py --view-tree view_tree.xml --blueprint layout-blueprint.json --out
 产出 `behavior-result.json`:
 ```json
 {
-  "behavior_total": 3,
-  "behavior_passed": 2,
-  "behavior_failed": [
+  "behavior_total": 5,
+  "behavior_passed": 4,
+  "positive": {"total": 3, "passed": 2, "failed": [
     {"interaction": "ix_1", "trigger": "点击发送验证码", "expected": "按钮禁用+loading", "actual": "按钮未变化", "attribution": "codegen"}
-  ]
+  ]},
+  "negative": {"total": 2, "passed": 2, "failed": []},
+  "mock_violations": []
 }
 ```
 
@@ -397,7 +432,7 @@ struct_diff.py --view-tree view_tree.xml --blueprint layout-blueprint.json --out
     "visual_issues": []
   },
   "step8_attribution": { "total_rounds": 2, "attributions": {"codegen": 3, "environment": 1} },
-  "step9_behavior": { "behavior_total": 1, "behavior_passed": 1 }
+  "step9_behavior": { "behavior_total": 3, "positive_passed": 2, "negative_passed": 1, "mock_violations": 0 }
 }
 ```
 
@@ -411,7 +446,9 @@ struct_diff.py --view-tree view_tree.xml --blueprint layout-blueprint.json --out
 | 视觉修复轮数 | step7_visual_diff | visual_issues 多 → 初次生成与设计稿还原能力弱 |
 | 归因分布 | step8_attribution.attributions | codegen 占比高 → 代码生成 prompt 需改进 |
 | 严重度分布 | step6.by_severity | critical 多 → 结构性缺陷; major 多 → 需针对性改进 |
-| 行为通过率 | step7.passed/total | 低 → 交互实现能力或接口契约质量 |
+| 正例通过率 | step9.positive_passed/total | 低 → 交互实现能力或接口契约质量 |
+| 反例通过率 | step9.negative_passed/total | 低 → 缺少前置条件缺失时的降级处理 |
+| mock 违规数 | step9.mock_violations | >0 → 测试绕过了框架边界,有效性不可信 |
 | 单页总耗时 | timestamp diff | 基线,跨页面对比 |
 
 ## 交付
