@@ -17,6 +17,7 @@ description: 任务调度器。按周期 loop:识别任务表链接类型经工�
 | | `1` | 提交当前分支 |
 | | `2` | 提 MR 合入 `dev`,**并把 MR 地址回写任务表** |
 | `interval` | 如 `30m` | 多久 loop 一次 |
+| `fix` | 页面标题 | 单页修复模式,跳过建树,仅重新实现指定页面 |
 
 Git 写操作永远在全链路验证之后。`mr` 只能由人显式给,不自行升档。
 
@@ -86,6 +87,7 @@ record --run <f> --nodes <f> [--root --link --role --mr]   # 节点+行数据入
 status --run <f> [--format table]                          # 计划 + 进度 + 未录入子节点
 next   --run <f>                                           # 交出下一个待做节点,标记 doing
 mark   --run <f> --node <id> --status done|partial|failed|pending [--pr] [--error]
+pick   --run <f> --title <标题>                            # 按标题定位节点并标记 doing(--fix 用)
 ```
 
 台账存放:`{project}/.claude/iole/<doc_id>/run.json`。`doc_id` 来自 `source` 返回值。
@@ -155,6 +157,19 @@ icp 每次只处理一个页面,不接受批量输入——并行粒度在 iole 
    不阻塞其他节点,继续 `next`
 
 按 `interval` 重复。Claude Code 用 `/loop <interval>` 驱动。
+
+## 单页修复（fix）
+
+给定 `fix=<页面标题>`,跳过建树,仅重新实现该页面。不区分原因(设计变更/实现 bug/partial 遗留)。
+
+1. `source --link` → 存储 skill
+2. 该 skill `inspect --title <fix>` → 重读最新 row
+3. `pick --run <f> --title <fix>` → 标 doing,拿到 node_id + depends_on
+4. 以 node_id `record` 更新该节点的 row 数据(覆盖旧数据,不动进度)
+5. 调 icp 重新实现该页
+6. `claim --status review --row-ids <node_row_id> --pr <pr地址>` + 写回源表 →
+   `mark --status done|partial --pr <pr地址>`
+7. 按 `mr` 档位交付
 
 ## 过程文件
 

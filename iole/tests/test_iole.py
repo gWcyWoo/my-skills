@@ -76,7 +76,7 @@ class Ledger(unittest.TestCase):
         for k in ("pr", "error"):
             if kw.get(k):
                 argv += [f"--{k}", kw[k]]
-        if status == "done" and not kw.get("skip_evidence"):
+        if status in ("done", "partial") and not kw.get("skip_evidence"):
             run_data = json.loads(self.run_f.read_text())
             if nid not in run_data["nodes"]:
                 return run(*argv, expect=expect)
@@ -254,6 +254,66 @@ class TestTreeShape(Ledger):
 
     def test_status_without_a_run_halts(self):
         self.assertEqual(self.status(expect=1)["errors"][0]["code"], "no_run")
+
+
+class TestPick(Ledger):
+
+    def pick(self, title, expect=0):
+        return run("pick", "--run", str(self.run_f), "--title", title, expect=expect)
+
+    def test_pick_finds_node_by_title(self):
+        self.chain()
+        self.mark("c", "done", pr="mr/1")
+        out = self.pick("B")
+        self.assertEqual(out["node_id"], "b")
+        self.assertEqual(out["node"]["title"], "B")
+        self.assertEqual(out["node"]["row"], {"design_urls": [], "ui_description": ""})
+        self.assertEqual(out["depends_on"],
+                         [{"node_id": "c", "title": "C", "route": "c", "pr": "mr/1"}])
+        self.assertEqual(out["remaining"], 2)
+        prog = json.loads(self.run_f.read_text())["progress"]["b"]
+        self.assertEqual(prog["status"], "doing")
+
+    def test_pick_unknown_title_halts(self):
+        self.chain()
+        out = self.pick("不存在", expect=1)
+        self.assertEqual(out["errors"][0]["code"], "unknown_title")
+
+    def test_pick_duplicate_title_halts(self):
+        self.record({"a": node("A", ["b", "c"]),
+                      "b": node("X"), "c": node("X")}, root="a")
+        out = self.pick("X", expect=1)
+        self.assertEqual(out["errors"][0]["code"], "duplicate_title")
+
+    def test_pick_resets_done_node_to_doing(self):
+        """fix 场景:已 done 的节点可被 pick 重新标为 doing。"""
+        self.chain()
+        self.next()
+        self.mark("c", "done")
+        out = self.pick("C")
+        self.assertEqual(out["node_id"], "c")
+        prog = json.loads(self.run_f.read_text())["progress"]["c"]
+        self.assertEqual(prog["status"], "doing")
+
+    def test_pick_clears_stale_error(self):
+        """pick failed 节点时清除旧 error。"""
+        self.chain()
+        self.next()
+        self.mark("c", "failed", error="设计稿解析失败")
+        self.pick("C")
+        prog = json.loads(self.run_f.read_text())["progress"]["c"]
+        self.assertEqual(prog["status"], "doing")
+        self.assertIsNone(prog["error"])
+
+    def test_pick_does_not_affect_next(self):
+        """pick 标 doing 的节点,next 跳过它,不重复派发。"""
+        self.chain()
+        self.pick("B")
+        self.assertEqual(self.next()["node_id"], "c")
+        self.mark("c", "done")
+        out = self.next()
+        self.assertFalse(out["done"])
+        self.assertIn("b", out["waiting"])
 
 
 if __name__ == "__main__":

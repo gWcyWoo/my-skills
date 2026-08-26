@@ -7,6 +7,7 @@
   status   计划 + 进度 + 还没录入的子节点。
   next     按叶优先顺序交出下一个待做节点,并标记 doing。
   mark     标记 done / partial / failed / pending(重试)。
+  pick     按标题定位节点并标记 doing(用于 --fix 单页修复)。
 
 台账让长流程可中断续跑:处理一个标记一个,进度不丢、节点不漏、不重做。
 
@@ -294,6 +295,35 @@ def cmd_mark(args):
                                         if run["progress"][n]["status"] not in ("done", "partial", "failed"))})
 
 
+def cmd_pick(args):
+    run = load_run(args.run)
+    if run is None:
+        return emit(False, {"errors": [{"code": "no_run", "where": args.run}]}, 1)
+    matches = [nid for nid, n in run["nodes"].items() if n.get("title") == args.title]
+    if not matches:
+        return emit(False, {"errors": [{"code": "unknown_title", "where": args.title}]}, 1)
+    if len(matches) > 1:
+        return emit(False, {"errors": [{"code": "duplicate_title", "where": args.title,
+                    "detail": f"多个节点标题相同: {matches}"}]}, 1)
+    target = matches[0]
+
+    cell = run["progress"][target]
+    cell["status"] = "doing"
+    cell["error"] = None
+    save_run(args.run, run)
+
+    children = child_map(run["nodes"])
+    node = run["nodes"][target]
+    deps = [{"node_id": k, "title": run["nodes"][k].get("title"),
+             "route": run["nodes"][k].get("route"),
+             "pr": run["progress"][k].get("pr")}
+            for k in children[target]]
+    order, _, _ = plan(run)
+    remaining = sum(1 for n in order if run["progress"][n]["status"] not in ("done", "partial", "failed"))
+    return emit(True, {"node_id": target, "node": node, "depends_on": deps,
+                       "remaining": remaining})
+
+
 def render(run, out):
     nodes, progress = run["nodes"], run["progress"]
     kids = child_map(nodes)
@@ -348,7 +378,11 @@ def main(argv=None):
     mk.add_argument("--error")
     mk.set_defaults(fn=cmd_mark)
 
-    for p in (rec, st, nx, mk):
+    pk = sub.add_parser("pick", help="按标题定位节点并标记 doing")
+    pk.add_argument("--title", required=True)
+    pk.set_defaults(fn=cmd_pick)
+
+    for p in (rec, st, nx, mk, pk):
         p.add_argument("--run", required=True)
 
     args = ap.parse_args(argv)
