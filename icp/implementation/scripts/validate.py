@@ -2,7 +2,7 @@
 """ICP Stage 3 — validate: 验证代码生成产物是否匹配蓝图意图。
 
 子命令:
-  check-codegen   验证生成代码的文案覆盖、DTO 覆盖
+  check-codegen   验证生成代码的文案覆盖、DTO 覆盖、绝对定位
 """
 
 import argparse
@@ -12,6 +12,9 @@ import sys
 from pathlib import Path
 
 PLATFORMS = ["android-views", "compose", "flutter", "swiftui", "uikit"]
+
+_OFFSET_RE = re.compile(r'\.(?:offset|absoluteOffset)\s*[({]')
+_CODE_STRIP_RE = re.compile(r'"(?:[^"\\]|\\.)*"|/\*.*?\*/|//.*$')
 
 
 def _snake_to_camel(name: str) -> str:
@@ -148,6 +151,31 @@ def cmd_check_codegen(args):
                 "api": hint,
                 "missing": missing_fields,
                 "detail": "DTO 缺少 resolved.response 中的字段",
+            })
+
+    # --- 绝对定位检测 ---
+    if platform == "compose":
+        hits = []
+        for f in sorted(gen_dir.rglob("*.kt")):
+            if not f.is_file():
+                continue
+            try:
+                raw = f.read_text(encoding="utf-8").split("\n")
+            except UnicodeDecodeError:
+                continue
+            lines = [_CODE_STRIP_RE.sub(' ', l) for l in raw]
+            for i, line in enumerate(lines):
+                if not _OFFSET_RE.search(line):
+                    continue
+                ctx = " ".join(lines[i:i+3])
+                if "maxWidth" not in ctx and "maxHeight" not in ctx:
+                    hits.append(f"{f.relative_to(gen_dir)}:{i+1}")
+        if hits:
+            errors.append({
+                "type": "absolute_positioning",
+                "count": len(hits),
+                "sites": hits[:10],
+                "detail": "代码使用 Modifier.offset() 绝对定位，应改用 Column/Row/padding 布局",
             })
 
     ok = len(errors) == 0

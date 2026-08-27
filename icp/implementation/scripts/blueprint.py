@@ -98,7 +98,7 @@ def extract_text(member: dict) -> dict | None:
     text = member.get("text")
     if not text:
         return None
-    result = {"value": text["value"], "frame": member.get("frame")}
+    result = {"value": text["value"]}
     spans = text.get("spans", [])
     if spans:
         s = spans[0]
@@ -131,7 +131,11 @@ def extract_fill(member: dict) -> dict | None:
 
 def extract_asset_ref(member: dict) -> dict | None:
     if member.get("type") == "symbolInstence":
-        return {"id": member["id"], "name": member["name"], "frame": member.get("frame")}
+        f = member.get("frame")
+        result = {"id": member["id"], "name": member["name"]}
+        if f:
+            result["size"] = {"width": f["width"], "height": f["height"]}
+        return result
     return None
 
 

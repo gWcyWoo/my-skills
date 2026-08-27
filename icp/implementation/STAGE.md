@@ -33,7 +33,7 @@ Stage 2 全部冻结产物 + 目标仓库(分支基线哈希记录在案)。
 - 每个组件的布局意图: layout(column/row/stack), 从 frame 坐标推导
 - 每个组件的约束: width(fill/fixed/wrap), 从 frame vs 父 frame 推导
 - padding/spacing: 从相邻节点间距推导
-- 设计值原样保留: frame, text.spans, fills — 不转换单位
+- 设计值原样保留: container frame(供 spacing/padding 推导), text.spans, fills — 不转换单位; text 不保留 frame, asset 仅保留 size(width/height)
 - 资产清单: 需要图片的节点 + 对应 assets/ 文件名
 
 不做: 不改数值,不选单位,不含平台语法。
@@ -96,15 +96,28 @@ auth 映射 (`resolved.auth` → 项目 `AuthPolicy`，确定性映射):
 
 约束: 不得新增交互原子;蓝图里没有的组件不生成。不得用批量脚本/模板替代模型逐页生成。
 
+#### 布局翻译规则
+
+blueprint 的 layout/spacing/padding 表达元素间的结构关系,代码必须用布局组件实现,禁止用绝对坐标模拟:
+
+| blueprint 信号 | Compose | Flutter | SwiftUI | 禁止 |
+|---|---|---|---|---|
+| layout: column + spacing | Column(verticalArrangement = spacedBy(N.dp)) | Column + SizedBox(height: N) | VStack(spacing: N) | offset(y=) |
+| layout: row + spacing | Row(horizontalArrangement = spacedBy(N.dp)) | Row + SizedBox(width: N) | HStack(spacing: N) | offset(x=) |
+| padding | Modifier.padding(...) | EdgeInsets | .padding(...) | offset 模拟 padding |
+
+等比例 offset(引用 maxWidth/maxHeight 的约束计算)允许,如 `offset(y = maxHeight * ratio)`。
+
 验证 (代码写入后立即执行,两个通道):
 
 **确定性检查** (validate.py check-codegen):
 ```
 validate.py check-codegen --blueprint layout-blueprint.json --contract api-contract.json --gen-dir <feature-dir> --platform <compose|swiftui|flutter|uikit|android-views>
 ```
-2 项确定性检查:
+3 项确定性检查:
 - 文案覆盖: ≥80% 的 blueprint 文案出现在代码中 (含资源文件)
 - DTO 覆盖: resolved API 的 response 字段在代码中有对应 DTO 属性 (snake_case 或 camelCase 均可)
+- 绝对定位检测 (compose): `.offset(...)` / `.offset { }` / `.absoluteOffset(...)` / `.absoluteOffset { }` 该行或紧随其后 2 行内须出现 maxWidth 或 maxHeight,否则报错; 单行注释(`//`、`/* */`)与字符串内不计
 
 **语义检查** (模型判断,读 blueprint + contract + 生成代码):
 1. role→widget: blueprint 的 form/action/navigation/list/modal 角色在代码中有对应平台 widget
