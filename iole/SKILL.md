@@ -17,6 +17,7 @@ description: 任务调度器。按周期 loop:识别任务表链接类型经工�
 | | `1` | 提交当前分支 |
 | | `2` | 提 MR 合入 `dev`,**并把 MR 地址回写任务表** |
 | `interval` | 如 `30m` | 多久 loop 一次 |
+| `fix` | 页面标题 | 单页修复模式,跳过建树,仅重新实现指定页面 |
 
 Git 写操作永远在全链路验证之后。`mr` 只能由人显式给,不自行升档。
 
@@ -86,6 +87,7 @@ record --run <f> --nodes <f> [--root --link --role --mr]   # 节点+行数据入
 status --run <f> [--format table]                          # 计划 + 进度 + 未录入子节点
 next   --run <f>                                           # 交出下一个待做节点,标记 doing
 mark   --run <f> --node <id> --status done|partial|failed|pending [--pr] [--error]
+pick   --run <f> --title <标题>                            # 按标题定位节点并标记 doing(--fix 用)
 ```
 
 台账存放:`{project}/.codex/iole/<doc_id>/run.json`。`doc_id` 来自 `source` 返回值。
@@ -156,18 +158,31 @@ icp 每次只处理一个页面,不接受批量输入——并行粒度在 iole 
 
 按 `interval` 重复。
 
+## 单页修复（fix）
+
+给定 `fix=<页面标题>`,跳过建树,仅重新实现该页面。不区分原因(设计变更/实现 bug/partial 遗留)。
+
+1. `source --link` → 存储 skill
+2. 该 skill `inspect --title <fix>` → 重读最新 row
+3. `pick --run <f> --title <fix>` → 标 doing,拿到 node_id + depends_on
+4. 以 node_id `record` 更新该节点的 row 数据(覆盖旧数据,不动进度)
+5. 调 icp 重新实现该页
+6. `claim --status review --row-ids <node_row_id> --pr <pr地址>` + 写回源表 →
+   `mark --status done|partial --pr <pr地址>`
+7. 按 `mr` 档位交付
+
 ### Codex Automations 适配
 
 `interval` 只定义宿主触发周期,IOLE 每次被触发只执行上述一次 loop 后退出。
 Claude `/loop` 在当前线程持续触发;Codex 等价适配为当前本地线程的 `heartbeat`,
 只有人明确要求“每轮创建独立任务/独立项目任务”时才用 `cron`。
-Codex `codex_app` 命名空间的方法 `automation_update`（可调用名
-`codex_app__automation_update`）统一适配原流程的三个方法:
+Codex `mcp__codex_app` 命名空间的方法 `automation_update`（完整工具名
+`mcp__codex_app__automation_update`）统一适配原流程的三个方法:
 
 | 原方法 | Codex 适配 |
 |---|---|
-| `create_scheduled_task` | 默认调 `codex_app__automation_update` 的 `mode=create`,传 `kind=heartbeat`, `destination=thread`, `name`, `prompt`, `rrule`, `status=ACTIVE`;明确要求每轮独立任务时才先用 `codex_app__list_projects` 取得 `projectId`,再以 `kind=cron`, `destination=local`, `executionEnvironment=local` 创建 |
-| `list_scheduled_tasks` | 只读检索 `${CODEX_HOME:-$HOME/.codex}/automations/*/automation.toml` 得到候选 ID,再对候选逐个调 `codex_app__automation_update` 的 `mode=view` 确认 |
+| `create_scheduled_task` | 默认调 `mcp__codex_app__automation_update` 的 `mode=create`,传 `kind=heartbeat`, `destination=thread`, `name`, `prompt`, `rrule`, `status=ACTIVE`;明确要求每轮独立任务时才先用 `codex_app__list_projects` 取得 `projectId`,再以 `kind=cron`, `destination=local`, `executionEnvironment=local` 创建 |
+| `list_scheduled_tasks` | 只读检索 `${CODEX_HOME:-$HOME/.codex}/automations/*/automation.toml` 得到候选 ID,再对候选逐个调 `mcp__codex_app__automation_update` 的 `mode=view` 确认 |
 | `update_scheduled_task` | 先 `mode=view` 取回完整现值,再对同一 ID 调 `mode=update`;保留原 `kind` 和目标线程/项目,只替换用户要求变更的字段,其余完整传回 |
 
 heartbeat 的唯一身份是 `target thread + link + role`;cron 的唯一身份是
@@ -183,10 +198,10 @@ heartbeat 的唯一身份是 `target thread + link + role`;cron 的唯一身份�
 其他周期报 `unsupported_interval`,不调用调度工具,
 也不悄悄更换周期。不直接编写 `automation.toml`。
 
-当前会话未暴露 `codex_app__automation_update` 时报 `scheduler_unavailable`,
+当前会话未暴露 `mcp__codex_app__automation_update` 时报 `scheduler_unavailable`,
 明确“未创建或更新周期调度”;不把业务行标记为 failed,不声称已调度,
 也不用进程内 `sleep` 假装周期调度。
-`codex_app__automation_update` 是 Codex Desktop 的本机动态工具,只在 `local` 任务中注入;
+`mcp__codex_app__automation_update` 是 Codex Desktop 的本机动态工具,只在 `local` 任务中注入;
 当前任务的 `hostId` 为 `slingshot:*` 等远程宿主时同样报 `scheduler_unavailable`,
 不直接改写本机 Automation 存储绕过宿主限制。
 

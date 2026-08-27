@@ -327,7 +327,24 @@ struct_diff.py --view-tree view_tree.xml --blueprint layout-blueprint.json --out
 
 从 api-contract.json 的 interactions 列表逐条推导测试用例并执行:
 
-测试用例推导:
+#### 测试层级规则
+
+每条 interaction 的 spec 描述了从 trigger 到 result 的链路,链路跨越几层,测试就必须覆盖几层。
+
+层级判定 (确定性,从 interaction 的 trigger/behavior/result 文本机械推导):
+1. 数 spec 中的 actor 边界: UI 组件、ViewModel/状态管理、Repository/数据层、系统服务/OS API
+2. 跨越 ≥2 层 → 集成测试必选 (Activity 宿主 + 真实 ViewModel + 真实 Repository); 组件测试只作补充
+3. 仅 1 层 (纯 UI 渲染/静态检查) → 组件测试即可
+
+示例:
+- "点击从通讯录中选择 → 校验姓名并规范+7号码 → 回填联系人" = UI→系统服务→ViewModel→UI = 4 层 → 集成测试
+- "按钮 clickable=true" = 纯 UI = 1 层 → 组件测试
+
+#### 测试用例推导
+
+每条 interaction 产生正例和反例两类用例:
+
+**正例** — 前置条件满足时,预期行为发生:
 1. 每条 interaction 转为一个用例:
    - 前置: interaction.condition (null 则无前置)
    - 操作: interaction.trigger (点击/输入/滑动等设备交互)
@@ -335,10 +352,93 @@ struct_diff.py --view-tree view_tree.xml --blueprint layout-blueprint.json --out
    - 预期结果: interaction.result (状态变更/路由跳转/API 调用)
 2. interaction.triggers 链构成多步场景 (ix_1→ix_2→ix_3),按链顺序依次执行
 3. type=data 的 interaction 额外验证 (interaction.api 与 apis[] 按路径匹配,取 resolved 状态): resolved API → 代码中对该路径有网络调用; mock API (resolved=null) → 代码中有 MockRepository 返回对应数据
+4. 生成 prompt 必须包含该 interaction 的实际代码调用链 (Screen→ViewModel→Repository→回填),不能只给 spec
 
-验证方法:
+**反例** — 前置条件缺失时,系统优雅处理而非崩溃:
+1. 识别该 interaction 使用的框架 API 及其前置条件 (如 `rememberLauncherForActivityResult` 需要 `ActivityResultRegistryOwner`; 权限 API 需要授权状态; 网络请求需要连接)
+2. 每个前置条件产生一个反例: 该条件不满足时,实现必须有明确的降级/错误处理路径,不得 crash
+3. 反例断言: 系统显示错误提示 / 降级 UI / 保持可交互状态 (具体行为由实现决定,但必须非崩溃)
 
-| 交互类型 | 操作 | 断言 |
+反例的前置条件来源按优先级:
+- 框架 API 文档定义的 required 依赖 (如 CompositionLocal 的 Owner/Context)
+- 平台运行时条件 (权限、网络、存储)
+- interaction.condition 本身 (condition 不满足时的行为)
+
+#### Mock 边界约束
+
+不 mock 交互链路内的层。测试中的 mock/fake/注入遵循:
+
+| 位置 | 允许 mock | 说明 |
+|---|---|---|
+| 交互链路内 (spec 的 trigger→result 经过的所有层) | 否 | 用真实实现; 若必须 fake 则配 contract test |
+| 交互链路外端 (网络响应/OS 返回值/文件IO/硬件传感器) | 是 | mock 返回值与 api-contract 或文档一致 |
+
+contract test: 同一组断言分别跑在 fake 和真实实现上,两边都过 fake 才合法。fake 与真实实现行为分叉时 contract test 失败,阻断交付。
+
+#### 测试质量验证 (确定性,测试生成后执行)
+
+测试代码写完后,执行 `test_lint.py` 静态检查,不合规则打回重写:
+
+```bash
+python3 scripts/test_lint.py <test_file_or_dir> --json
+```
+
+#### 合约驱动: 交互→模式→测试
+
+每个交互绑定测试模式,模型按模式写测试,脚本按模式验证结构。
+
+**交互→模式映射** (确定性,从 interaction 属性机械推导):
+
+| 交互属性 | 绑定模式 | 最少用例数 |
+|---|---|---|
+| 所有交互 | `ui-interaction` | 1 |
+| type=data (有 API) | + `value-assertion` | +1 |
+| 有前置条件 / OS API 依赖 | + `error-handling` | +1 |
+
+示例:
+- 纯 UI 按钮 → 绑 `ui-interaction` → 1 个测试
+- 点击登录 (调用 /auth/sessions) → 绑 `ui-interaction` + `value-assertion` → 至少 2 个测试
+- 权限请求 (需 OS 权限) → 绑 `ui-interaction` + `error-handling` → 至少 2 个测试
+- 提交表单 (调用 API + 需网络) → 绑 `ui-interaction` + `value-assertion` + `error-handling` → 至少 3 个测试
+
+**有效模式 + 结构要求**:
+
+| 模式 | 注解值 | 结构要求 | 指导 |
+|---|---|---|---|
+| UI 交互 | `ui-interaction` | UI 渲染 + 设备操作 + UI 状态断言 | 渲染组件 → tap/type → assertIsDisplayed |
+| 值断言 | `value-assertion` | assertEquals/expect + 非 SUT 调用的 expected | expected 用字面量/构造器/枚举,不用 `vm.get()` |
+| 异常处理 | `error-handling` | assertThrows/assertFailsWith + 异常类型 | 前置条件缺失 → 断言异常或降级 |
+| 快照 | `snapshot` | 快照/golden 比对调用 | captureToImage + assertAgainstGolden |
+
+每个测试必须声明 `// @test-pattern: <模式>`:
+- 不标 → `unclassified` 打回
+- 标了但结构不符 → `pattern-mismatch` 打回
+- 选松的模式绕过 → 结构不符,打回
+
+**反模式二次防线** (模式验证之外的额外检查):
+
+| 模式 | 规则 | 违规示例 | 打回理由 |
+|---|---|---|---|
+| — | no-assertion | smoke test | "无断言" |
+| A 回调绑定 | callback-counter/flag/capture/collect | `var x=0; x++; assertEquals(1,x)` | "验证回调副作用,不验证可观测状态" |
+| B Mock 回声 | mock-assert / verify-only | `assertEquals(1, mockObj.c)` | "断言 mock 行为 / 仅验证调用" |
+| D 烟雾断言 | weak-assertion | `assertNotNull(r)` | "仅检查存在" |
+| E 实现耦合 | verify-order / verify-count | `verifyOrder { a(); b() }` | "耦合内部实现" |
+| F 白名单 | no-device-action / no-ui-query | `setContent{};assertIsDisplayed()` | "未触发交互 / 未验证结果" |
+
+**层级匹配** (模型自查,lint 不覆盖):
+- ≥2 层的 interaction: 测试必须使用 Activity 宿主 (Compose: `createAndroidComposeRule<Activity>`; 非 `createComposeRule()`)
+- 不合规 → 打回: "ix_N 跨 M 层,需要集成测试,当前是组件测试"
+
+**链路内 mock** (模型自查,lint 不覆盖):
+- interaction 链路内 (trigger→result 经过的层) 不 mock,只 mock 链路外端
+- 不合规 → 打回: "ix_N 的 ViewModel 在链路内,不能用 lambda 替代"
+
+lint 全部通过 + 模型自查通过后,进入执行阶段。
+
+#### 验证方法
+
+| 交互类型 | 操作 | 正例断言 |
 |---|---|---|
 | 按钮可点击 | 无 (静态检查) | 视图树中 clickable=true / accessible |
 | 点击→导航 | 设备 tap 触发按钮 | dump 视图树,当前 route 切换到预期页面 |
@@ -347,6 +447,8 @@ struct_diff.py --view-tree view_tree.xml --blueprint layout-blueprint.json --out
 | 表单输入 | 设备输入文本 | dump 视图树,输入框 text 属性包含输入值 |
 | 状态变化 | 执行 trigger 操作 | dump 前后视图树,UI 变化匹配 interaction.behavior |
 
+反例验证: 注入前置条件缺失状态 → 执行操作 → 断言应用未崩溃 + 显示降级/错误 UI。
+
 每个用例: 执行操作 → 采集实际结果 → 与预期比对 → 记录 pass/fail。
 
 失败 → 归因 → 修 → 回 Step 4 重编译渲染。
@@ -354,11 +456,14 @@ struct_diff.py --view-tree view_tree.xml --blueprint layout-blueprint.json --out
 产出 `behavior-result.json`:
 ```json
 {
-  "behavior_total": 3,
-  "behavior_passed": 2,
-  "behavior_failed": [
+  "behavior_total": 5,
+  "behavior_passed": 4,
+  "positive": {"total": 3, "passed": 2, "failed": [
     {"interaction": "ix_1", "trigger": "点击发送验证码", "expected": "按钮禁用+loading", "actual": "按钮未变化", "attribution": "codegen"}
-  ]
+  ]},
+  "negative": {"total": 2, "passed": 2, "failed": []},
+  "mock_violations": [],
+  "quality_check": {"lint_violations": 0, "level_mismatches": 0, "chain_mocks": 0, "rewrites": 0}
 }
 ```
 
@@ -397,7 +502,7 @@ struct_diff.py --view-tree view_tree.xml --blueprint layout-blueprint.json --out
     "visual_issues": []
   },
   "step8_attribution": { "total_rounds": 2, "attributions": {"codegen": 3, "environment": 1} },
-  "step9_behavior": { "behavior_total": 1, "behavior_passed": 1 }
+  "step9_behavior": { "behavior_total": 3, "positive_passed": 2, "negative_passed": 1, "mock_violations": 0, "quality_rewrites": 0 }
 }
 ```
 
@@ -411,7 +516,10 @@ struct_diff.py --view-tree view_tree.xml --blueprint layout-blueprint.json --out
 | 视觉修复轮数 | step7_visual_diff | visual_issues 多 → 初次生成与设计稿还原能力弱 |
 | 归因分布 | step8_attribution.attributions | codegen 占比高 → 代码生成 prompt 需改进 |
 | 严重度分布 | step6.by_severity | critical 多 → 结构性缺陷; major 多 → 需针对性改进 |
-| 行为通过率 | step7.passed/total | 低 → 交互实现能力或接口契约质量 |
+| 正例通过率 | step9.positive_passed/total | 低 → 交互实现能力或接口契约质量 |
+| 反例通过率 | step9.negative_passed/total | 低 → 缺少前置条件缺失时的降级处理 |
+| mock 违规数 | step9.mock_violations | >0 → 测试绕过了框架边界,有效性不可信 |
+| 测试重写次数 | step9.quality_rewrites | 高 → 模型首次生成的测试层级/断言质量不达标 |
 | 单页总耗时 | timestamp diff | 基线,跨页面对比 |
 
 ## 交付
