@@ -2,7 +2,7 @@
 """ICP Stage 3 — validate: 验证代码生成产物是否匹配蓝图意图。
 
 子命令:
-  check-codegen   验证生成代码的文案覆盖、DTO 覆盖、绝对定位
+  check-codegen   验证生成代码的文案覆盖、DTO 覆盖、资产覆盖、绝对定位
 """
 
 import argparse
@@ -151,6 +151,27 @@ def cmd_check_codegen(args):
                 "api": hint,
                 "missing": missing_fields,
                 "detail": "DTO 缺少 resolved.response 中的字段",
+            })
+
+    # --- 资产覆盖 ---
+    bp_assets_with_file = []
+    for comp in bp_comps:
+        for a in comp.get("assets", []):
+            rn = a.get("resource_name")
+            if rn and a.get("file"):
+                bp_assets_with_file.append(rn)
+
+    if bp_assets_with_file:
+        missing_assets = [
+            rn for rn in bp_assets_with_file
+            if not re.search(r'\b' + re.escape(rn) + r'\b', full_source)
+        ]
+        if missing_assets:
+            errors.append({
+                "type": "missing_asset_ref",
+                "missing_count": len(missing_assets),
+                "missing": missing_assets[:10],
+                "detail": "blueprint 的 assets 有导出文件但代码未引用 resource_name",
             })
 
     # --- 绝对定位检测 ---

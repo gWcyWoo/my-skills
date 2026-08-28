@@ -139,5 +139,86 @@ class TestAbsolutePositioning(unittest.TestCase):
         self.assertEqual(len(errs), 1)
 
 
+class TestAssetCoverage(unittest.TestCase):
+
+    def _run_check(self, kt_source, blueprint_components, filename="Screen.kt"):
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            bp = td / "bp.json"
+            bp.write_text(json.dumps({"components": blueprint_components}))
+            ct = td / "ct.json"
+            ct.write_text(json.dumps({"apis": []}))
+            gen = td / "gen"
+            gen.mkdir()
+            (gen / filename).write_text(kt_source)
+
+            args = argparse.Namespace(
+                blueprint=str(bp), contract=str(ct),
+                gen_dir=str(gen), platform="compose",
+            )
+            buf = io.StringIO()
+            try:
+                with contextlib.redirect_stdout(buf):
+                    cmd_check_codegen(args)
+            except SystemExit:
+                pass
+            return json.loads(buf.getvalue())
+
+    def test_asset_ref_missing(self):
+        comps = [{"name": "nav", "assets": [
+            {"id": "1", "name": "icon/back", "file": "assets/a.png",
+             "resource_name": "icon_back", "size": {"width": 32, "height": 32}}
+        ]}]
+        result = self._run_check("val x = 1\n", comps)
+        errs = [e for e in result["errors"] if e["type"] == "missing_asset_ref"]
+        self.assertEqual(len(errs), 1)
+        self.assertIn("icon_back", errs[0]["missing"])
+
+    def test_asset_ref_present(self):
+        comps = [{"name": "nav", "assets": [
+            {"id": "1", "name": "icon/back", "file": "assets/a.png",
+             "resource_name": "icon_back", "size": {"width": 32, "height": 32}}
+        ]}]
+        result = self._run_check(
+            'val img = painterResource(R.drawable.icon_back)\n', comps)
+        errs = [e for e in result["errors"] if e["type"] == "missing_asset_ref"]
+        self.assertEqual(len(errs), 0)
+
+    def test_asset_without_file_not_checked(self):
+        comps = [{"name": "nav", "assets": [
+            {"id": "1", "name": "icon/back",
+             "resource_name": "icon_back", "size": {"width": 32, "height": 32}}
+        ]}]
+        result = self._run_check("val x = 1\n", comps)
+        errs = [e for e in result["errors"] if e["type"] == "missing_asset_ref"]
+        self.assertEqual(len(errs), 0)
+
+    def test_multiple_assets_partial_coverage(self):
+        comps = [{"name": "nav", "assets": [
+            {"id": "1", "name": "icon/back", "file": "assets/a.png",
+             "resource_name": "icon_back", "size": {"width": 32, "height": 32}},
+            {"id": "2", "name": "icon/close", "file": "assets/b.png",
+             "resource_name": "icon_close", "size": {"width": 24, "height": 24}},
+        ]}]
+        result = self._run_check(
+            'val img = painterResource(R.drawable.icon_back)\n', comps)
+        errs = [e for e in result["errors"] if e["type"] == "missing_asset_ref"]
+        self.assertEqual(len(errs), 1)
+        self.assertEqual(errs[0]["missing_count"], 1)
+        self.assertIn("icon_close", errs[0]["missing"])
+        self.assertNotIn("icon_back", errs[0]["missing"])
+
+    def test_asset_substring_not_false_pass(self):
+        """resource_name 'line' must not match 'lineHeight'."""
+        comps = [{"name": "nav", "assets": [
+            {"id": "1", "name": "line", "file": "assets/line.png",
+             "resource_name": "line", "size": {"width": 2, "height": 40}}
+        ]}]
+        result = self._run_check(
+            'Text(style = TextStyle(lineHeight = 20.sp))\n', comps)
+        errs = [e for e in result["errors"] if e["type"] == "missing_asset_ref"]
+        self.assertEqual(len(errs), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

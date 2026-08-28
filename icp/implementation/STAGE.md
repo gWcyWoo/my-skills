@@ -13,6 +13,7 @@ Stage 2 全部冻结产物 + 目标仓库(分支基线哈希记录在案)。
 | cover.png | Stage 1 | 视觉对照基准 |
 | design.json meta | Stage 1 | artboard 元信息(width/height/scale) |
 | assets/ | Stage 1 | 切图资产 |
+| slices.json | Stage 1 | 切图资产清单 (id→file 映射) |
 
 ## 不变量
 
@@ -25,16 +26,20 @@ Stage 2 全部冻结产物 + 目标仓库(分支基线哈希记录在案)。
 
 ### Step 1: 蓝图提取 (脚本,确定性)
 
-输入: enriched.json + design.json(meta)
+输入: enriched.json + design.json(meta) + slices.json
 产出: `layout-blueprint.json`
+命令:
+```
+blueprint.py --enriched enriched.json --design design.json --slices slices.json --output layout-blueprint.json
+```
 
 内容:
 - artboard 元信息: width, height, scale (从 design.json meta.device 解析)
 - 每个组件的布局意图: layout(column/row/stack), 从 frame 坐标推导
 - 每个组件的约束: width(fill/fixed/wrap), 从 frame vs 父 frame 推导
 - padding/spacing: 从相邻节点间距推导
-- 设计值原样保留: container frame(供 spacing/padding 推导), text.spans, fills — 不转换单位; text 不保留 frame, asset 仅保留 size(width/height)
-- 资产清单: 需要图片的节点 + 对应 assets/ 文件名
+- 设计值原样保留: container frame(供 spacing/padding 推导), text.spans, fills — 不转换单位; text 不保留 frame
+- 资产清单: 来自 slices.json (设计师标记导出的节点,仅含有本地文件的条目); 祖先已导出时子孙不重复列出; 每项含 id, name, file(assets/ 相对路径,相对于 Stage 1 out-dir), resource_name(平台资源名); 可选 size
 
 不做: 不改数值,不选单位,不含平台语法。
 
@@ -108,15 +113,38 @@ blueprint 的 layout/spacing/padding 表达元素间的结构关系,代码必须
 
 等比例 offset(引用 maxWidth/maxHeight 的约束计算)允许,如 `offset(y = maxHeight * ratio)`。
 
+#### 图标实现规则
+
+blueprint 的 assets[] 每项代表一个设计师标记导出的图标/图片资产 (祖先已导出时子孙不重复列出; 含文本子孙的节点不作为图片资产):
+
+| 情况 | 做法 |
+|---|---|
+| blueprint assets[] 有对应条目 | 将 file 复制到项目资源目录,以 resource_name 命名,用平台图片 API 引用 |
+| 无 asset,语义可识别的标准 UI 图标 (返回/关闭/删除/添加/搜索/设置/勾选等) | 用平台标准图标库 (Material Icons / SF Symbols / Flutter Icons) |
+| 无 asset,非标准图标 | 停机,不得继续 |
+
+平台资源部署 (file 为 PNG/JPG 时):
+- Compose: `res/drawable/<resource_name>.png` + `painterResource(R.drawable.<resource_name>)`
+- Flutter: `assets/images/<resource_name>.png` + `Image.asset(...)`,在 `pubspec.yaml` 注册 assets
+- SwiftUI: `Assets.xcassets/<resource_name>` + `Image("<resource_name>")`
+
+file 为 SVG 时:
+- Compose: 先转为 Vector Drawable XML 存入 `res/drawable/` + `painterResource(R.drawable.<resource_name>)`
+- Flutter: `assets/images/<resource_name>.svg` + `flutter_svg` 包的 `SvgPicture.asset(...)`
+- SwiftUI: `Assets.xcassets/` (勾选 Preserve Vector Data) + `Image("<resource_name>")`
+
+**禁止**: 用 Canvas / Path / drawLine / drawRect 等绘制 API 手绘图标。任何情况都不允许。
+
 验证 (代码写入后立即执行,两个通道):
 
 **确定性检查** (validate.py check-codegen):
 ```
 validate.py check-codegen --blueprint layout-blueprint.json --contract api-contract.json --gen-dir <feature-dir> --platform <compose|swiftui|flutter|uikit|android-views>
 ```
-3 项确定性检查:
+4 项确定性检查:
 - 文案覆盖: ≥80% 的 blueprint 文案出现在代码中 (含资源文件)
 - DTO 覆盖: resolved API 的 response 字段在代码中有对应 DTO 属性 (snake_case 或 camelCase 均可)
+- 资产覆盖: blueprint 的 assets 中有 `file` 字段的条目,其 `resource_name` 必须出现在代码中 (含资源文件)
 - 绝对定位检测 (compose): `.offset(...)` / `.offset { }` / `.absoluteOffset(...)` / `.absoluteOffset { }` 该行或紧随其后 2 行内须出现 maxWidth 或 maxHeight,否则报错; 单行注释(`//`、`/* */`)与字符串内不计
 
 **语义检查** (模型判断,读 blueprint + contract + 生成代码):
@@ -203,9 +231,9 @@ validate.py check-codegen --blueprint layout-blueprint.json --contract api-contr
 **维度 2: 图标**
 - 该组件内的每个图标是否存在
 - 形状是否与设计稿一致 (不能用方块/圆点/emoji 近似)
-- 品牌 Logo 必须用图片资产或精确 Canvas 还原,不能用纯文本
+- 实现方式: 必须用导出资产 (Image/painterResource) 或平台标准图标库 (Material Icons / SF Symbols),不得用 Canvas/Path 手绘
 
-通过标准: 所有图标存在 + 形状匹配
+通过标准: 所有图标存在 + 形状匹配 + 实现方式正确
 
 **维度 3: 文案**
 - 该组件内的每条文案是否与设计稿逐字一致
@@ -309,9 +337,9 @@ struct_diff.py --view-tree view_tree.xml --blueprint layout-blueprint.json --out
           "design": "圆形深绿背景 + 白色X线条",
           "actual": "无背景 + 绿色X线条",
           "severity": "major",
-          "cause": "Canvas drawLine 缺少 drawCircle 背景",
+          "cause": "未使用导出资产,手绘了关闭按钮图标",
           "attribution": "codegen",
-          "fix": "PayVisaScreen.kt:42 添加 drawCircle",
+          "fix": "PayVisaScreen.kt:42 改用 Image(painterResource(R.drawable.icon_close))",
           "status": "fixed"
         }
       ],
