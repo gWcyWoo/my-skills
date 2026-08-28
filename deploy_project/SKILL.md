@@ -61,7 +61,7 @@ api-compose ps api-php
 
 ```text
 app name: back
-repo: http://gitlab.oklik.com/oklik/ng/ng_back.git
+repo: http://gitlab.example.internal/team/project/app_back.git
 branch: test
 public port: 8082
 host fpm port: 9075
@@ -73,7 +73,7 @@ php runtime: /srv/docker-env/deploy/php/7.4
 ```bash
 python3 ~/.agents/skills/deploy_project/scripts/render_php_app_assets.py \
   --app back \
-  --repo http://gitlab.oklik.com/oklik/ng/ng_back.git \
+  --repo http://gitlab.example.internal/team/project/app_back.git \
   --branch test \
   --public-port 8082 \
   --fpm-port 9075 \
@@ -84,7 +84,7 @@ python3 ~/.agents/skills/deploy_project/scripts/render_php_app_assets.py \
 
 ```bash
 sudo install -d -o opt -g opt -m 0750 /srv/docker-env/apps/back
-sudo /usr/local/sbin/sopt git clone http://gitlab.oklik.com/oklik/ng/ng_back.git apps/back/src
+sudo /usr/local/sbin/sopt git clone http://gitlab.example.internal/team/project/app_back.git apps/back/src
 sudo /usr/local/sbin/sopt git -C apps/back/src checkout test
 ```
 
