@@ -262,9 +262,9 @@ OUTPUT: "证书登录起初失败,sshd 日志指出 ~/.ssh 权限不对(775),已
 </example>
 
 <example label="re-entry — already complete">
-SITUATION: User re-runs dDLN. `list_profiles.sh` prints `nigeria<TAB>152.32.142.146<TAB>opt<TAB>42146`. User picks `1. nigeria`.
+SITUATION: User re-runs dDLN. `list_profiles.sh` prints `nigeria<TAB>203.0.113.50<TAB>opt<TAB>22022`. User picks `1. nigeria`.
 ACTIONS: Skip the param questions (read host/user/port from the menu line) → Phase 0.5 probe `test_login.sh nigeria` (exits 0) → `close_check.sh nigeria` (ends ✅). No root connection, no provision, no harden, no disconnect.
-OUTPUT: "Result: success(re-entry:已完成)— nigeria 在 152.32.142.146:42146 证书登录可用且收尾审计全过,无需改动。私钥 ~/.ssh/nigeria/opt_ed25519、密码 ~/.ssh/nigeria/opt.sudo。NOPASSWD sudo 仍待最终模块撤销。"
+OUTPUT: "Result: success(re-entry:已完成)— nigeria 在 203.0.113.50:22022 证书登录可用且收尾审计全过,无需改动。私钥 ~/.ssh/nigeria/opt_ed25519、密码 ~/.ssh/nigeria/opt.sudo。NOPASSWD sudo 仍待最终模块撤销。"
 </example>
 
 <example label="BAD — do not do this">
