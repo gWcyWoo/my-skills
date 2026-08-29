@@ -21,6 +21,7 @@ import time
 from pathlib import Path
 
 import device
+import struct_diff
 
 LAUNCH_SETTLE = 3
 
@@ -32,16 +33,24 @@ def verify_navigation(vt_path: Path, blueprint_path: Path | None) -> dict:
     with open(blueprint_path) as f:
         blueprint = json.load(f)
 
-    vt_content = vt_path.read_text(errors="replace").lower()
+    try:
+        nodes = struct_diff.parse_view_tree(vt_path)
+    except (ValueError, SyntaxError, json.JSONDecodeError):
+        return {"verified": False, "reason": "unparseable_view_tree"}
+
+    vt_texts = {struct_diff.normalize_text(t) for t in struct_diff.extract_view_texts(nodes)}
+
     bp_texts = []
     for c in blueprint.get("components", []):
         for t in c.get("texts", []):
-            bp_texts.append(t["value"])
+            v = t["value"].strip()
+            if v:
+                bp_texts.append(v)
 
     if not bp_texts:
         return {"verified": False, "reason": "no_blueprint_texts"}
 
-    matched = sum(1 for t in bp_texts if t.lower() in vt_content)
+    matched = sum(1 for t in bp_texts if struct_diff.normalize_text(t) in vt_texts)
     if matched == 0:
         return {
             "verified": False,
@@ -134,9 +143,13 @@ def main():
         bp_path = Path(args.blueprint) if args.blueprint else None
         nav_check = verify_navigation(vt_path, bp_path)
         result["navigation_check"] = nav_check
-        if args.route and nav_check.get("reason") == "navigation_failed":
+        reason = nav_check.get("reason")
+        if reason == "unparseable_view_tree" or (args.route and reason == "navigation_failed"):
             result["render_ok"] = False
-            result["error"] = f"navigation_failed: 0/{nav_check.get('expected_texts', '?')} blueprint texts found"
+            if reason == "unparseable_view_tree":
+                result["error"] = "unparseable_view_tree: view tree could not be parsed"
+            else:
+                result["error"] = f"navigation_failed: 0/{nav_check.get('expected_texts', '?')} blueprint texts found"
             result["render_view_nodes"] = node_count
             result["render_time_ms"] = int((time.time() - t_start) * 1000)
             with open(out_dir / "probe-result.json", "w") as f:
@@ -151,6 +164,8 @@ def main():
     except Exception as e:
         result["render_ok"] = False
         result["error"] = str(e)
+        with open(out_dir / "probe-result.json", "w") as f:
+            json.dump(result, f, indent=2, ensure_ascii=False)
         print(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False))
         return 1
     finally:

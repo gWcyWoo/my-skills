@@ -109,6 +109,16 @@ class TestInferWidthConstraint(unittest.TestCase):
             "fixed",
         )
 
+    def test_narrow_centered_is_fixed(self):
+        """Symmetric padding but < 50% parent width must be fixed, not fill."""
+        self.assertEqual(
+            infer_width_constraint(
+                {"left": 145, "width": 100, "top": 0, "height": 44},
+                {"left": 0, "width": 390, "top": 0, "height": 844},
+            ),
+            "fixed",
+        )
+
 
 class TestIsBackgroundLayer(unittest.TestCase):
     def test_background(self):
@@ -146,9 +156,9 @@ class TestExtractText(unittest.TestCase):
 
 class TestExtractFill(unittest.TestCase):
     def test_solid(self):
-        m = {"fills": [{"type": "solid", "color": "#fff"}]}
+        m = {"fills": [{"type": "color", "value": "#fff"}]}
         result = extract_fill(m)
-        self.assertEqual(result["type"], "solid")
+        self.assertEqual(result["type"], "color")
         self.assertEqual(result["color"], "#fff")
 
     def test_gradient(self):
@@ -222,7 +232,7 @@ class TestBuildBlueprintIntegration(unittest.TestCase):
                  "members": [
                      {"id": "b1", "name": "btn_bg", "type": "artboard",
                       "frame": {"left": 16, "top": 700, "width": 343, "height": 48},
-                      "fills": [{"type": "solid", "color": "#0066FF"}],
+                      "fills": [{"type": "color", "value": "#0066FF"}],
                       "visible": True, "opacity": 1, "is_system": False},
                      {"id": "b2", "name": "btn_label", "type": "textLayer",
                       "frame": {"left": 120, "top": 712, "width": 135, "height": 24},
@@ -731,6 +741,41 @@ class TestResourceNameCollision(unittest.TestCase):
         names = [a["resource_name"] for a in assets]
         unique = set(names)
         self.assertEqual(len(unique), 2, f"expected 2 unique names: {names}")
+
+
+class TestChildrenWidthsSizeFloor(unittest.TestCase):
+    def test_narrow_centered_children_are_fixed(self):
+        """All children < 50% container width must be 'fixed' even if widest."""
+        comp = {
+            "name": "buttons",
+            "role": "content",
+            "description": "",
+            "member_count": 3,
+            "members": [
+                {"id": "bg", "name": "bg", "type": "artboard",
+                 "frame": {"left": 0, "top": 0, "width": 390, "height": 200},
+                 "visible": True, "opacity": 1, "is_system": False},
+                {"id": "btn1", "name": "btn1", "type": "textLayer",
+                 "frame": {"left": 145, "top": 20, "width": 100, "height": 40},
+                 "text": {"value": "OK", "spans": [{"font": "SF", "size": 14, "weight": 400,
+                          "color": "#000", "line_height": 20, "align": "center",
+                          "letter_spacing": 0}]},
+                 "visible": True, "opacity": 1, "is_system": False},
+                {"id": "btn2", "name": "btn2", "type": "textLayer",
+                 "frame": {"left": 147, "top": 80, "width": 96, "height": 40},
+                 "text": {"value": "Cancel", "spans": [{"font": "SF", "size": 14, "weight": 400,
+                          "color": "#000", "line_height": 20, "align": "center",
+                          "letter_spacing": 0}]},
+                 "visible": True, "opacity": 1, "is_system": False},
+            ],
+        }
+        artboard = {"left": 0, "top": 0, "width": 390, "height": 844}
+        bp = build_component_blueprint(comp, artboard)
+        cws = bp.get("children_widths", [])
+        self.assertEqual(len(cws), 2)
+        for cw in cws:
+            self.assertEqual(cw["width"], "fixed",
+                             f"{cw['name']} should be fixed, not fill")
 
 
 if __name__ == "__main__":

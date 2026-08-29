@@ -15,8 +15,13 @@ from pathlib import Path
 VALID_TYPES = {"existing_shared", "extract_shared", "platform_builtin", "new"}
 SHARED_TYPES = {"existing_shared", "extract_shared"}
 INTERACTIVE_ROLES = {"action", "form"}
+USUALLY_INTERACTIVE_ROLES = {"navigation", "list", "modal"}
+VALID_IX_TYPES = {"behavior", "data"}
+VALID_ROLES = {"navigation", "header", "form", "list", "modal", "footer", "action", "content", "decoration"}
 VALID_RESPONSE_LEAF_TYPES = {"string", "integer", "number", "boolean"}
+VALID_METHODS = {"GET", "POST"}
 VALID_AUTH_VALUES = {"public", "bearer", "optional"}
+_ROLE_PRIORITY = {**{r: 1 for r in USUALLY_INTERACTIVE_ROLES}, **{r: 2 for r in INTERACTIVE_ROLES}}
 
 
 def _project_root(binding_path: str) -> Path:
@@ -29,7 +34,7 @@ def cmd_check_binding(args):
     binding = json.loads(Path(args.binding).read_text(encoding="utf-8"))
     root = _project_root(args.binding)
 
-    spec_names = {c["name"] for c in spec.get("components", spec.get("groups", []))}
+    spec_names = {c["name"] for c in spec.get("components", [])}
     components = binding.get("components", [])
     bound_names = {c.get("group_name") for c in components}
 
@@ -42,6 +47,7 @@ def cmd_check_binding(args):
     for g in sorted(bound_names - spec_names - {None}):
         warnings.append({"type": "extra_group", "group_name": g})
 
+    cn_types = {}
     for comp in components:
         gn = comp.get("group_name", "")
         cn = comp.get("component_name", "")
@@ -50,9 +56,18 @@ def cmd_check_binding(args):
         params = comp.get("params", [])
         affected = comp.get("affected")
 
+        if not cn:
+            errors.append({"type": "missing_component_name", "group_name": gn})
+
         if ct not in VALID_TYPES:
             errors.append({"type": "invalid_type", "group_name": gn, "component_type": ct})
             continue
+
+        if cn and cn in cn_types and cn_types[cn] != ct:
+            errors.append({"type": "inconsistent_type", "component_name": cn,
+                           "types": sorted({cn_types[cn], ct})})
+        if cn:
+            cn_types[cn] = ct
 
         if ct == "existing_shared":
             if not sp:
@@ -60,19 +75,33 @@ def cmd_check_binding(args):
             elif not (root / sp).exists():
                 errors.append({"type": "missing_source", "group_name": gn, "source_path": sp})
 
+        if sp and ct != "existing_shared":
+            warnings.append({"type": "unexpected_source_path", "group_name": gn, "component_name": cn, "component_type": ct})
+
         if affected and ct != "extract_shared":
             errors.append({"type": "invalid_affected", "group_name": gn, "component_type": ct})
 
+        if ct == "extract_shared" and not affected:
+            warnings.append({"type": "extract_shared_no_affected", "group_name": gn, "component_name": cn})
+
         if ct == "extract_shared" and affected:
-            for a in affected:
-                asp = a.get("source_path", "")
-                if not asp or not (root / asp).exists():
-                    errors.append({
-                        "type": "missing_affected_source",
-                        "group_name": gn,
-                        "affected_name": a.get("name", ""),
-                        "source_path": asp,
-                    })
+            if not isinstance(affected, list):
+                errors.append({"type": "invalid_affected", "group_name": gn,
+                               "detail": "affected 必须是数组"})
+            else:
+                for a in affected:
+                    if not isinstance(a, dict):
+                        errors.append({"type": "invalid_affected_entry", "group_name": gn,
+                                       "detail": "affected 元素必须是 {name, source_path} 对象"})
+                        continue
+                    asp = a.get("source_path", "")
+                    if not asp or not (root / asp).exists():
+                        errors.append({
+                            "type": "missing_affected_source",
+                            "group_name": gn,
+                            "affected_name": a.get("name", ""),
+                            "source_path": asp,
+                        })
 
         if ct in SHARED_TYPES and not params:
             errors.append({"type": "empty_params", "group_name": gn, "component_name": cn})
@@ -101,20 +130,20 @@ def cmd_check_binding(args):
 def cmd_check_interactions(args):
     binding = json.loads(Path(args.binding).read_text(encoding="utf-8"))
 
-    comp_names = {c.get("component_name") for c in binding.get("components", [])}
-    api_endpoints = {a.get("semantic_hint") or a.get("endpoint") for a in binding.get("apis", [])}
-    interactions = binding.get("interactions", [])
+    comp_names = {c.get("component_name") for c in binding.get("components", [])} - {None}
+    api_endpoints = {a.get("semantic_hint") or a.get("endpoint")
+                     for a in binding.get("apis") or [] if isinstance(a, dict)}
+    interactions = binding.get("interactions") or []
 
     comp_roles = {}
-    if args.component_spec:
-        spec = json.loads(Path(args.component_spec).read_text(encoding="utf-8"))
-        group_roles = {g["name"]: g.get("role", "") for g in spec.get("components", spec.get("groups", []))}
-        for c in binding.get("components", []):
-            gn = c.get("group_name", "")
-            cn = c.get("component_name", "")
-            role = group_roles.get(gn, "")
-            if cn not in comp_roles or role in INTERACTIVE_ROLES:
-                comp_roles[cn] = role
+    spec = json.loads(Path(args.component_spec).read_text(encoding="utf-8"))
+    group_roles = {g["name"]: g.get("role", "") for g in spec.get("components", [])}
+    for c in binding.get("components", []):
+        gn = c.get("group_name", "")
+        cn = c.get("component_name", "")
+        role = group_roles.get(gn, "")
+        if cn not in comp_roles or _ROLE_PRIORITY.get(role, 0) > _ROLE_PRIORITY.get(comp_roles[cn], 0):
+            comp_roles[cn] = role
 
     errors = []
     warnings = []
@@ -133,20 +162,27 @@ def cmd_check_interactions(args):
     for i, ix in enumerate(interactions):
         ix_id = ix.get("id") or f"?_{i}"
 
-        for f in ("trigger", "behavior", "result"):
+        for f in ("trigger", "behavior", "result", "type"):
             if not ix.get(f):
                 errors.append({"type": "incomplete_interaction", "id": ix_id, "missing_field": f})
         if "state" in ix and ix["state"] is not None and not ix["state"]:
             errors.append({"type": "incomplete_interaction", "id": ix_id, "missing_field": "state"})
 
-        if ix.get("type") == "data" and not ix.get("api"):
-            errors.append({"type": "missing_api", "id": ix_id})
+        ix_type = ix.get("type")
+        if ix_type and ix_type not in VALID_IX_TYPES:
+            errors.append({"type": "invalid_interaction_type", "id": ix_id, "interaction_type": ix_type})
+
+        if ix_type == "data":
+            if not ix.get("api"):
+                errors.append({"type": "missing_api", "id": ix_id})
+            if "state" not in ix or ix["state"] is None:
+                warnings.append({"type": "data_without_state", "id": ix_id})
 
         api_ref = ix.get("api")
         if api_ref and api_ref not in api_endpoints:
             errors.append({"type": "unknown_api", "id": ix_id, "api": api_ref})
 
-        for tid in ix.get("triggers", []):
+        for tid in ix.get("triggers") or []:
             if tid not in ix_ids:
                 errors.append({"type": "broken_trigger", "id": ix_id, "target": tid})
 
@@ -163,19 +199,37 @@ def cmd_check_interactions(args):
         role = comp_roles.get(cn, "")
         if role in INTERACTIVE_ROLES:
             errors.append({"type": "idle_interactive_component", "component_name": cn, "role": role})
-        elif not role:
-            warnings.append({"type": "idle_component", "component_name": cn})
+        elif role in USUALLY_INTERACTIVE_ROLES or role not in VALID_ROLES:
+            warnings.append({"type": "idle_component", "component_name": cn, "role": role})
 
     # --- resolved 格式校验 ---
-    for api in binding.get("apis", []):
+    for api in binding.get("apis") or []:
+        if not isinstance(api, dict):
+            errors.append({"type": "invalid_api_entry",
+                           "detail": "apis 元素必须是对象"})
+            continue
         hint = api.get("semantic_hint") or api.get("endpoint") or "?"
         resolved = api.get("resolved")
         if resolved is None:
             continue
+        if not isinstance(resolved, dict):
+            errors.append({"type": "invalid_resolved", "api": hint,
+                           "detail": "resolved 必须是 object 或 null"})
+            continue
+        if not resolved.get("path"):
+            errors.append({"type": "missing_resolved_field", "api": hint, "field": "path"})
+        method = resolved.get("method")
+        if not method:
+            errors.append({"type": "missing_resolved_field", "api": hint, "field": "method"})
+        elif method not in VALID_METHODS:
+            errors.append({"type": "invalid_method", "api": hint, "method": method,
+                           "allowed": sorted(VALID_METHODS)})
         auth = resolved.get("auth")
         if auth is not None and auth not in VALID_AUTH_VALUES:
             errors.append({"type": "invalid_auth", "api": hint, "auth": auth,
                            "allowed": sorted(VALID_AUTH_VALUES)})
+        if resolved.get("deprecated"):
+            warnings.append({"type": "deprecated_api", "api": hint})
         resp = resolved.get("response")
         if resp is not None:
             if not isinstance(resp, dict):
@@ -231,7 +285,7 @@ def main():
 
     p_ix = sub.add_parser("check-interactions", help="验证原子交互")
     p_ix.add_argument("--binding", required=True, help="完整绑定 JSON")
-    p_ix.add_argument("--component-spec", default=None, help="Stage 1 输出 JSON(可选,用于按 role 区分 idle 严重级别)")
+    p_ix.add_argument("--component-spec", required=True, help="Stage 1 输出 JSON")
 
     args = parser.parse_args()
     if not args.command:

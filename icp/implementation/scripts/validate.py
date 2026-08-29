@@ -13,8 +13,27 @@ from pathlib import Path
 
 PLATFORMS = ["android-views", "compose", "flutter", "swiftui", "uikit"]
 
-_OFFSET_RE = re.compile(r'\.(?:offset|absoluteOffset)\s*[({]')
-_CODE_STRIP_RE = re.compile(r'"(?:[^"\\]|\\.)*"|/\*.*?\*/|//.*$')
+_OFFSET_PATTERNS = {
+    "compose": (
+        re.compile(r'\.(?:offset|absoluteOffset)\s*[({]'),
+        "*.kt",
+        re.compile(r'\bBoxWithConstraints\b'),
+        re.compile(r'\bmaxWidth\b|\bmaxHeight\b'),
+    ),
+    "flutter": (
+        re.compile(r'\b(?:Animated)?Positioned(?:Directional|Transition)?(?:\.(?:directional|fromRect|fromRelativeRect))?\s*\(|\bTransform\.translate\s*\('),
+        "*.dart",
+        re.compile(r'\bLayoutBuilder\b'),
+        re.compile(r'\bconstraints\.\w'),
+    ),
+    "swiftui": (
+        re.compile(r'\.(?:offset|position)\s*\('),
+        "*.swift",
+        re.compile(r'\bGeometryReader\b'),
+        re.compile(r'\bgeometry\b'),
+    ),
+}
+_COMMENT_STRIP_RE = re.compile(r'"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\'|/\*[\s\S]*?\*/|//[^\n]*')
 
 
 def _snake_to_camel(name: str) -> str:
@@ -55,13 +74,19 @@ def _collect_files(gen_dir: Path, exts: set) -> str:
 
 def _extract_string_literals(source: str, platform: str = "") -> list[str]:
     """从源码中提取字符串字面量。单引号仅对 flutter(Dart) 启用。"""
+    results = []
+    for m in re.finditer(r'"""([\s\S]*?)"""', source):
+        results.append(m.group(1))
     stripped = re.sub(r'"""[\s\S]*?"""', '', source)
-    doubles = re.findall(r'"([^"\\]*(?:\\.[^"\\]*)*)"', stripped)
     if platform == "flutter":
+        for m in re.finditer(r"'''([\s\S]*?)'''", stripped):
+            results.append(m.group(1))
         stripped = re.sub(r"'''[\s\S]*?'''", '', stripped)
-        stripped = re.sub(r'"[^"\\]*(?:\\.[^"\\]*)*"', '', stripped)
-        doubles += re.findall(r"'([^'\\]*(?:\\.[^'\\]*)*)'", stripped)
-    return doubles
+        for m in re.finditer(r'"([^"\\]*(?:\\.[^"\\]*)*)"|\'([^\'\\]*(?:\\.[^\'\\]*)*)\'', stripped):
+            results.append(m.group(1) if m.group(1) is not None else m.group(2))
+    else:
+        results.extend(re.findall(r'"([^"\\]*(?:\\.[^"\\]*)*)"', stripped))
+    return results
 
 
 def cmd_check_codegen(args):
@@ -99,14 +124,19 @@ def cmd_check_codegen(args):
                 bp_texts.append(v)
 
     if bp_texts:
-        code_strings = _extract_string_literals(full_source, platform)
+        clean_source = _COMMENT_STRIP_RE.sub(
+            lambda m: m.group(0) if m.group(0)[0] in ('"', "'") else ' ',
+            full_source)
+        code_strings = _extract_string_literals(clean_source, platform)
 
         matched = 0
         missing = []
         for bt in bp_texts:
-            if bt[:20] in full_source:
+            if any(bt in cs for cs in code_strings):
                 matched += 1
             elif any(cs in bt for cs in code_strings if len(cs) >= 6):
+                matched += 1
+            elif bt in resource_source:
                 matched += 1
             else:
                 missing.append(bt[:60])
@@ -131,19 +161,26 @@ def cmd_check_codegen(args):
             })
 
     # --- DTO 覆盖 resolved.response ---
+    dto_source = _COMMENT_STRIP_RE.sub(lambda m: m.group(0) if m.group(0)[0] in ('"', "'") else ' ', source)
+
+    def _has_field(name: str) -> bool:
+        return bool(re.search(r'\b' + re.escape(name) + r'\b', dto_source))
+
     apis = contract.get("apis", [])
     for api in apis:
         resolved = api.get("resolved")
         if not resolved:
             continue
         resp = resolved.get("response")
-        if not isinstance(resp, dict):
+        if isinstance(resp, list) and resp and isinstance(resp[0], dict):
+            resp = resp[0]
+        elif not isinstance(resp, dict):
             continue
         hint = api.get("semantic_hint") or api.get("endpoint") or "?"
         field_pairs = _extract_response_fields(resp)
         missing_fields = list(dict.fromkeys(
             camel for snake, camel in field_pairs
-            if len(snake) >= 3 and snake not in source and camel not in source
+            if len(snake) >= 3 and not _has_field(snake) and not _has_field(camel)
         ))
         if missing_fields:
             errors.append({
@@ -164,7 +201,7 @@ def cmd_check_codegen(args):
     if bp_assets_with_file:
         missing_assets = [
             rn for rn in bp_assets_with_file
-            if not re.search(r'\b' + re.escape(rn) + r'\b', full_source)
+            if not re.search(r'\b' + re.escape(rn) + r'\b', dto_source + "\n" + resource_source)
         ]
         if missing_assets:
             errors.append({
@@ -174,29 +211,56 @@ def cmd_check_codegen(args):
                 "detail": "blueprint 的 assets 有导出文件但代码未引用 resource_name",
             })
 
+    # --- extract_shared affected 引用检查 ---
+    for comp in contract.get("components", []):
+        if comp.get("type") != "extract_shared":
+            continue
+        affected = comp.get("affected") or []
+        comp_name = comp.get("name", "?")
+        for af in affected:
+            sp = af.get("source_path")
+            if not sp:
+                continue
+            af_name = af.get("name") or Path(sp).stem
+            if af_name and not re.search(r'\b' + re.escape(af_name) + r'\b', source):
+                warnings.append({
+                    "type": "affected_not_referenced",
+                    "component": comp_name,
+                    "affected_source": sp,
+                    "detail": "extract_shared 的 affected 组件未在生成代码中被引用",
+                })
+
     # --- 绝对定位检测 ---
-    if platform == "compose":
+    offset_cfg = _OFFSET_PATTERNS.get(platform)
+    if offset_cfg:
+        offset_re, glob, scope_re, proportion_re = offset_cfg
         hits = []
-        for f in sorted(gen_dir.rglob("*.kt")):
+        for f in sorted(gen_dir.rglob(glob)):
             if not f.is_file():
                 continue
             try:
                 raw = f.read_text(encoding="utf-8").split("\n")
             except UnicodeDecodeError:
                 continue
-            lines = [_CODE_STRIP_RE.sub(' ', l) for l in raw]
+            stripped = _COMMENT_STRIP_RE.sub(
+                lambda m: re.sub(r'[^\n]', ' ', m.group(0)),
+                "\n".join(raw))
+            if scope_re.search(stripped):
+                continue
+            lines = stripped.split("\n")
             for i, line in enumerate(lines):
-                if not _OFFSET_RE.search(line):
+                if not offset_re.search(line):
                     continue
-                ctx = " ".join(lines[i:i+3])
-                if "maxWidth" not in ctx and "maxHeight" not in ctx:
-                    hits.append(f"{f.relative_to(gen_dir)}:{i+1}")
+                ctx = " ".join(lines[i:i+5])
+                if proportion_re.search(ctx):
+                    continue
+                hits.append(f"{f.relative_to(gen_dir)}:{i+1}")
         if hits:
             errors.append({
                 "type": "absolute_positioning",
                 "count": len(hits),
                 "sites": hits[:10],
-                "detail": "代码使用 Modifier.offset() 绝对定位，应改用 Column/Row/padding 布局",
+                "detail": "代码使用绝对定位，应改用平台布局原语",
             })
 
     ok = len(errors) == 0

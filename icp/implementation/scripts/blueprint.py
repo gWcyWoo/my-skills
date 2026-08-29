@@ -89,7 +89,8 @@ def infer_width_constraint(child_frame: dict, parent_frame: dict) -> str:
         return "fill"
     pad_start = child_frame["left"] - parent_frame["left"]
     pad_end = (parent_frame["left"] + parent_frame["width"]) - (child_frame["left"] + child_frame["width"])
-    if pad_start >= 0 and pad_end >= 0 and abs(pad_start - pad_end) < 4:
+    if (pad_start >= 0 and pad_end >= 0 and abs(pad_start - pad_end) < 4
+            and child_frame["width"] > parent_frame["width"] * 0.5):
         return "fill"
     return "fixed"
 
@@ -126,7 +127,9 @@ def extract_fill(member: dict) -> dict | None:
             "gradient_type": f.get("gradient_type"),
             "stops": f.get("stops", []),
         }
-    return {"type": fill_type, "color": f.get("color")}
+    if fill_type == "image":
+        return {"type": "image", "url": f.get("url")}
+    return {"type": fill_type, "color": f.get("value")}
 
 
 def _to_resource_name(name: str, member_id: str = "") -> str:
@@ -273,6 +276,8 @@ def build_component_blueprint(component: dict, artboard_frame: dict,
         container_frame = artboard_frame
 
     content_members, bg_layers = classify_members(child_members, container_frame)
+    content_members = [m for m in content_members if m.get("visible", True)]
+    bg_layers = [m for m in bg_layers if m.get("visible", True)]
 
     texts = []
     fills = []
@@ -298,6 +303,24 @@ def build_component_blueprint(component: dict, artboard_frame: dict,
             if a:
                 assets.append(a)
 
+    covered_ids = {a["id"] for a in assets}
+    for m in members:
+        if m.get("is_system") or not m.get("visible", True):
+            continue
+        if m.get("text") or (text_ancestor_ids and m.get("id") in text_ancestor_ids):
+            continue
+        ap = m.get("asset_path")
+        if ap and m.get("id") and m["id"] not in covered_ids:
+            f = m.get("frame")
+            entry = {"id": m["id"], "name": m.get("name") or "", "file": ap}
+            if f:
+                entry["size"] = {"width": f["width"], "height": f["height"]}
+            rn = _to_resource_name(m.get("name") or "", m["id"])
+            if rn:
+                entry["resource_name"] = rn
+            assets.append(entry)
+            covered_ids.add(m["id"])
+
     for bg in bg_layers:
         fl = extract_fill(bg)
         if fl:
@@ -319,9 +342,41 @@ def build_component_blueprint(component: dict, artboard_frame: dict,
             "bottom": round((container_frame["top"] + container_frame["height"]) - max(child_bottoms), 1),
         }
 
+    children_widths = []
+    if container_frame and len(child_frames) > 1:
+        padded = [f for f in child_frames
+                  if container_frame["width"] - f["width"] >= 2
+                  and f["left"] - container_frame["left"] >= 0
+                  and (container_frame["left"] + container_frame["width"])
+                      - (f["left"] + f["width"]) >= 0]
+        if padded:
+            min_ps = min(f["left"] - container_frame["left"] for f in padded)
+            min_pe = min((container_frame["left"] + container_frame["width"])
+                         - (f["left"] + f["width"]) for f in padded)
+        else:
+            min_ps = inner_padding.get("start", 0)
+            min_pe = inner_padding.get("end", 0)
+        for m in content_members:
+            f = m.get("frame")
+            if f:
+                if abs(f["width"] - container_frame["width"]) < 2:
+                    cw = "fill"
+                else:
+                    ps = f["left"] - container_frame["left"]
+                    pe = (container_frame["left"] + container_frame["width"]) - (f["left"] + f["width"])
+                    if (abs(ps - min_ps) < 4 and abs(pe - min_pe) < 4
+                            and f["width"] > container_frame["width"] * 0.5):
+                        cw = "fill"
+                    else:
+                        cw = "fixed"
+                children_widths.append({"name": m.get("name") or "", "width": cw})
+
     spacing = compute_spacing(child_frames, layout)
 
-    container_fill = extract_fill(members[0]) if len(members) > 1 else None
+    container_fill = None
+    if (len(members) > 1 and members[0].get("visible", True)
+            and members[0].get("type") != "textLayer"):
+        container_fill = extract_fill(members[0])
 
     result = {
         "name": component["name"],
@@ -341,6 +396,8 @@ def build_component_blueprint(component: dict, artboard_frame: dict,
         result["child_fills"] = fills
     if assets:
         result["assets"] = assets
+    if children_widths:
+        result["children_widths"] = children_widths
 
     return result
 
@@ -349,10 +406,7 @@ def build_blueprint(enriched: dict, design: dict,
                     slices: list | None = None) -> dict:
     artboard = parse_artboard_meta(design)
     slice_map = {s["id"]: s for s in slices if s.get("id")} if slices else {}
-    if slice_map:
-        parent_map, text_ancestor_ids = _build_parent_map(design.get("artboard", {}))
-    else:
-        parent_map, text_ancestor_ids = {}, set()
+    parent_map, text_ancestor_ids = _build_parent_map(design.get("artboard", {}))
     components = enriched.get("components", [])
 
     root_frame = {"left": 0, "top": 0, "width": artboard["width"], "height": artboard["height"]}

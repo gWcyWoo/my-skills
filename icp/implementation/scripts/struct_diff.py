@@ -14,6 +14,7 @@ import html as html_mod
 import json
 import re
 import sys
+import unicodedata
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -70,6 +71,7 @@ def _parse_html(content: str) -> list[dict]:
     nodes = []
     for m in re.finditer(r'<([a-zA-Z][a-zA-Z0-9-]*)\b([^>]*)>([^<]*)', cleaned):
         tag, attrs, text = m.group(1), m.group(2), html_mod.unescape(m.group(3).strip())
+        tag_l = tag.lower()
         rid = ""
         desc = ""
         id_m = re.search(r'\bid=["\']([^"\']*)["\']', attrs)
@@ -78,7 +80,13 @@ def _parse_html(content: str) -> list[dict]:
         aria_m = re.search(r'\baria-label=["\']([^"\']*)["\']', attrs)
         if aria_m:
             desc = html_mod.unescape(aria_m.group(1))
-        tag_l = tag.lower()
+        if not text:
+            val_m = re.search(r'(?:^|\s)value=["\']([^"\']*)["\']', attrs)
+            if val_m:
+                text = html_mod.unescape(val_m.group(1).strip())
+            placeholder_m = re.search(r'(?:^|\s)placeholder=["\']([^"\']*)["\']', attrs)
+            if not text and placeholder_m:
+                text = html_mod.unescape(placeholder_m.group(1).strip())
         clickable = tag_l in ("button", "a") or tag_l.endswith("-button")
         if text or rid or desc or clickable:
             nodes.append({
@@ -95,24 +103,30 @@ def extract_view_texts(nodes: list[dict]) -> list[str]:
         if t:
             texts.append(t)
         desc = n.get("content_desc", "").strip()
-        if desc:
+        if desc and desc != t:
             texts.append(desc)
     return texts
 
 
 def normalize_text(t: str) -> str:
+    t = unicodedata.normalize("NFKC", t)
+    t = re.sub(r'[​‌‍﻿­⁠‎‏]', '', t)
     return re.sub(r"\s+", " ", t.strip().lower())
 
 
 def match_texts(expected: list[str], actual: list[str]) -> dict:
-    actual_normalized = {normalize_text(t) for t in actual}
+    actual_pool = {}
+    for t in actual:
+        n = normalize_text(t)
+        actual_pool[n] = actual_pool.get(n, 0) + 1
     matched = []
     missing = []
     for exp in expected:
         exp_n = normalize_text(exp)
         if not exp_n:
             continue
-        if exp_n in actual_normalized:
+        if actual_pool.get(exp_n, 0) > 0:
+            actual_pool[exp_n] -= 1
             matched.append(exp)
         else:
             missing.append(exp)
@@ -125,10 +139,14 @@ def count_interactive(nodes: list[dict]) -> int:
 
 def check_hierarchy(blueprint: dict, nodes: list[dict]) -> dict:
     """Basic hierarchy check: components appear in expected order (top-to-bottom)."""
-    component_names = [c["name"] for c in blueprint.get("components", [])]
+    comps = blueprint.get("components", [])
+    page_layout = blueprint.get("page_layout", "column")
+    sort_key = "top" if page_layout == "column" else "left"
+    comps_sorted = sorted(comps, key=lambda c: (c.get("frame") or {}).get(sort_key) or 0)
+    component_names = [c["name"] for c in comps_sorted]
     all_texts_by_component = {}
     for c in blueprint.get("components", []):
-        texts = [t["value"] for t in c.get("texts", [])]
+        texts = [t["value"] for t in c.get("texts", []) if normalize_text(t["value"])]
         if texts:
             all_texts_by_component[c["name"]] = texts
 
@@ -148,6 +166,8 @@ def check_hierarchy(blueprint: dict, nodes: list[dict]) -> dict:
     ordered_components = [c for c in component_names if c in first_positions]
     positions = [first_positions[c] for c in ordered_components]
     is_ordered = positions == sorted(positions)
+    if page_layout == "stack":
+        is_ordered = True
 
     return {
         "components_with_text": list(first_positions.keys()),
@@ -158,22 +178,24 @@ def check_hierarchy(blueprint: dict, nodes: list[dict]) -> dict:
 
 def _match_textless_components(blueprint: dict, nodes: list[dict]) -> list[str]:
     """Match components with no texts by resource-id or content-desc in the view tree."""
-    view_ids = set()
+    view_id_segments = set()
     view_descs = set()
     for n in nodes:
         rid = n.get("resource_id", "").strip()
         if rid:
-            view_ids.add(rid.lower())
+            seg = rid.rsplit("/", 1)[-1].rsplit(":", 1)[-1]
+            view_id_segments.add(seg.lower())
         desc = n.get("content_desc", "").strip()
         if desc:
             view_descs.add(desc.lower())
 
     found = []
     for c in blueprint.get("components", []):
-        if c.get("texts"):
+        texts = [t["value"] for t in c.get("texts", []) if normalize_text(t["value"])]
+        if texts:
             continue
         name = c["name"].lower()
-        if any(name in rid for rid in view_ids) or any(name in desc for desc in view_descs):
+        if name in view_id_segments or any(name in d for d in view_descs):
             found.append(c["name"])
     return found
 
@@ -182,7 +204,8 @@ def build_diff(blueprint: dict, view_tree_nodes: list[dict]) -> dict:
     bp_texts = []
     for c in blueprint.get("components", []):
         for t in c.get("texts", []):
-            bp_texts.append(t["value"])
+            if normalize_text(t["value"]):
+                bp_texts.append(t["value"])
 
     actual_texts = extract_view_texts(view_tree_nodes)
 
@@ -260,13 +283,18 @@ def main():
     expected = m["struct_texts_expected"]
     matched = m["struct_texts_matched"]
     coverage = matched / expected if expected > 0 else 1.0
-    ok = coverage >= args.threshold and m["struct_hierarchy_ok"]
+    comp_expected = m["struct_components_expected"]
+    comp_matched = m["struct_components_matched"]
+    comp_coverage = comp_matched / comp_expected if comp_expected > 0 else 1.0
+    ok = (coverage >= args.threshold and m["struct_hierarchy_ok"]
+          and (expected > 0 or comp_matched > 0))
 
     diff["gate"] = {
         "ok": ok,
         "coverage": round(coverage, 3),
         "threshold": args.threshold,
         "hierarchy_ok": m["struct_hierarchy_ok"],
+        "component_coverage": round(comp_coverage, 3),
     }
     with open(args.output, "w") as f:
         json.dump(diff, f, indent=2, ensure_ascii=False)

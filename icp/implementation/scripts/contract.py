@@ -14,41 +14,17 @@ import sys
 from pathlib import Path
 
 
-def extract_interactions(binding: dict) -> list[dict]:
-    interactions = []
-    for api in binding.get("apis", []):
-        interactions.append({
-            "type": "api_call",
-            "trigger": api.get("trigger", ""),
-            "endpoint": api.get("endpoint", ""),
-        })
-    for comp in binding.get("components", []):
-        params = comp.get("params", [])
-        if "navController" in params:
-            interactions.append({
-                "type": "navigation",
-                "component": comp["component_name"],
-                "trigger": "screen_entry",
-            })
-        for p in params:
-            if p.startswith("on") and p[2:3].isupper():
-                interactions.append({
-                    "type": "callback",
-                    "component": comp["component_name"],
-                    "param": p,
-                    "trigger": p,
-                })
-    return interactions
-
-
 def build_contract(binding: dict) -> dict:
     platform = binding.get("platform", {})
     apis = binding.get("apis", [])
+    for api in apis:
+        if api.get("resolved") is None:
+            api["mock"] = True
     components = binding.get("components", [])
 
     type_dist = {}
     for c in components:
-        ct = c.get("component_type", "unknown")
+        ct = c.get("component_type", "new")
         type_dist[ct] = type_dist.get(ct, 0) + 1
 
     component_specs = []
@@ -62,11 +38,7 @@ def build_contract(binding: dict) -> dict:
             "affected": c.get("affected"),
         })
 
-    raw_interactions = binding.get("interactions")
-    if isinstance(raw_interactions, list) and raw_interactions:
-        interactions = raw_interactions
-    else:
-        interactions = extract_interactions(binding)
+    interactions = binding.get("interactions", [])
 
     contract = {
         "platform": platform,
@@ -75,6 +47,8 @@ def build_contract(binding: dict) -> dict:
         "interactions": interactions,
         "metrics": {
             "contract_apis": len(apis),
+            "contract_apis_resolved": sum(1 for a in apis if a.get("resolved") is not None),
+            "contract_apis_mock": sum(1 for a in apis if a.get("resolved") is None),
             "contract_interactions": len(interactions),
             "contract_components": len(components),
             "contract_component_types": type_dist,

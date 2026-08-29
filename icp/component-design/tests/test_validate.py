@@ -236,14 +236,51 @@ class TestCheckBinding(unittest.TestCase):
         rc, out = run("check-binding", "--component-spec", self.spec, "--binding", binding)
         self.assertTrue(out["ok"])
 
+    def test_unverified_builtin_warning(self):
+        icp_dir = self.tmp / ".claude" / "icp" / "test"
+        icp_dir.mkdir(parents=True)
+        binding = write_json(icp_dir, "binding.json", {
+            "components": [
+                {"group_name": "导航栏", "component_name": "NoSuchWidget",
+                 "component_type": "platform_builtin", "source_path": None,
+                 "params": [], "affected": None},
+                {"group_name": "表单区", "component_name": "F",
+                 "component_type": "new", "source_path": None, "params": [], "affected": None},
+                {"group_name": "底部按钮", "component_name": "B",
+                 "component_type": "new", "source_path": None, "params": [], "affected": None},
+            ]
+        })
+        rc, out = run("check-binding", "--component-spec", self.spec, "--binding", binding)
+        wtypes = {w["type"] for w in out.get("warnings", [])}
+        self.assertIn("unverified_builtin", wtypes)
+
+
+    def test_inconsistent_type_error(self):
+        binding = write_json(self.tmp, "b.json", {
+            "components": [
+                {"group_name": "导航栏", "component_name": "SharedWidget",
+                 "component_type": "new", "source_path": None,
+                 "params": [], "affected": None},
+                {"group_name": "表单区", "component_name": "SharedWidget",
+                 "component_type": "platform_builtin", "source_path": None,
+                 "params": [], "affected": None},
+                {"group_name": "底部按钮", "component_name": "B",
+                 "component_type": "new", "source_path": None, "params": [], "affected": None},
+            ]
+        })
+        rc, out = run("check-binding", "--component-spec", self.spec, "--binding", binding, expect=1)
+        types = {e["type"] for e in out["errors"]}
+        self.assertIn("inconsistent_type", types)
+
 
 class TestCheckInteractions(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
+        self.spec = make_spec(self.tmp)
 
     def test_good_interactions_pass(self):
         binding = make_good_binding(self.tmp)
-        rc, out = run("check-interactions", "--binding", binding)
+        rc, out = run("check-interactions", "--binding", binding, "--component-spec", self.spec)
         self.assertTrue(out["ok"])
 
     def test_incomplete_interaction(self):
@@ -257,7 +294,7 @@ class TestCheckInteractions(unittest.TestCase):
                  "behavior": "show", "result": "done", "triggers": []},
             ],
         })
-        rc, out = run("check-interactions", "--binding", binding, expect=1)
+        rc, out = run("check-interactions", "--binding", binding, "--component-spec", self.spec, expect=1)
         err = out["errors"][0]
         self.assertEqual(err["type"], "incomplete_interaction")
         self.assertEqual(err["missing_field"], "state")
@@ -274,7 +311,7 @@ class TestCheckInteractions(unittest.TestCase):
                  "api": None, "triggers": []},
             ],
         })
-        rc, out = run("check-interactions", "--binding", binding, expect=1)
+        rc, out = run("check-interactions", "--binding", binding, "--component-spec", self.spec, expect=1)
         types = {e["type"] for e in out["errors"]}
         self.assertIn("missing_api", types)
 
@@ -290,7 +327,7 @@ class TestCheckInteractions(unittest.TestCase):
                  "api": "/fake", "triggers": []},
             ],
         })
-        rc, out = run("check-interactions", "--binding", binding, expect=1)
+        rc, out = run("check-interactions", "--binding", binding, "--component-spec", self.spec, expect=1)
         types = {e["type"] for e in out["errors"]}
         self.assertIn("unknown_api", types)
 
@@ -306,7 +343,7 @@ class TestCheckInteractions(unittest.TestCase):
                  "api": None, "triggers": ["ix_99"]},
             ],
         })
-        rc, out = run("check-interactions", "--binding", binding, expect=1)
+        rc, out = run("check-interactions", "--binding", binding, "--component-spec", self.spec, expect=1)
         types = {e["type"] for e in out["errors"]}
         self.assertIn("broken_trigger", types)
 
@@ -322,7 +359,7 @@ class TestCheckInteractions(unittest.TestCase):
                  "api": None, "triggers": []},
             ],
         })
-        rc, out = run("check-interactions", "--binding", binding, expect=1)
+        rc, out = run("check-interactions", "--binding", binding, "--component-spec", self.spec, expect=1)
         types = {e["type"] for e in out["errors"]}
         self.assertIn("unknown_component", types)
 
@@ -342,14 +379,14 @@ class TestCheckInteractions(unittest.TestCase):
                  "api": None, "triggers": []},
             ],
         })
-        rc, out = run("check-interactions", "--binding", binding)
+        rc, out = run("check-interactions", "--binding", binding, "--component-spec", self.spec)
         self.assertTrue(out["ok"])
         warns = {w["type"] for w in out.get("warnings", [])}
         self.assertIn("idle_component", warns)
 
     def test_no_orphan_warning(self):
         binding = make_good_binding(self.tmp)
-        rc, out = run("check-interactions", "--binding", binding)
+        rc, out = run("check-interactions", "--binding", binding, "--component-spec", self.spec)
         warn_types = {w["type"] for w in out.get("warnings", [])}
         self.assertNotIn("orphan_interaction", warn_types)
 
@@ -367,7 +404,7 @@ class TestCheckInteractions(unittest.TestCase):
                  "behavior": "b2", "result": "r2", "api": None, "triggers": []},
             ],
         })
-        rc, out = run("check-interactions", "--binding", binding, expect=1)
+        rc, out = run("check-interactions", "--binding", binding, "--component-spec", self.spec, expect=1)
         types = {e["type"] for e in out["errors"]}
         self.assertIn("duplicate_id", types)
 
@@ -382,7 +419,7 @@ class TestCheckInteractions(unittest.TestCase):
                  "behavior": "b", "result": "r", "api": None, "triggers": []},
             ],
         })
-        rc, out = run("check-interactions", "--binding", binding, expect=1)
+        rc, out = run("check-interactions", "--binding", binding, "--component-spec", self.spec, expect=1)
         types = {e["type"] for e in out["errors"]}
         self.assertIn("missing_id", types)
 
@@ -401,7 +438,7 @@ class TestCheckInteractions(unittest.TestCase):
                  "behavior": "b2", "result": "r2", "api": None, "triggers": []},
             ],
         })
-        rc, out = run("check-interactions", "--binding", binding)
+        rc, out = run("check-interactions", "--binding", binding, "--component-spec", self.spec)
         self.assertTrue(out["ok"])
 
     def test_missing_component_field(self):
@@ -416,7 +453,7 @@ class TestCheckInteractions(unittest.TestCase):
                  "api": None, "triggers": []},
             ],
         })
-        rc, out = run("check-interactions", "--binding", binding, expect=1)
+        rc, out = run("check-interactions", "--binding", binding, "--component-spec", self.spec, expect=1)
         errs = [e for e in out["errors"] if e.get("missing_field") == "component"]
         self.assertEqual(len(errs), 1)
 

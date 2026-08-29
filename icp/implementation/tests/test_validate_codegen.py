@@ -27,6 +27,27 @@ class TestExtractStringLiterals(unittest.TestCase):
         self.assertIn("target text", literals)
 
 
+    def test_triple_quoted_content_extracted(self):
+        """Text inside triple-quoted raw strings must be extractable."""
+        source = 'val terms = """\n用户协议内容\n"""'
+        literals = _extract_string_literals(source)
+        found = any("用户协议内容" in s for s in literals)
+        self.assertTrue(found, f"raw string content not found in {literals}")
+
+    def test_dart_single_quote_with_embedded_double(self):
+        """Dart single-quoted string containing double quotes must not shred."""
+        source = "final a = '他说\"你好\"了';"
+        literals = _extract_string_literals(source, platform="flutter")
+        self.assertIn('他说"你好"了', literals)
+        self.assertNotIn('他说了', literals)
+
+    def test_dart_triple_single_quoted_extracted(self):
+        source = "final s = '''多行\n内容''';"
+        literals = _extract_string_literals(source, platform="flutter")
+        found = any("多行" in s for s in literals)
+        self.assertTrue(found)
+
+
 class TestAbsolutePositioning(unittest.TestCase):
 
     def _run_check(self, kt_source, filename="Screen.kt"):
@@ -139,6 +160,58 @@ class TestAbsolutePositioning(unittest.TestCase):
         self.assertEqual(len(errs), 1)
 
 
+class TestFlutterPositioning(unittest.TestCase):
+
+    def _run_flutter(self, dart_source):
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            bp = td / "bp.json"
+            bp.write_text(json.dumps({"components": []}))
+            ct = td / "ct.json"
+            ct.write_text(json.dumps({"apis": []}))
+            gen = td / "gen"
+            gen.mkdir()
+            (gen / "screen.dart").write_text(dart_source)
+            args = argparse.Namespace(
+                blueprint=str(bp), contract=str(ct),
+                gen_dir=str(gen), platform="flutter",
+            )
+            buf = io.StringIO()
+            try:
+                with contextlib.redirect_stdout(buf):
+                    cmd_check_codegen(args)
+            except SystemExit:
+                pass
+            return json.loads(buf.getvalue())
+
+    def test_positioned_near_mediaquery_still_flagged(self):
+        """MediaQuery for keyboard insets must not exempt hardcoded Positioned."""
+        src = (
+            "Widget build(BuildContext context) {\n"
+            "  final pad = MediaQuery.of(context).padding.top;\n"
+            "  return Stack(children: [\n"
+            "    Positioned(left: 12, top: 40, child: Text('x')),\n"
+            "  ]);\n"
+            "}\n"
+        )
+        result = self._run_flutter(src)
+        errs = [e for e in result["errors"] if e["type"] == "absolute_positioning"]
+        self.assertEqual(len(errs), 1)
+
+    def test_positioned_with_constraints_exempted(self):
+        """constraints.maxWidth on the offset line exempts proportional Positioned."""
+        src = (
+            "Widget build(BuildContext context) {\n"
+            "  return Stack(children: [\n"
+            "    Positioned(left: constraints.maxWidth * 0.1, child: Text('x')),\n"
+            "  ]);\n"
+            "}\n"
+        )
+        result = self._run_flutter(src)
+        errs = [e for e in result["errors"] if e["type"] == "absolute_positioning"]
+        self.assertEqual(len(errs), 0)
+
+
 class TestAssetCoverage(unittest.TestCase):
 
     def _run_check(self, kt_source, blueprint_components, filename="Screen.kt"):
@@ -218,6 +291,47 @@ class TestAssetCoverage(unittest.TestCase):
             'Text(style = TextStyle(lineHeight = 20.sp))\n', comps)
         errs = [e for e in result["errors"] if e["type"] == "missing_asset_ref"]
         self.assertEqual(len(errs), 1)
+
+
+class TestTextCoverageMultiSpan(unittest.TestCase):
+
+    def _run_check(self, dart_source, blueprint_texts):
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            bp = td / "bp.json"
+            bp.write_text(json.dumps({"components": [
+                {"name": "terms", "texts": [{"value": t} for t in blueprint_texts]}
+            ]}))
+            ct = td / "ct.json"
+            ct.write_text(json.dumps({"apis": []}))
+            gen = td / "gen"
+            gen.mkdir()
+            (gen / "screen.dart").write_text(dart_source)
+            args = argparse.Namespace(
+                blueprint=str(bp), contract=str(ct),
+                gen_dir=str(gen), platform="flutter",
+            )
+            buf = io.StringIO()
+            try:
+                with contextlib.redirect_stdout(buf):
+                    cmd_check_codegen(args)
+            except SystemExit:
+                pass
+            return json.loads(buf.getvalue())
+
+    def test_multi_span_text_still_matched(self):
+        """A long blueprint text split into several TextSpan must still be covered."""
+        src = (
+            "RichText(text: TextSpan(children: [\n"
+            "  TextSpan(text: '已阅读并同意'),\n"
+            "  TextSpan(text: '《用户服务协议》'),\n"
+            "  TextSpan(text: '和'),\n"
+            "  TextSpan(text: '《隐私政策》'),\n"
+            "]))\n"
+        )
+        result = self._run_check(src, ["已阅读并同意《用户服务协议》和《隐私政策》"])
+        errs = [e for e in result["errors"] if e["type"] == "low_text_coverage"]
+        self.assertEqual(len(errs), 0)
 
 
 if __name__ == "__main__":

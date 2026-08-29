@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-def read_json(path: Path) -> dict | None:
+def read_json(path: Path) -> dict | list | None:
     if not path.exists():
         return None
     with open(path) as f:
@@ -60,7 +60,11 @@ def extract_step6(work_dir: Path) -> dict:
     data = read_json(work_dir / "struct-diff.json")
     if not data:
         return {"status": "missing"}
-    return data.get("metrics", {})
+    result = data.get("metrics", {})
+    gate = data.get("gate")
+    if gate:
+        result["gate"] = gate
+    return result
 
 
 def extract_step7(work_dir: Path) -> dict:
@@ -68,22 +72,24 @@ def extract_step7(work_dir: Path) -> dict:
     if not data:
         return {"status": "not_run"}
     return {
-        "visual_pass": data.get("visual_pass"),
-        "visual_issues": data.get("visual_issues", []),
+        "visual_pass": data.get("pass"),
+        "visual_issues": data.get("issues_remaining", []),
     }
 
 
 def extract_step8(work_dir: Path) -> dict:
     data = read_json(work_dir / "attribution-ledger.json")
+    if data is None:
+        return {"status": "not_run"}
     if not data:
         return {"status": "no_fixes_needed"}
-    entries = data
     breakdown = {}
-    for e in entries:
+    for e in data:
         attr = e.get("attribution", "unknown")
         breakdown[attr] = breakdown.get(attr, 0) + 1
+    unique_rounds = len(set(e.get("round", 0) for e in data))
     return {
-        "total_rounds": len(entries),
+        "total_rounds": unique_rounds,
         "attributions": breakdown,
     }
 
@@ -92,11 +98,25 @@ def extract_step9(work_dir: Path) -> dict:
     data = read_json(work_dir / "behavior-result.json")
     if not data:
         return {"status": "not_run"}
-    return {
-        "behavior_total": data.get("behavior_total", 0),
-        "behavior_passed": data.get("behavior_passed", 0),
-        "behavior_failed": data.get("behavior_failed", []),
+    pos = data.get("positive") or {}
+    neg = data.get("negative") or {}
+    qc = data.get("quality_check") or {}
+    behavior_total = data.get("behavior_total", 0)
+    positive_total = pos.get("total", 0)
+    contract = read_json(work_dir / "api-contract.json")
+    contract_interactions = contract.get("metrics", {}).get("contract_interactions", 0) if contract else 0
+    mock_violations = data.get("mock_violations") or []
+    result = {
+        "behavior_total": behavior_total,
+        "positive_total": positive_total,
+        "positive_passed": pos.get("passed", 0),
+        "negative_total": neg.get("total", 0),
+        "negative_passed": neg.get("passed", 0),
+        "mock_violations": len(mock_violations),
+        "quality_rewrites": qc.get("rewrites", 0),
     }
+    result["interaction_gap"] = max(0, contract_interactions - positive_total) if contract_interactions > 0 else 0
+    return result
 
 
 def build_metrics(work_dir: Path, title: str, platform: str) -> dict:

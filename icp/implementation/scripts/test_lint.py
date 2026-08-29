@@ -127,8 +127,7 @@ def _lang_config(lang):
                 r"|@Test\s*\(\s*expected\s*=",
             ),
             snapshot_assert=re.compile(
-                r"\.captureToImage\s*\("
-                r"|\.assertAgainstGolden\s*\("
+                r"\.assertAgainstGolden\s*\("
                 r"|\.compareAgainstBaseline\s*\(",
             ),
             block_delim="brace",
@@ -203,7 +202,7 @@ def _lang_config(lang):
         return dict(
             test_func=re.compile(r"\b(?:test|testWidgets)\s*\("),
             assert_any=[
-                re.compile(r"\bexpect\s*\("),
+                re.compile(r"\bexpect(?:Later)?\s*\("),
             ],
             device_action=re.compile(
                 r"\btester\.(?:tap|enterText|drag|fling|longPress"
@@ -554,6 +553,7 @@ _JS_CHAINED = re.compile(
 # in every supported language.  Everything else (constructors, literals, enum
 # refs, collection builders) is treated as test-authored data.
 _SUT_CALL = re.compile(r'^[a-z_]\w*\.')
+_BARE_LITERAL = re.compile(r'^(?:\d+\.?\d*[fFdDlL]?|true|false|null|"[^"]*"|\'[^\']*\')$')
 
 # assertThat(actual).isEqualTo(expected) — AssertJ / Truth / Kotest
 _ASSERTTHAT_CHAINED = re.compile(
@@ -612,6 +612,13 @@ def _is_annotation_block(lines_slice):
     return all(l.lstrip().startswith('//') or _ANNOTATION_LINE.match(l) for l in lines_slice)
 
 
+def _strip_line_for_braces(line):
+    """Strip string literals and line comments so brace counting is structural."""
+    line = _STRIP_STRINGS_RE.sub('""', line)
+    line = re.sub(r'//.*$', '', line)
+    return line
+
+
 def _find_test_blocks_brace(lines, test_func_re):
     blocks = []
     current_start = None
@@ -630,9 +637,10 @@ def _find_test_blocks_brace(lines, test_func_re):
                 brace_depth = 0
                 seen_brace = False
         if current_start is not None:
-            if "{" in line:
+            cleaned = _strip_line_for_braces(line)
+            if "{" in cleaned:
                 seen_brace = True
-            brace_depth += line.count("{") - line.count("}")
+            brace_depth += cleaned.count("{") - cleaned.count("}")
             if seen_brace and brace_depth <= 0:
                 blocks.append((current_start, i))
                 current_start = None
@@ -671,6 +679,16 @@ _UI_SETUP_RE = re.compile(
     re.I,
 )
 _UI_SETUP_JS_RE = re.compile(r"\brender\s*\(", re.I)
+_STRIP_STRINGS_RE = re.compile(r'`(?:[^`\\]|\\.)*`|"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\'')
+_BRACE_STRIP_RE = re.compile(
+    r'"""[\s\S]*?"""'
+    r"|'''[\s\S]*?'''"
+    r'|`(?:[^`\\]|\\[\s\S])*`'
+    r'|"(?:[^"\\\n]|\\.)*"'
+    r"|'(?:[^'\\\n]|\\.)*'"
+    r'|//[^\n]*'
+    r'|/\*[\s\S]*?\*/'
+)
 
 _VALID_PATTERNS = {"ui-interaction", "value-assertion", "error-handling", "snapshot"}
 
@@ -709,9 +727,20 @@ def _verify_pattern(pattern, block_text, cfg, has_literal_eq, lang=None):
         return None
 
     if pattern == "error-handling":
-        if not cfg["error_assert"].search(block_text):
-            return "no assertThrows/assertFailsWith/shouldThrow call"
-        return None
+        if cfg["error_assert"].search(block_text):
+            return None
+        uq = cfg.get("ui_state_query")
+        has_ui = uq and _UI_SETUP_RE.search(block_text) and uq.search(block_text)
+        if lang in ("js", "ts"):
+            has_ui = has_ui or (uq and _UI_SETUP_JS_RE.search(block_text) and uq.search(block_text))
+        token_text = "\n".join(
+            re.sub(r'//.*', '', _STRIP_STRINGS_RE.sub('', l))
+            for l in block_text.split("\n"))
+        has_error_token = bool(re.search(
+            r'\w*(?:Error|Exception)\b|\bfail\w*\b|\berror\w*\b|[Tt]hrows?\b', token_text))
+        if has_ui and has_error_token:
+            return None
+        return "no assertThrows/assertFailsWith or (UI setup + UI state assertion + error/failure token)"
 
     if pattern == "snapshot":
         snap = cfg.get("snapshot_assert")
@@ -739,7 +768,16 @@ def check_file(path, lang=None):
     if cfg["block_delim"] == "indent":
         blocks = _find_test_blocks_indent(lines, cfg["test_func"])
     else:
-        blocks = _find_test_blocks_brace(lines, cfg["test_func"])
+        brace_text = _BRACE_STRIP_RE.sub(
+            lambda m: re.sub(r'[^\n]', ' ', m.group(0)), text)
+        brace_lines = brace_text.splitlines()
+        blocks = _find_test_blocks_brace(brace_lines, cfg["test_func"])
+
+    _in_block = set()
+    for s, e in blocks:
+        _in_block.update(range(s, e + 1))
+    outer = "\n".join(l for n, l in enumerate(lines, 1) if n not in _in_block)
+    file_mock_vars = {m.group(1) for m in cfg["mock_decl"].finditer(outer)}
 
     prev_end = 0
     for start, end in blocks:
@@ -769,22 +807,25 @@ def check_file(path, lang=None):
                 has_literal_eq = True
         eq_open = cfg["assert_eq_open"]
         for m in eq_open.finditer(block_text):
+            first_arg = _extract_arg(block_text, m.end())
+            d2, j2 = 1, m.end()
+            second_arg = None
+            while j2 < len(block_text) and d2 > 0:
+                if block_text[j2] == "(": d2 += 1
+                elif block_text[j2] == ")": d2 -= 1
+                elif block_text[j2] == "," and d2 == 1:
+                    second_arg = _extract_arg(block_text, j2 + 1)
+                    break
+                j2 += 1
             if cfg["expected_pos"] == "first":
-                val = _extract_arg(block_text, m.end())
+                val, other = first_arg, second_arg
             else:
-                d, j = 1, m.end()
-                while j < len(block_text) and d > 0:
-                    if block_text[j] == "(": d += 1
-                    elif block_text[j] == ")": d -= 1
-                    elif block_text[j] == "," and d == 1:
-                        val = _extract_arg(block_text, j + 1)
-                        break
-                    j += 1
-                else:
+                if second_arg is None:
                     continue
+                val, other = second_arg, first_arg
             if not val:
                 continue
-            if not _SUT_CALL.match(val):
+            if not _SUT_CALL.match(val) and not _BARE_LITERAL.match(other or ""):
                 has_literal_eq = True
 
         _ui_re = cfg.get("ui_assert")
@@ -793,7 +834,7 @@ def check_file(path, lang=None):
 
         # Rule 3: asserting on mock variable
         mock_decl = cfg["mock_decl"]
-        mock_vars = {m.group(1) for m in mock_decl.finditer(block_text)}
+        mock_vars = {m.group(1) for m in mock_decl.finditer(block_text)} | file_mock_vars
         for var in mock_vars:
             for p in cfg["assert_any"]:
                 for m in p.finditer(block_text):
@@ -935,9 +976,10 @@ def check_file(path, lang=None):
         # Skip for blocks declaring ui-interaction — Rule G handles it
         _pre = max(prev_end, start - 4)
         search_text = "\n".join(lines[_pre : end])
+        ann_text = "\n".join(_STRIP_STRINGS_RE.sub('', l) for l in search_text.split("\n"))
         _is_ui_annotated = bool(re.search(
-            r'@test-pattern:\s*ui-interaction\b',
-            search_text,
+            r'(?://|#)\s*@test-pattern:\s*(?:ui-interaction|snapshot|error-handling)\b',
+            ann_text,
         ))
         da = cfg.get("device_action")
         uq = cfg.get("ui_state_query")
@@ -965,7 +1007,7 @@ def check_file(path, lang=None):
         # @test-pattern: <name>, then the script verifies structurally
         # Look in block + up to 3 lines before (annotation may precede @Test)
         pattern_m = re.search(
-            r"(?://|#)\s*@test-pattern:\s*(\S+)", search_text,
+            r"(?://|#)\s*@test-pattern:\s*(\S+)", ann_text,
         )
         if not pattern_m:
             violations.append(Violation(
