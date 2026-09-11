@@ -76,7 +76,8 @@ def resolve_cookie(cli_cookie):
     if env_v:
         return env_v
     return _cookie_from_dotenv(
-        os.path.expanduser("~/.codex/mcp/lanhu-mcp/.env"))
+        os.path.expanduser("~/.codex/mcp/lanhu-mcp/.env")
+    )
 
 
 # ---------------------------------------------------------------- HTTP

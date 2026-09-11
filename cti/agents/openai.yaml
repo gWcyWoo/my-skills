@@ -1,0 +1,4 @@
+interface:
+  display_name: "CTI · Code to Interactions"
+  short_description: "按表格标题定位页面代码，递归整理行为和数据交互并写回对应描述"
+  default_prompt: "使用 $cti，根据我提供的表格链接和代码目录，匹配标题、递归提取页面交互并写回对应交互描述。"

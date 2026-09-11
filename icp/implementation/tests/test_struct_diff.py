@@ -1,5 +1,7 @@
 """Tests for struct_diff.py — text matching and hierarchy checking."""
+import json
 import os
+import subprocess
 import tempfile
 import unittest
 import sys
@@ -14,6 +16,7 @@ from struct_diff import (
     count_interactive,
     check_hierarchy,
     build_diff,
+    _parse_html,
 )
 
 SAMPLE_VIEW_TREE_XML = """\
@@ -35,6 +38,15 @@ class TestNormalizeText(unittest.TestCase):
 
     def test_collapse_whitespace(self):
         self.assertEqual(normalize_text("a\n  b\t c"), "a b c")
+
+    def test_nfkc_fullwidth(self):
+        self.assertEqual(normalize_text("％１００"), "%100")
+
+    def test_strip_zero_width(self):
+        self.assertEqual(normalize_text("登​录"), "登录")
+
+    def test_strip_word_joiner(self):
+        self.assertEqual(normalize_text("a⁠b"), "ab")
 
 
 class TestMatchTexts(unittest.TestCase):
@@ -85,6 +97,24 @@ class TestParseViewTree(unittest.TestCase):
     def test_count_interactive(self):
         nodes = parse_view_tree(Path(self.tmp.name))
         self.assertEqual(count_interactive(nodes), 1)
+
+
+class TestExtractViewTexts(unittest.TestCase):
+    def test_duplicate_text_content_desc_not_doubled(self):
+        """Same string in text and content_desc must produce one pool entry, not two."""
+        nodes = [
+            {"text": "提交", "content_desc": "提交", "clickable": True},
+        ]
+        texts = extract_view_texts(nodes)
+        self.assertEqual(texts.count("提交"), 1)
+
+    def test_different_text_content_desc_both_emitted(self):
+        nodes = [
+            {"text": "Submit", "content_desc": "提交按钮", "clickable": True},
+        ]
+        texts = extract_view_texts(nodes)
+        self.assertIn("Submit", texts)
+        self.assertIn("提交按钮", texts)
 
 
 class TestCheckHierarchy(unittest.TestCase):
@@ -161,6 +191,102 @@ class TestBuildDiff(unittest.TestCase):
         diff = build_diff(blueprint, nodes)
         self.assertIn("客服浮动按钮", diff["components"]["found_by_id"])
         self.assertEqual(diff["components"]["missing"], [])
+
+    def test_textless_component_substring_content_desc(self):
+        """Chinese component name matches as substring in content_desc."""
+        blueprint = {
+            "components": [
+                {"name": "关闭", "role": "action", "texts": []},
+            ]
+        }
+        nodes = [
+            {"text": "", "content_desc": "关闭按钮", "resource_id": "", "clickable": True},
+        ]
+        diff = build_diff(blueprint, nodes)
+        self.assertIn("关闭", diff["components"]["found_by_id"])
+
+    def test_gate_low_component_coverage_still_passes(self):
+        """comp_coverage is informational, not a gate condition."""
+        blueprint = {
+            "page_layout": "column",
+            "components": [
+                {"name": "title", "role": "content", "texts": [{"value": "Hello"}]},
+                {"name": "icon_a", "role": "content", "texts": []},
+                {"name": "icon_b", "role": "content", "texts": []},
+                {"name": "icon_c", "role": "content", "texts": []},
+            ],
+        }
+        vt = '<?xml version="1.0"?><hierarchy><node class="x" text="Hello" bounds="[0,0][1,1]" clickable="false" resource-id="" content-desc="" /></hierarchy>'
+        gate = self._run_gate(blueprint, vt)
+        self.assertTrue(gate["ok"])
+        self.assertLess(gate["component_coverage"], 0.5)
+
+    def _run_gate(self, blueprint, view_tree_xml):
+        with tempfile.TemporaryDirectory() as td:
+            bp_path = os.path.join(td, "bp.json")
+            vt_path = os.path.join(td, "vt.xml")
+            out_path = os.path.join(td, "out.json")
+            with open(bp_path, "w") as f:
+                json.dump(blueprint, f)
+            with open(vt_path, "w") as f:
+                f.write(view_tree_xml)
+            script = str(Path(__file__).resolve().parent.parent / "scripts" / "struct_diff.py")
+            subprocess.run(
+                [sys.executable, script, "--view-tree", vt_path,
+                 "--blueprint", bp_path, "--output", out_path],
+                check=False, capture_output=True)
+            with open(out_path) as f:
+                return json.load(f)["gate"]
+
+    def test_match_texts_multiset(self):
+        result = match_texts(["OK", "OK", "OK"], ["OK"])
+        self.assertEqual(len(result["matched"]), 1)
+        self.assertEqual(len(result["missing"]), 2)
+
+    def test_zero_width_text_not_counted_as_expected(self):
+        """Zero-width-only texts must not inflate expected count."""
+        blueprint = {
+            "page_layout": "column",
+            "components": [
+                {"name": "a", "role": "content", "texts": [
+                    {"value": "Hello"},
+                    {"value": "​"},
+                ]},
+            ],
+        }
+        nodes = [{"text": "Hello", "resource_id": "", "content_desc": "", "clickable": False}]
+        diff = build_diff(blueprint, nodes)
+        self.assertEqual(diff["texts"]["expected"], 1)
+        self.assertEqual(diff["texts"]["matched"], 1)
+        self.assertEqual(diff["texts"]["missing"], [])
+
+    def test_zero_width_text_excluded_from_hierarchy(self):
+        """Zero-width texts must not produce phantom hierarchy matches."""
+        result = check_hierarchy(
+            {"page_layout": "column", "components": [
+                {"name": "top", "frame": {"top": 0, "left": 0},
+                 "texts": [{"value": "​"}]},
+                {"name": "bottom", "frame": {"top": 100, "left": 0},
+                 "texts": [{"value": "Real"}]},
+            ]},
+            [{"text": "​", "resource_id": "", "content_desc": "", "clickable": False},
+             {"text": "Real", "resource_id": "", "content_desc": "", "clickable": False}],
+        )
+        self.assertNotIn("top", result["components_with_text"])
+
+
+class TestParseHtml(unittest.TestCase):
+    def test_data_value_not_captured(self):
+        """data-value= must not be extracted as visible text."""
+        nodes = _parse_html('<div class="sel" data-value="已完成"><span class="arrow"></span></div>')
+        texts = [n["text"] for n in nodes if n["text"]]
+        self.assertNotIn("已完成", texts)
+
+    def test_real_value_captured(self):
+        """Standalone value= on input should be extracted."""
+        nodes = _parse_html('<input value="已完成">')
+        texts = [n["text"] for n in nodes if n["text"]]
+        self.assertIn("已完成", texts)
 
 
 if __name__ == "__main__":

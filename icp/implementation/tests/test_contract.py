@@ -7,44 +7,9 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
-from contract import extract_interactions, build_contract
+from contract import build_contract
 
 SCRIPT = str(Path(__file__).resolve().parent.parent / "scripts" / "contract.py")
-
-
-class TestExtractInteractions(unittest.TestCase):
-    def test_api_call(self):
-        binding = {"apis": [{"endpoint": "/pay", "trigger": "click button"}], "components": []}
-        result = extract_interactions(binding)
-        self.assertEqual(len(result), 1)
-        self.assertEqual(result[0]["type"], "api_call")
-        self.assertEqual(result[0]["endpoint"], "/pay")
-
-    def test_navigation(self):
-        binding = {
-            "apis": [],
-            "components": [{"component_name": "HomeScreen", "params": ["navController"]}],
-        }
-        result = extract_interactions(binding)
-        self.assertTrue(any(i["type"] == "navigation" for i in result))
-
-    def test_callback(self):
-        binding = {
-            "apis": [],
-            "components": [{"component_name": "PayButton", "params": ["onClick", "enabled"]}],
-        }
-        result = extract_interactions(binding)
-        callbacks = [i for i in result if i["type"] == "callback"]
-        self.assertEqual(len(callbacks), 1)
-        self.assertEqual(callbacks[0]["param"], "onClick")
-
-    def test_no_callback_for_lowercase(self):
-        binding = {
-            "apis": [],
-            "components": [{"component_name": "Card", "params": ["amount", "title"]}],
-        }
-        result = extract_interactions(binding)
-        self.assertEqual(len(result), 0)
 
 
 class TestBuildContract(unittest.TestCase):
@@ -58,21 +23,23 @@ class TestBuildContract(unittest.TestCase):
                 {"component_name": "SubmitButton", "component_type": "new", "group_name": "submit",
                  "params": ["onClick", "enabled"], "source_path": None, "affected": None},
             ],
+            "interactions": [{"id": "ix_1", "type": "data", "trigger": "submit"}],
         }
         contract = build_contract(binding)
         self.assertEqual(contract["metrics"]["contract_apis"], 1)
         self.assertEqual(contract["metrics"]["contract_components"], 2)
-        self.assertGreaterEqual(contract["metrics"]["contract_interactions"], 2)
+        self.assertEqual(contract["metrics"]["contract_interactions"], 1)
         self.assertEqual(contract["metrics"]["contract_component_types"]["new"], 2)
 
     def test_empty(self):
-        contract = build_contract({"platform": {}, "apis": [], "components": []})
+        contract = build_contract({"platform": {}, "apis": [], "components": [], "interactions": []})
         self.assertEqual(contract["metrics"]["contract_apis"], 0)
         self.assertEqual(contract["metrics"]["contract_components"], 0)
+        self.assertEqual(contract["metrics"]["contract_interactions"], 0)
 
 
 class TestInteractionPassthrough(unittest.TestCase):
-    def test_stage2_interactions_preferred(self):
+    def test_stage2_interactions_passed_through(self):
         stage2_ix = [
             {"id": "ix_1", "component": "LoginForm", "type": "data",
              "condition": None, "trigger": "点击发送", "behavior": "loading",
@@ -88,21 +55,51 @@ class TestInteractionPassthrough(unittest.TestCase):
         self.assertEqual(contract["interactions"], stage2_ix)
         self.assertIn("triggers", contract["interactions"][0])
 
-    def test_fallback_when_no_interactions(self):
+    def test_empty_interactions_list(self):
         binding = {
-            "platform": {}, "apis": [{"endpoint": "/pay", "trigger": "submit"}],
-            "components": [],
-        }
-        contract = build_contract(binding)
-        self.assertEqual(contract["interactions"][0]["type"], "api_call")
-
-    def test_fallback_when_empty_interactions(self):
-        binding = {
-            "platform": {}, "apis": [{"endpoint": "/pay", "trigger": "submit"}],
+            "platform": {}, "apis": [],
             "components": [], "interactions": [],
         }
         contract = build_contract(binding)
-        self.assertEqual(contract["interactions"][0]["type"], "api_call")
+        self.assertEqual(contract["interactions"], [])
+
+    def test_absent_interactions_yields_empty(self):
+        """No interactions key must not synthesize phantom interactions."""
+        binding = {
+            "platform": {},
+            "apis": [{"semantic_hint": "获取验证码", "resolved": {"path": "/auth/otp"}}],
+            "components": [{"component_name": "Login", "component_type": "new",
+                            "group_name": "g", "params": ["onClick"]}],
+        }
+        contract = build_contract(binding)
+        self.assertEqual(contract["interactions"], [])
+        self.assertEqual(contract["metrics"]["contract_interactions"], 0)
+
+    def test_mock_marking(self):
+        """APIs with resolved=None get mock=True."""
+        binding = {
+            "platform": {}, "interactions": [],
+            "apis": [
+                {"semantic_hint": "A", "resolved": {"path": "/a"}},
+                {"semantic_hint": "B", "resolved": None},
+            ],
+            "components": [],
+        }
+        contract = build_contract(binding)
+        self.assertNotIn("mock", contract["apis"][0])
+        self.assertTrue(contract["apis"][1]["mock"])
+        self.assertEqual(contract["metrics"]["contract_apis_resolved"], 1)
+        self.assertEqual(contract["metrics"]["contract_apis_mock"], 1)
+
+    def test_type_dist_default_is_new(self):
+        """Missing component_type defaults to 'new', not 'unknown'."""
+        binding = {
+            "platform": {}, "apis": [], "interactions": [],
+            "components": [{"component_name": "X", "group_name": "g", "params": []}],
+        }
+        contract = build_contract(binding)
+        self.assertIn("new", contract["metrics"]["contract_component_types"])
+        self.assertNotIn("unknown", contract["metrics"]["contract_component_types"])
 
 
 class TestGateStage2Incomplete(unittest.TestCase):
@@ -124,10 +121,19 @@ class TestGateStage2Incomplete(unittest.TestCase):
         self.assertEqual(out["error"], "stage2_incomplete")
 
     def test_empty_components_rejected(self):
-        r = self._run_cli({"platform": {}, "apis": [], "components": []})
+        r = self._run_cli({"platform": {}, "apis": [], "components": [], "interactions": []})
         self.assertNotEqual(r.returncode, 0)
         out = json.loads(r.stdout)
         self.assertEqual(out["error"], "stage2_incomplete")
+
+    def test_absent_interactions_accepted(self):
+        r = self._run_cli({
+            "platform": {"name": "android"},
+            "apis": [],
+            "components": [{"component_name": "X", "component_type": "new",
+                            "group_name": "g", "params": []}],
+        })
+        self.assertEqual(r.returncode, 0)
 
     def test_valid_input_accepted(self):
         r = self._run_cli({
@@ -135,6 +141,7 @@ class TestGateStage2Incomplete(unittest.TestCase):
             "apis": [],
             "components": [{"component_name": "X", "component_type": "new",
                             "group_name": "g", "params": []}],
+            "interactions": [],
         })
         self.assertEqual(r.returncode, 0)
         out = json.loads(r.stdout)

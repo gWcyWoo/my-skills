@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
-"""Generate the spawn prompt for the per-design self-evolution subagent.
+"""Generate a scoped improvement prompt only for a user-requested iFF improvement.
 
-The orchestrator calls this AFTER a design's worker finishes, passing that worker's failure record,
-then spawns a subagent with the emitted prompt. The subagent works in an isolated git worktree of the
-skill repo, routes each failure (A/B/C) per SELF_IMPROVE.md, and opens ONE PR — without touching the
-running task, `main`, or the test project. Imperative + tool-forcing, like make_worker_prompt.py.
+The caller supplies the authorized scope when dispatching; this generator does not authorize
+edits, memory updates, Git publication, or merging. It only emits prompt text.
 """
 from __future__ import annotations
 
@@ -43,52 +41,23 @@ def main() -> int:
     except Exception:
         preview = "(could not pre-read record; the subagent reads it for real)"
 
-    prompt = f"""Run the iFF per-design SELF-EVOLUTION step by EXECUTING TOOLS. Do not reply with prose; run
-commands/edits and end by printing the PR/MR URL.
-
-CONTEXT: design「{a.design_name}」just finished. Its worker failure record is at:
-  {rec_path}
+    prompt = f"""Review the iFF improvement request for design「{a.design_name}」.
+Failure record: {rec_path}
 {preview}
-You evolve the SKILL ONLY ({skill}). NEVER touch the test project, the running task, or `main`.
-All work happens in an isolated git worktree and lands as ONE pull request (human-reviewed, not auto-merged).
+Skill: {skill}
+Read {skill}/SELF_IMPROVE.md and follow the user's authorized scope. This prompt does not
+itself authorize edits, memory updates, delegation, push, PR creation, or merge. If the
+parent did not provide that scope, return findings and the missing authorization.
 
-FIRST ACTIONS (run now, in order):
-  1. python3 {skill}/scripts/classify_blocker.py --failure {rec_path} --out /tmp/iff_route_{slug}.json
-  2. Read {skill}/SELF_IMPROVE.md  — follow it EXACTLY (it is the authoritative procedure).
+For an authorized implementation, work only in the isolated skill worktree {worktree},
+branch {branch} from {a.base_branch}; preserve the test project and the running task.
+Classify the failures with scripts/classify_blocker.py, fix supported causes, and retain
+valid RED/GREEN plus the applicable corpus evidence. Do not relax an acceptance invariant.
+Update case memory only when explicitly requested; repeated matches do not prove universality.
 
-THEN:
-  3. Create the worktree + branch off {a.base_branch}:
-       git -C {skill}/.. worktree add {worktree} -b {branch} {a.base_branch}
-     (do ALL edits inside that worktree; it is a separate checkout — `main` is untouched.)
-  4. Route every item per SELF_IMPROVE.md:
-       • A 确定性  → patch the script + add a MINIMAL single-concern fixture under evolution/regression/<NNNN>/;
-                     prove RED on the pre-patch script (git show HEAD:<script>), then GREEN + full corpus green
-                     via selftest_canvas.py. No fixture / corpus not green → do NOT commit that fix.
-       • B 判断    → add or update a precedent in evolution/case_memory.md (signature/decision/why/from/seen).
-                     Increment seen only for a confirmed-correct reuse; a contradicting case = counterexample →
-                     rewrite it, reset seen. If a case reaches seen>=3 with zero counterexamples → GRADUATE it:
-                     prefer patching the script (e.g. bind_data_slots) to feed it correctly, else add a check_*,
-                     then DELETE the case from case_memory.md.
-       • C 边界 / ESCALATE / NEEDS_PROBE → do NOT auto-change; record in evolution/ceilings.md (with a probe)
-                     and mark the PR body `NEEDS-HUMAN`. NEVER relax an invariant to make a gate pass.
-  5. Commit inside the worktree (imperative messages; reference the origin design + any corpus case id).
-  6. Open the PR — ROUTER IS THE MERGE GATE (read /tmp/iff_route_{slug}.json):
-       • autoEvolvable=true (only AUTO_FIX/RECORD_CEILING — NO ESCALATE/NEEDS_PROBE/REVIEW) AND full
-         corpus green → pass --auto-merge (opens PR then merges; A is proven by red/green+corpus, B
-         case-memory is advisory & self-correcting, so neither needs a human).
-       • ANY ESCALATE/NEEDS_PROBE/REVIEW present → DO NOT pass --auto-merge; leave the PR open, body
-         marked NEEDS-HUMAN. Invariant-touching changes are never auto-merged.
-       python3 {skill}/scripts/open_pr.py --branch {branch} --target {a.base_branch} [--auto-merge] \\
-         --title "iFF evo: {a.design_name}" --body "<A fixes / B cases / C escalations; NEEDS-HUMAN if any>"
-  7. Clean up: git -C {skill}/.. worktree remove {worktree}
-
-HARD RULES:
-  • classify_blocker exiting non-zero (ESCALATE/NEEDS_PROBE/REVIEW present) means a human must decide those
-    items — handle the A/B items, but leave the flagged ones as NEEDS-HUMAN in the PR; do not force them.
-  • Every A patch MUST ship with a red-before/green-after corpus fixture; the whole corpus must stay green.
-  • Never edit the test project. Never commit to `main`. Never auto-merge.
-
-END by printing exactly: the PR/MR URL (from open_pr.py), and a one-line summary of A-fixes / B-cases / C-escalations.
+If PR delivery is authorized, use scripts/open_pr.py without --auto-merge. Classification
+and passing tests are not merge approval. Preserve unfinished work during cleanup.
+Return the actual changes/findings, validation limits, blockers, and PR URL only if created.
 """
     if a.out:
         Path(a.out).write_text(prompt, encoding="utf-8")

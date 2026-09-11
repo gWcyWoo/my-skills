@@ -49,7 +49,15 @@ Step 6  crop: 按 frame 坐标从整页截图裁切图标 → 写回 asset_path
 
 错误输出格式: `{"ok": false, "errors": [{"type": "...", ...}]}`
 
-bind 错误类型: `unknown_node`(分组引用了 JSON 中不存在的 id)、`duplicate_binding`(多个组抢同一节点)
+bind 错误类型:
+- `unknown_node`: 分组引用了 JSON 中不存在的 id → 修正 node_ids
+- `duplicate_binding`: 多个组抢同一节点 → 修正 node_ids
+- `empty_artboard`: 空设计稿 → 停机，回 Step 0 检查输入
+- `empty_group`: 组的 node_ids 为空 → 删除该组或补充 node_ids
+- `root_not_grouped`: root artboard 未分组 → 新建独立 root 组作为 groups[0]
+- `root_not_isolated`: root 与其他节点混组 → 把 root 移到独立组
+- `root_group_not_first`: root 组不在 groups[0] → 调整组顺序
+- `duplicate_group_name`: 多个组同名 → 改名使每组名称唯一
 
 ## 模型分组输出格式
 
@@ -71,7 +79,7 @@ bind 错误类型: `unknown_node`(分组引用了 JSON 中不存在的 id)、`du
 - `name`: 语义组件名（中文，描述这个 group 在页面中是什么）
 - `role`: 组件角色（navigation / header / form / list / modal / footer / action / content / decoration）
 - `description`: 一句话描述组件职责
-- `node_ids`: 该组顶层节点的 id（来自 prepare 输出的节点摘要）。子树自动展开——声明一个父节点即覆盖其全部后代，除非某后代被其他组显式声明
+- `node_ids`: 该组顶层节点的 id（来自 prepare 输出的节点摘要）。子树自动展开——声明一个父节点即覆盖其全部后代，除非某后代被其他组显式声明。**例外：root artboard 不展开子树**，root 组只含 root 自身
 
 ## 模型分组指导
 
@@ -82,8 +90,7 @@ bind 错误类型: `unknown_node`(分组引用了 JSON 中不存在的 id)、`du
 3. **节点摘要**（数据）：prepare 输出的 id/name/type/size/text/componentName/children，用于：
    - 确定 node_ids：每个 group 引用哪些顶层节点
    - `is_system: true` 的节点**也要分组**（保证全覆盖完整性，clean 步骤再删）
-   - **root artboard（depth 0，整页那个节点）自身也要占一个 group**（如「页面根」）；
-     它的子节点被别的组显式声明不冲突，漏了它必然 `unbound` 一轮
+   - **root artboard（depth 0，整页那个节点）必须作为 groups[0]，单独占一个 group**（如「页面根」），且 node_ids 只含 root 自身。root 不展开子树——每个非 root 的内容子树必须被其他组显式声明，否则出现在 unbound 里
    - 同一个 `componentName` 出现多次 = 复用组件，归同一 group
 
 三者冲突时：设计图 > ui_description > 节点名称。设计图上明显是一个整体的，不因节点名称不同而拆开。
@@ -98,7 +105,8 @@ bind 错误类型: `unknown_node`(分组引用了 JSON 中不存在的 id)、`du
    - **在现有 groups 基础上追加或调整 node_ids**，输出新的完整分组 JSON
    - 再次调 `bind`，重复直到 `unbound` 为空
 4. `unbound` 为空 → `ok: true`，进入 clean
-5. 如果 `errors` 不为空（`unknown_node` / `duplicate_binding`）→ 修正 node_ids 后重新 `bind`
+5. 如果 `errors` 不为空 → 按错误类型处置规则修正后重新 `bind`
+6. 完备性循环最多 5 轮；超过 5 轮仍有 `unbound` 或 `errors` → 停机
 
 禁止：模型不得跳过未覆盖节点、不得凭空编造 node_id（`bind` 会报 `unknown_node`）。
 

@@ -1,6 +1,6 @@
 # iFF 实现规范(Flutter)— 权威源
 
-> 本文件是 iFF 落地 Flutter 代码的**强制实现规范(MUST)**,所有 worker 写代码前必须加载并遵守。
+> 本文件是 iFF 落地 Flutter 代码的**强制实现规范(MUST)**,适用规则由 v3 worker 合同按角色提供；不要求 worker 整读本文件。
 > 由 `scripts/sync_project_rules.py` **注入到目标工程的 `AGENTS.md`**(分隔块内),工程内所有 agent 统一遵守;改规范只改本文件再同步,不在工程副本里直接改。
 > 规则 ID `IMPL-<类>-<n>` 供 worker 角色合同精确引用;v3 worker receipt 绑定本文件当前 SHA,`check_static.py` 与结构 QA 映射。
 
@@ -28,7 +28,7 @@
 | `DOCS` | 文档 | docs/ 单一来源 · 需求即入文档 |
 | `VCS` | 提交 PR | 祈使句 · PR 含验证命令+截图 |
 
-> 优先级:本文件 > iFF `SKILL.md` 流程细节 > 通用习惯。冲突显式指出并解决,不取折中。
+> 本文件约束 iFF 实现，不能覆盖用户明确范围或项目硬约束。与 SKILL.md/机器合同冲突时指出具体不一致，不自行豁免验收门。
 
 ---
 
@@ -42,22 +42,22 @@
 - **IMPL-STYLE-2** 类/Widget `PascalCase`;方法/变量 `camelCase`;文件 `snake_case.dart`;标识符不得随意/临时/模糊。
 - **IMPL-STYLE-3** 常量随现有 Dart 风格,仅编译期常量且项目已有约定才 `ALL_CAPS`。
 - **IMPL-STYLE-4** `flutter_lints` + 更严:strict casts/inference、禁原始类型、**单引号**、**尾随逗号**、**显式返回类型**。
-- **IMPL-STYLE-5** 验证先 `flutter analyze` 再测试。
+- **IMPL-STYLE-5** 验证由角色合同安排；共享 analyze 留到串行扇入，不在每个 worker 重复执行。
 
 ## DOC 中文注释(不得敷衍)
-- **IMPL-DOC-1** 中文注释;解释**为什么这样做 / 在保证什么**,不复述表面行为;新代码默认比现状更充分。
+- **IMPL-DOC-1** 中文注释;解释**为什么这样做 / 在保证什么**,不复述表面行为;仅补充理解或安全使用所需的说明。
 - **IMPL-DOC-2** 非显而易见逻辑必须注释;状态流转、跳转条件、落库语义、延迟执行原因必须说明。
 - **IMPL-DOC-3** 单例/Provider/Repository/工具入口写设计意图;工具/拦截器/服务/协议封装等公共基础设施写:职责边界、调用顺序、失败策略、安全隐私边界、为何放该层;公共入口写参数含义、默认值语义、异常处理、调试注意、误用风险。
 - **IMPL-DOC-4** 有约束含义的常量/key/标记位写用途。
 - **IMPL-DOC-5** 注释不与代码冲突;改逻辑时失效注释同步更新。
 
 ## LAYER 分层
-- **IMPL-LAYER-1** 展示与页面逻辑→`presentation/`;模型领域对象→`domain/`;mock→`data/`。
+- **IMPL-LAYER-1** 遵循当前项目分层；无现有约定时可采用 presentation/domain/data，不迁移无关文件。
 - **IMPL-LAYER-2** 公共组件只给视觉结构+必要事件入口,**不含**跳转/校验/提交等业务流程。
 
 ## LAYOUT 布局与响应式(核心)
 - **IMPL-LAYOUT-1 关系换算优先**:尺寸/位置/间距一律用相对量——比例、`Flex`/`Expanded` 权重、对齐、`padding`、或"设计值 × 响应单位 `unit`"(`unit = LayoutBuilder.maxWidth / 设计宽度`);数值从精确 bbox 反算。设计尺寸下逐像素准,多屏按比例自适应。
-- **IMPL-LAYOUT-2 禁硬编码**:禁止写死设计稿宽高、固定画布 `SizedBox`、`scale`/`_designWidth`/`_panelWidth`/`_panelHeight` 之类还原常量。**唯一允许的"坐标"是关系换算值(× unit 或 fraction),绝不允许裸像素硬编码。**
+- **IMPL-LAYOUT-2 禁硬编码**:禁止写死设计稿宽高、固定画布 `SizedBox`、`scale`/`_designWidth`/`_panelWidth`/`_panelHeight` 之类还原常量。该限制针对模型手写布局；Track B 由脚本依据 render_plan 生成的坐标画布按 IMPL-CMPB 合同验证，不受此条禁止。
 - **IMPL-LAYOUT-3 结构选择**:自然成行/列/栈的内容优先 `Column`/`Row`/`Flex`/`Wrap`+gap;仅当线性布局无法表达真实遮挡或复杂精确定位(如卡片角部装饰、复杂 artboard)才用 `Align`/`Stack`,且坐标用关系换算值。**简单页面(弹窗/表单/列表项)严禁 Stack 还原坐标。**
 - **IMPL-LAYOUT-4 宽度自适应**:组件宽度交父级约束,不写死设计稿宽度;整行/整块容器(覆盖整行的 Rectangle)铺满父容器,不只包裹文本。
 - **IMPL-SYSTEM-UI-1 系统区域双态合同**:设计稿、切图或矢量资产中的状态栏时间/信号/Wi-Fi/电量、摄像头挖孔/刘海/灵动岛等设备系统 UI 必须在 scene 编译阶段由 `system_ui_filter.py` 标记并剔除；生成的 render plan 中只能是 `implementation=hidden` 且 `required=false`，Flutter 页面不得加载对应资产或重复绘制。每张画板必须用 `make_status_bar_policy.py` 从 scene 生成独立 Dart 策略常量,上线页只能引用该常量,禁止模型手填 `true/false`。运行时严格消费生成的双态策略:① scene 含 `systemUiExclusions[*].role=status_bar` 时,真实系统状态栏保持可见,使用 `SystemUiMode.edgeToEdge` 和透明 `statusBarColor`,业务页面从屏幕顶部开始并绘制到状态栏背后；页面根部禁止默认 `SafeArea`、`MediaQuery.*.top` 或未启用 `extendBodyBehindAppBar` 的 AppBar 预留顶部空间,仅保护侧边/底部时必须 `SafeArea(top:false,...)`。② scene 明确不含状态栏时,使用 `SystemUiMode.manual` 且 overlays 只保留 `SystemUiOverlay.bottom`,完全隐藏顶部状态栏,同样不预留 top inset。入口必须在 `runApp` 前 `await` 初始策略并把同一控制器传给页面复用；Android `LaunchTheme`/`NormalTheme` 和实际 `FlutterActivity` 必须同步初始生成策略：hidden 必须使用系统 `NoTitleBar.Fullscreen` 父主题，并同时设置 `windowFullscreen=true`、`windowDrawsSystemBarBackgrounds=true`、透明 `statusBarColor`（只写 fullscreen item 不足以覆盖 Android 12+ 系统 SplashScreen），还必须在 `super.onCreate` 前设置 `FLAG_FULLSCREEN`，在其后安全隐藏 Insets，并在 `onPostResume`/`onWindowFocusChanged` 持续恢复隐藏直到 `onFlutterUiDisplayed` 关闭一次性启动守卫；禁止在 `super.onCreate` 前访问 InsetsController（DecorView 尚未创建会崩溃），也禁止永久守卫破坏后续 overlay 页面。overlay 必须为非 fullscreen + 透明 statusBarColor + drawsSystemBarBackgrounds 且不得原生强制隐藏；`check_capture_readiness.py` 必须同时验证主题、Activity 与调用时序，禁止原生启动窗口或首帧后切换造成系统栏闪现/消失；混合页面逐页应用对应生成策略,禁止用全局单态误配其它路由。摄像头/挖孔只属于真实设备或模拟器外观，不能由 App 绘制或遮盖。设计导出异常导致设备/截图伪影脱离顶部区域时，模型只能依据用户确认和当前 scene 节点证据调用 `system_ui_filter.py --exclude-node <node-id>` 显式排除；不得扩大全局几何启发式误删普通黑色 Logo、星形或业务装饰，未知节点必须失败。缓存工程中完全由这些节点组成的旧共享组件，必须由 `prune_system_ui_components.py` 连同生成测试、expected、独占资产和注册项一起退役；禁止残留不可达伪状态栏实现。

@@ -55,12 +55,11 @@ def build_index(artboard):
 
     def walk(node, parent_id=None):
         nid = node.get("id")
-        if not nid:
-            return
-        idx[nid] = node
-        parent_map[nid] = parent_id
-        for child in node.get("layers", []):
-            walk(child, nid)
+        if nid:
+            idx[nid] = node
+            parent_map[nid] = parent_id
+        for child in node.get("layers") or []:
+            walk(child, nid if nid else parent_id)
 
     walk(artboard)
     return idx, parent_map
@@ -78,6 +77,10 @@ def extract_node_summary(node):
     frame = node.get("frame")
     if frame:
         summary["size"] = f"{frame.get('width', 0):.0f}x{frame.get('height', 0):.0f}"
+        summary["position"] = f"{frame.get('left', 0):.0f},{frame.get('top', 0):.0f}"
+
+    if not node.get("visible", True):
+        summary["visible"] = False
 
     if node.get("text"):
         text = node["text"]
@@ -92,7 +95,7 @@ def extract_node_summary(node):
     if node.get("hasExportImage"):
         summary["has_export"] = True
 
-    child_count = len(node.get("layers", []))
+    child_count = len(node.get("layers") or [])
     if child_count > 0:
         summary["children"] = child_count
 
@@ -232,7 +235,7 @@ def cmd_prepare(args):
         s["depth"] = depth
         s["is_system"] = parent_system or is_system_component(node)
         children = []
-        for child in node.get("layers", []):
+        for child in node.get("layers") or []:
             children.append(summarize_tree(child, depth + 1, s["is_system"]))
         if children:
             s["layers"] = children
@@ -249,7 +252,7 @@ def cmd_prepare(args):
         entry["depth"] = depth
         entry["is_system"] = parent_sys or is_system_component(node)
         flat.append(entry)
-        for child in reversed(node.get("layers", [])):
+        for child in reversed(node.get("layers") or []):
             stack.append((child, depth + 1, entry["is_system"]))
 
     out = {
@@ -311,15 +314,26 @@ def cmd_bind(args):
         is_sys = parent_sys or is_system_component(node)
         if is_sys and nid:
             system_ids.add(nid)
-        for child in node.get("layers", []):
+        for child in node.get("layers") or []:
             _mark_system(child, is_sys)
     _mark_system(artboard)
 
     # 收集所有组的显式 node_ids（用于子树展开时的边界检测）
     all_explicit = {}
-    for group in grouping.get("groups", []):
-        for nid in group.get("node_ids", []):
-            all_explicit[nid] = group.get("name", "unnamed")
+    errors = []
+    group_names_seen = set()
+    for gi, group in enumerate(grouping.get("groups", [])):
+        gn = group.get("name", "unnamed")
+        if gn in group_names_seen:
+            errors.append({"type": "duplicate_group_name", "group": gn})
+        group_names_seen.add(gn)
+        for nid in group.get("node_ids") or []:
+            all_explicit[nid] = gi
+
+    children_of = {}
+    for cid, pid in parent_map.items():
+        if pid is not None:
+            children_of.setdefault(pid, []).append(cid)
 
     def collect_owned_ids(node_id, own_group):
         """展开子树，遇到被其他组显式声明的节点就停。"""
@@ -330,44 +344,58 @@ def cmd_bind(args):
             if nid != node_id and nid in all_explicit and all_explicit[nid] != own_group:
                 continue
             ids.append(nid)
-            node = idx.get(nid)
-            if node:
-                for child in node.get("layers", []):
-                    cid = child.get("id")
-                    if cid:
-                        stack.append(cid)
+            stack.extend(reversed(children_of.get(nid, [])))
         return ids
 
     # 绑定
+    root_id = artboard.get("id")
     bound_ids = set()
     components = []
-    errors = []
+    if not all_ids:
+        errors.append({"type": "empty_artboard"})
 
-    for group in grouping.get("groups", []):
+    if root_id and root_id in idx:
+        root_groups = [g for g in grouping.get("groups", [])
+                       if root_id in (g.get("node_ids") or [])]
+        if not root_groups:
+            errors.append({"type": "root_not_grouped", "root_id": root_id})
+        elif len(root_groups) > 1 or any(n != root_id for n in root_groups[0].get("node_ids") or []):
+            errors.append({"type": "root_not_isolated", "root_id": root_id})
+
+    for gi, group in enumerate(grouping.get("groups", [])):
         gname = group.get("name", "unnamed")
-        members = []
-        group_ids = set()
+        node_ids_list = group.get("node_ids") or []
 
-        for nid in group.get("node_ids", []):
+        if root_id and root_id in node_ids_list and gi != 0:
+            errors.append({"type": "root_group_not_first", "group": gname})
+
+        if not node_ids_list:
+            errors.append({"type": "empty_group", "group": gname})
+
+        members = []
+        group_ids = {}
+
+        for nid in node_ids_list:
             if nid not in idx:
                 errors.append({"type": "unknown_node", "group": gname, "node_id": nid})
                 continue
-            owned = collect_owned_ids(nid, gname)
-            group_ids.update(owned)
+            owned = [nid] if nid == root_id else collect_owned_ids(nid, gi)
+            group_ids.update(dict.fromkeys(owned))
 
         # 检查重复绑定
-        overlap = group_ids & bound_ids
+        overlap = group_ids.keys() & bound_ids
         if overlap:
             errors.append({
                 "type": "duplicate_binding",
                 "group": gname,
                 "overlapping_ids": sorted(overlap)[:10],
             })
-            group_ids -= overlap
+            for o in overlap:
+                del group_ids[o]
 
         bound_ids.update(group_ids)
 
-        for nid in sorted(group_ids):
+        for nid in group_ids:
             m = extract_design_data(idx[nid])
             m["is_system"] = nid in system_ids
             members.append(m)
@@ -387,6 +415,7 @@ def cmd_bind(args):
         node = idx[uid]
         s = extract_node_summary(node)
         s["parent_id"] = parent_map.get(uid)
+        s["is_system"] = uid in system_ids
         parent_node = idx.get(parent_map.get(uid))
         if parent_node:
             s["parent_name"] = parent_node.get("name")
@@ -432,6 +461,9 @@ def cmd_clean(args):
     一个 group 的全部成员都是系统组件时删除该 group。
     """
     bound = json.loads(Path(args.bound_json).read_text(encoding="utf-8"))
+    if not bound.get("ok"):
+        print(json.dumps({"ok": False, "errors": [{"type": "upstream_bind_not_ok"}]}, ensure_ascii=False))
+        return 1
     removed = []
     kept = []
 
@@ -482,7 +514,7 @@ def _needs_asset(member, design_idx):
     raw = design_idx.get(nid, {})
 
     if ntype == "symbolInstence":
-        children = raw.get("layers", [])
+        children = raw.get("layers") or []
         has_text_child = any(c.get("type") == "textLayer" for c in children)
         if has_text_child:
             return False
@@ -499,7 +531,7 @@ def _needs_asset(member, design_idx):
 def _has_text_descendant(nid, design_idx):
     """递归检查节点后代是否含 textLayer。"""
     raw = design_idx.get(nid, {})
-    for child in raw.get("layers", []):
+    for child in raw.get("layers") or []:
         if child.get("type") == "textLayer":
             return True
         child_id = child.get("id")

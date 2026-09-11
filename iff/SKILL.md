@@ -1,6 +1,6 @@
 ---
 name: iff
-description: Use when an external `goal` command drives batch implementation of Flutter frontend from a design-spec sheet (CSV/Excel). `iFF` = implement Flutter Flow. 读表 → 并行扇出每行一个 subagent 实现各自 feature → 串行扇入集成(依赖/资产/路由/codegen/analyze)→ 回写。落地到当前 Flutter 工程, 触发于 "iFF"批处理设计稿表格。
+description: 在显式 active goal 下，从 CSV/Excel 设计表批量实现 Flutter 页面，使用受控并行管线及设备验收。
 ---
 
 <role>
@@ -11,7 +11,7 @@ iFF 在 MAIN session 运行,是**编排者**:被外部 `goal` 指令调起(goal 
 ## 调用与分层(已确认)
 - `goal` 是 Codex 外部显式生命周期,不由 iFF 隐式创建。启动时用 `get_goal` 读取目标 + 最终验收标准 + 表格路径;不存在 active goal 时显式报错。只有用户明确要求创建 goal 时才可用 `create_goal`;**不得从普通 iFF 请求推断或创建 goal**。全部验收边界通过后才用 `update_goal` 标记完成。
 - iFF 自身是编排者,内部用 **Codex collaboration subagent** 并行扇出/扇入处理全表;不再是"外部喂一行"的单行 worker。
-- Codex 工具适配:用 `spawn_agent` 创建 worker,固定 `fork_turns: "none"`,只传 `worker_prompt.md` 全文;在当前并发上限内连续 spawn 所有 ready worker,不得等待一个完成后才创建下一个。用 `wait_agent` 等待完成;运行中补充事实用 `send_message`,已空闲后继续任务用 `followup_task`;用 `list_agents` 查状态,只在取消时用 `interrupt_agent`。Codex 没有 worker close 步骤,agent 完成后自然结束。主会话只汇总结果并执行串行扇入。
+- Codex 工具适配:用 `spawn_agent` 创建 worker,固定 `fork_turns: "none"`,只传 `worker_prompt.md` 全文;在当前并发上限内连续 spawn 所有 ready worker,不得等待一个完成后才创建下一个。用 `wait_agent` 等待完成;运行中补充事实用 `send_message`,已空闲后继续任务用 `followup_task`;用 `list_agents` 查状态,只在取消时用 `interrupt_agent`。Codex 没有 worker close 步骤,agent 完成后自然结束。主会话处理编排、公共组件语义决策和串行扇入。
 - 子 agent 不会天然继承 main session 已加载的 skill 正文。每个 board/assembly worker 的 spawn prompt 必须由 `make_worker_prompt.py` 根据 feature manifest + 当前 preflight 生成≤8KB v3 合同;worker **不得重复整读** `iff/SKILL.md`/`test_rules.md`/`implementation_rules.md`。worker 用 `complete_worker.py` 写原子 receipt,main 扇入前用 `check_worker_compliance.py` 重算当前合同、结果、输出与全部指纹。禁止手写 prompt 或 v2 compliance。
 
 ## 输入:设计稿表格(CSV/Excel)
@@ -33,20 +33,18 @@ iFF 在 MAIN session 运行,是**编排者**:被外部 `goal` 指令调起(goal 
   - **③assembly-worker(每 feature 一个,板 worker 全部返回后)**:selector/page/colors/同源 fixture/slot mapper → 交互/状态/数据 → TDD red/green → trace/diff/单次 repair。禁止写 pubspec/路由/DI/工程资产、禁止最终客户端运行和 done;只输出 `fan_in_request.json` 与覆盖全部 state 的 `state_changes.json` 给 main 串行处理。
   - 返回:各 worker v3 receipt + 有界摘要 + fan-in/state change 清单;视觉 QA、最终目标客户端与 done 由 main 在串行扇入后执行。
 - **扇入(串行,一次性)**:校验全部 receipt → 原子应用有界模型决策与 `fan_in_request.json` → `pub add`/资产/pubspec/路由/DI → `build_runner`/`flutter analyze`/flow 校验 → `run_client_device_tests.py` 一次同时生成交互和数据客户端证据 → 主会话最终视觉验收 → 重算 context/done。
-- **main 瘦身(P0;R1 实测教训:main 包办 12 张板取稿编译 + 通读产物 → context 爆掉中断 1.8h)**:main 只允许 ①读写表格 ②跑 `.iff`/skill 脚本并读其 **stdout 摘要** ③`make_worker_prompt.py` 生成 prompt 并 spawn ④汇总 worker 返回摘要。**禁止**:亲读任何 spec 产物文件(scene/render_plan/digest 都不行——digest 也是给 worker 的)、亲自执行流水线 0-12 步、手搓 worker prompt(R1 手搓丢了公共组件注入与守门)。
+- **main 瘦身(P0;R1 实测教训:main 包办 12 张板取稿编译 + 通读产物 → context 爆掉中断 1.8h)**:main 读取表格、脚本摘要、有界 component packet 和 worker 返回结果；通过 `make_worker_prompt.py` 生成 prompt 并 spawn。**禁止**:亲读任何 spec 产物文件(scene/render_plan/digest 都不行——digest 也是给 worker 的)、亲自执行流水线 0-12 步、手搓 worker prompt(R1 手搓丢了公共组件注入与守门)。
 - **回写**:逐行把 `status`/`error`/`spec_dir` 写回表格;若有 `visual_report`/`actual_screenshot`/`visual_manifest` 列也写回。
 
-## 规则资产(复用 fc)
-- `~/.agents/skills/fc/development_rules.md`(`DEV-*`,高优先级项目规则)
-- `~/.code/shared-rules/frontend/flutter-widget.md`(`FW-*`,按 ID 精确查,勿整读)
-- 冲突时 `development_rules.md` 优先;复用 fc 的"按 ID 精确查询、限量阅读"纪律。
+## 规则来源
+使用当前项目规则及本技能 `implementation_rules.md` / `test_rules.md`。不再依赖已删除的 `fc/development_rules.md`；项目额外规则仅在存在且适用于当前任务时按需读取。worker 由当前 v3 合同获取适用规则，不重复加载完整技能正文。
 
 ## 单行实现:TDD +「读项目、随项目」(已确认)
 **iFF 只定流程,不定实现细节。** 架构、目录结构、命名、资产/路由/状态/接口接入口径 —— **一律不由 iFF 规定**,由 subagent 在实现时**充分阅读当前工程**后**与既有约定保持一致**(随项目,不自创、不硬编码某套架构)。
 
 每个 subagent 对自己这一行,必须逐步执行 `<pipeline>`。不得跳步、合并步骤、只读自然语言 `spec.md`、凭截图自由发挥,或在缺少任一固定输出时继续实现。若本段与 `<pipeline>` 冲突,以 `<pipeline>` 为准。
 
-- **全自主**:无用户 gate/STOP;以"测试确实先 red 过"为硬证据自证。
+- **已授权范围内自主执行**：以有效 RED/GREEN 证据验收；遇到缺失授权或外部阻塞时保留进度，不把无条件继续当作授权。
 - **选行**:每批读 **N 行**(默认 N=2)**status 为空**的行;选中后**立即把这几行 status 改为 `doing`**(认领、防重、可断点续);文件层面已隔离,无需功能依赖分析。
 </context>
 
@@ -62,7 +60,7 @@ iFF 在 MAIN session 运行,是**编排者**:被外部 `goal` 指令调起(goal 
    - 模型负责业务逻辑与工程接入,视觉实现必须由机器产物和 diff 驱动。
 4. **扇入(串行集成)**:去重汇总 → `pub add` 依赖 → 资产拷贝 + pubspec 注册 → 注册路由/DI → **flow 图合并与轻验**(assembly 返回的跨页边 → `update_flow_graph.py --graph .iff/flow_graph.json add --edges <edges.json>`;路由注册完后导出路由清单跑 `update_flow_graph.py check --routes <routes.txt>`——新边的目标路由必须已注册,pending_route 只报告不阻断)→ `build_runner` → `flutter analyze` → 启动 emulator/simulator → `flutter run` → `adb screencap` 或 `xcrun simctl io booted screenshot` 获取最终 `actual.png` → crop 到 app viewport → 与 `reference.png` 尺寸对齐 → `run_visual_diff` 输出 `diff_report.json` → `make_repair_plan` 输出 `repair_plan.json` → 按 `repair_plan.json` 修改一次 → 重新截图/重新 diff → 最终运行截图验收。每行最多一次 repair,不得循环打磨;单次 repair 后仍不达标则该行 `status=error`,继续下一需求。扇出中被 defer 的**公共组件区域缺陷**在此串行处理:修组件本体一次并复验所有受影响页(组件改一处、各页共享);本批登记过新公共组件时,`.iff/shared_components.json` 属工程资产随工程提交;`assets_incomplete` 的组件必须在扇入总结中显式上报(icon 无任何切图来源,需设计侧补标切图)。
 5. **回写(完成)**:写 `done` 前**必须先过确定性总门** `check_done_gate.py --spec-root lanhu/specs/<feature> --feature-manifest .iff/features/<feature>.json --state-changes lanhu/specs/<feature>/state_changes.json`。总门重算每板视觉原始输入、interaction/data/context、v3 receipts 与全 state 文件所有权;**exit 非 0 一律不得写 `done`**。单 state 旧入口 `--state-key + --changed-files` 仅保留兼容。
-5.5. **自我进化(每张设计完即触发,异步,不阻塞当前批)**:对刚跑完的每张设计,收集该 worker 的失败记录(`{blockers[], manual_judgements[], 命中的 CASE-id, gate 结果}`)→ `make_evolution_prompt.py --skill-dir ~/.agents/skills/iff --design-name <名> --failure-record <记录>` 生成 prompt → 用 `spawn_agent(fork_turns: "none")` 创建一个 **evolution 子 agent**(在 **skill 仓的 git worktree** 里干活,**不碰当前任务/被测工程/`main`**)。它按 `SELF_IMPROVE.md` 路由 A/B/C,产出**一个 PR**(A 改脚本+红前绿后 fixture / B 写案例记忆+毕业 / C 升级人),host 自适应提交(`open_pr.py`),人审合入才生效。详见 `iff/SELF_IMPROVE.md`。
+5.5. **可选技能改进**：仅记录本批已有失败证据。用户明确要求改进 iFF 时才读取 [SELF_IMPROVE.md](SELF_IMPROVE.md) 并开启该独立工作流；不按每张设计自动 spawn、建 PR、写案例记忆或合并。
 6. **验收**:对照 goal 的验收标准核对(`analyze` 无 error、各行达标、最终视觉验收无 P0/P1 问题)。**全部行 done 后**:`make_journey_map.py --graph .iff/flow_graph.json --out .iff/journey_map.md` 生成用户故事地图(mermaid)+ E2E 回放清单,按清单在真机逐条走通 journey(跨页交互的统一终验;`pending_route` 是后续行的工作清单,不算失败)。只有所有边界具备当前证据且 check_done_gate.py exit 0 后才调用 `update_goal(status="complete")`;否则保持 active 并准确报告缺失证据。
 </instructions>
 
@@ -233,10 +231,10 @@ python3 ~/.agents/skills/iff/scripts/check_implementation_plan.py --plan spec_di
 ### 6.6 注入项目实现规范到 AGENTS.md(确定性,P0)
 落地工程前必须把实现规范注入目标工程 `AGENTS.md`,让所有 agent(含本 worker)统一遵守:
 ```bash
-python3 ~/.agents/skills/iff/scripts/sync_project_rules.py --rules ~/.agents/skills/iff/implementation_rules.md --memory ~/.agents/skills/iff/evolution/case_memory.md --project-root .
+python3 ~/.agents/skills/iff/scripts/sync_project_rules.py --rules ~/.agents/skills/iff/implementation_rules.md --project-root .
 ```
 `implementation_rules.md` 是权威源;`make_worker_prompt.py` 把当前角色适用的 `IMPL-*` 硬门编进 bounded v3 合同,`complete_worker.py` receipt 绑定完整文件 SHA,worker 不重复整读全文。
-注入会把 `evolution/case_memory.md`(B 类判断先例)一并写进 AGENTS.md;worker 在 归属/⑥交互绑定/⑦数据绑定 前**必须先读案例记忆**,命中 signature 就按其 decision 做(看 why 判适用性),并在产物里记录命中的 CASE-id(供 evolution 子 agent 累计 `seen`)。
+默认只同步实现规则，不注入案例记忆。用户明确要求在目标项目使用案例时，才按适用 signature 定向读取或明确授权同步；案例命中不触发自动写记忆或进化任务。
 
 ### 6.7 脚本生成响应式画布 + 颜色 token + 字体(确定性,P0)
 可见层生成是**确定性的,必须脚本化**——禁止模型手写。`generate_canvas.py` 走**关系换算**:每个尺寸/位置都是「设计像素 × u」,`u = LayoutBuilder.maxWidth / 设计宽度`(`IMPL-LAYOUT-1`),设计宽度下 1:1 还原(供视觉 QA),真机按比例自适应;颜色全抽到 `app_colors.dart`(`IMPL-TOKEN`),不写死宽高/`scale`(`IMPL-LAYOUT-2`),不加 `TextStyle.height`(`IMPL-LAYOUT-4`),按区域拆 widget(`IMPL-COMP-1`),中文注释(`IMPL-DOC`)。

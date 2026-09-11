@@ -18,15 +18,17 @@ def _binding(apis):
     }
 
 
+_DEFAULT_SPEC = {"components": [{"name": "g", "role": "content", "members": []}]}
+
+
 def run_check(binding, spec=None, expect=0):
     with tempfile.TemporaryDirectory() as td:
         bp = Path(td) / "binding.json"
         bp.write_text(json.dumps(binding))
-        argv = [sys.executable, SCRIPT, "check-interactions", "--binding", str(bp)]
-        if spec:
-            sp = Path(td) / "spec.json"
-            sp.write_text(json.dumps(spec))
-            argv += ["--component-spec", str(sp)]
+        sp = Path(td) / "spec.json"
+        sp.write_text(json.dumps(spec or _DEFAULT_SPEC))
+        argv = [sys.executable, SCRIPT, "check-interactions", "--binding", str(bp),
+                "--component-spec", str(sp)]
         r = subprocess.run(argv, capture_output=True, text=True)
         assert r.returncode == expect, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
         return json.loads(r.stdout)

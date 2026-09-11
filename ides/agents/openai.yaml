@@ -1,0 +1,4 @@
+interface:
+  display_name: "iDES"
+  short_description: "从表格原子领取开发任务，以 TDD 完成实现并提交 PR"
+  default_prompt: "Use $ides to atomically claim the highest-priority sheet task, implement it with TDD, and return its PR link."

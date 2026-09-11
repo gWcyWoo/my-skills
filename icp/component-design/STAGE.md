@@ -26,11 +26,11 @@ Step 2  组件匹配
                  └─ ok ↓
 Step 3  交互拆解
         模型：解析 api_description → 语义端点列表(semantic_hint)
-        模型：用 Codex Apifox MCP 查每个语义端点的真实 schema → resolved
+        模型：用 Apifox MCP 查每个语义端点的真实 schema → resolved
               ├─ 命中 → 填 path/method/auth/request/response/deprecated
               └─ 未命中 → resolved: null (Stage 3 走 mock)
         模型：拆解 interaction_description → 原子交互 + 触发图
-        validate.py check-interactions ──errors──→ 修正 → 重验
+        validate.py check-interactions --component-spec ──errors──→ 修正 → 重验
         └─ ok → 填 checklist Step 3 → check.py --step 3
                  ├─ 未完成 → 补充（可能需回 check-interactions）
                  └─ ok ↓
@@ -150,11 +150,11 @@ Sheet `api` 列只有语义提示（如 `/support`、`/feedback/types`），路�
 ### 解析流程
 
 1. 从 `api_description` 提取语义端点列表，记为 `semantic_hint`
-2. 用 Codex Apifox MCP 取端点索引：未知 `projectId` 时先调 `mcp__apifox_new_mcp__listAccessibleProjects`，再调 `mcp__apifox_new_mcp__getStructureInfo`（`entityType: "endpoint"`），然后按语义匹配真实端点：
+2. 用 Apifox MCP 读取可访问项目与结构（`mcp__apifox_new_mcp__listAccessibleProjects` + `mcp__apifox_new_mcp__getStructureInfo`），按语义匹配真实端点：
    - `/support` → `GET /support/customerService`（语义匹配：客服）
    - `/auth/otp-requests` → `POST /auth/sendVerifyCode`（语义匹配：发送验证码）
    - `/feedback` → `POST /feedback/record`（语义匹配：意见反馈）
-3. 用 `mcp__apifox_new_mcp__readEntityDetails`（`entityType: "endpoint"`，`entityId` 取上一步的 `originId`）拉匹配到的端点详情（完整定义：method、path、
+3. 用 `mcp__apifox_new_mcp__readEntityDetails` 拉匹配到的端点详情（完整定义：method、path、
    headers、parameters、security、requestBody、responses、deprecated、descriptions）。
    模型理解完整定义 + 项目已有网络层代码（API client、auth 模式、DTO 风格），综合产出 `resolved`：
    - `path` + `method`：真实路径
@@ -193,7 +193,7 @@ Apifox 标 `deprecated: true` 时：
 | 命令 | 输入 | 输出 |
 |---|---|---|
 | `check-binding` | `--component-spec <f>` `--binding <f>` | 绑定验证结果 |
-| `check-interactions` | `--binding <f>` `--component-spec <f>`(可选但**建议给**) | 交互验证结果 |
+| `check-interactions` | `--binding <f>` `--component-spec <f>` | 交互验证结果 |
 
 `scripts/check.py` — checklist 验证:
 
@@ -211,15 +211,21 @@ Apifox 标 `deprecated: true` 时：
 | 1 | component-spec 每个 group 在 binding.components 中有条目 | `unbound_group` |
 | 2 | component_type 是 4 种之一 | `invalid_type` |
 | 3 | existing_shared 的 source_path 非 null 且文件存在 | `missing_source` |
-| 4 | affected 仅出现在 extract_shared | `invalid_affected` |
+| 4 | affected 仅出现在 extract_shared 且必须是数组 | `invalid_affected` |
 | 5 | affected 中每个 source_path 文件存在 | `missing_affected_source` |
 | 6 | existing_shared / extract_shared 的 params 非空 | `empty_params` |
+| 7 | 同名组件出现不同 component_type | `inconsistent_type` |
+| 8 | component_name 缺失或为空 | `missing_component_name` |
+| 9 | affected 元素不是 {name, source_path} 对象 | `invalid_affected_entry` |
 
 ### check-binding 警告项
 
 | # | 检查 | 警告类型 |
 |---|---|---|
 | 1 | binding 中有 component-spec 不存在的 group_name | `extra_group` |
+| 2 | platform_builtin 在项目代码中 grep 不到 | `unverified_builtin` |
+| 3 | extract_shared 无 affected 列表 | `extract_shared_no_affected` |
+| 4 | 非 existing_shared 类型带了 source_path | `unexpected_source_path` |
 
 ### check-interactions 检查项
 
@@ -231,15 +237,24 @@ Apifox 标 `deprecated: true` 时：
 | 4 | api 引用的 endpoint 在 apis 列表中存在 | `unknown_api` |
 | 5 | triggers 引用的 id 存在 | `broken_trigger` |
 | 6 | component 在 components 中存在 | `unknown_component` |
-| 7 | `role` 为 action/form 的组件有交互归属（需给 `--component-spec`） | `idle_interactive_component` |
+| 7 | `role` 为 action/form 的组件有交互归属 | `idle_interactive_component` |
+| 8 | 交互 type 不在 behavior/data 之内 | `invalid_interaction_type` |
+| 9 | resolved 不是 dict 类型 | `invalid_resolved` |
+| 10 | resolved 缺少 path 或 method | `missing_resolved_field` |
+| 11 | resolved.auth 不在 public/bearer/optional 之内 | `invalid_auth` |
+| 12 | resolved.response 结构不合法 | `invalid_response_schema` |
+| 13 | apis 元素不是对象 | `invalid_api_entry` |
+| 14 | resolved.method 不在 GET/POST 之内 | `invalid_method` |
 
 ### 警告项（不阻塞，模型必须审查）
 
 | # | 检查 | 警告类型 |
 |---|---|---|
-| 1 | 组件无任何交互归属，且 role 未知（没给 `--component-spec`） | `idle_component` |
+| 1 | 组件无任何交互归属，且 role 为 navigation/list/modal/未知/词汇外 | `idle_component` |
+| 2 | type=data 交互无 state 字段 | `data_without_state` |
+| 3 | resolved.deprecated 为 true | `deprecated_api` |
 
-role 已知且非 action/form 的组件按设计就该空闲，不报。
+role 为 header/footer/content/decoration 的组件按设计就该空闲，不报。
 
 ## 过程文件
 
@@ -297,12 +312,12 @@ Stage 2 启动时在工作目录创建 `stage2-checklist.md`，每步完成后�
 ### check.py
 
 ```
-python3 scripts/check.py <checklist> [--step N]
+python3 scripts/check.py <checklist> [--step N] [--require k1,k2]
 ```
 
 输出格式同 validate.py：`{"ok": true}` 或 `{"ok": false, "errors": [...]}`
 
-错误类型：`unchecked`（未勾选）、`empty_value`（勾选但无内容）、`empty_checklist`、`unknown_step`
+错误类型：`unchecked`（未勾选）、`empty_value`（勾选但无内容）、`missing_key`（--require 指定的 key 缺失）、`empty_checklist`、`unknown_step`
 
 ## 收敛
 

@@ -34,7 +34,7 @@ icp 不依赖 iole 的行格式（`iole-item.row`）。调用方（iole 或人�
 | `design_image` | Stage 1 | 是 | 设计图图片路径（供模型视觉理解） |
 | `design_json` | Stage 1 | 是 | 蓝湖 sketch JSON 路径（节点树 + 设计数据） |
 | `ui_description` | Stage 1 | 否 | UI 补充描述（可空，辅助模型语义分组） |
-| `slices_json` | Stage 1 | 是 | 蓝湖切片数据 JSON 路径（多倍率 URL） |
+| `slices_json` | Stage 1+3 | 是 | 蓝湖切片数据 JSON 路径（多倍率 URL） |
 | `cover_image` | Stage 1 | 是 | 整页截图路径（裁切图标用） |
 | `interaction_description` | Stage 2 | 否 | 交互描述（自然语言，含跳转/弹窗/API 触发；空则 Stage 2 退化为纯 UI） |
 | `api_description` | Stage 2 | 否 | 接口描述（端点 + 参数 + 响应；空则 `apis: []`） |
