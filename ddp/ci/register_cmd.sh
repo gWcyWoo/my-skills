@@ -27,7 +27,7 @@ cat <<EOF
 3) 注册(token 只在你终端输入,绝不发到这里;tag/locked 已在第 1 步 UI 设定):
    sudo gitlab-runner register \\
      --non-interactive \\
-     --url http://gitlab.oklik.com \\
+     --url http://gitlab.example.internal \\
      --token '<glrt-你的认证令牌>' \\
      --executor shell \\
      --description "dDP shell runner ($DPT_HOST)"

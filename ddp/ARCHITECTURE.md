@@ -92,7 +92,7 @@ scaffold → build_image(detached)→ up(空 src 也 healthy)→ nginx vhost。
 
 ## 5. Step 16 — CI/CD(GitLab,本机 runner)
 
-- **本机 shell runner + 专用非 root 账号 `gitlab-runner`,只出站连 gitlab.oklik.com。** *为什么*:pull 式、无 inbound 部署密钥(消除一类泄密面);shell executor 因为宿主直编、runner 无 docker。
+- **本机 shell runner + 专用非 root 账号 `gitlab-runner`,只出站连 gitlab.example.internal。** *为什么*:pull 式、无 inbound 部署密钥(消除一类泄密面);shell executor 因为宿主直编、runner 无 docker。
 - **权限笼(ACL)**:`src` rwX、祖先链仅 x(不可枚举别的 app)、`.env` 拒读、无 docker/无 sudo。*为什么*:runner 是最易被供应链/流水线攻击的点,收到"只够改这一个 app 的代码、连别 app 名都列不出、读不到密钥"。
 - **资源 slice `MemoryMax=1G/CPUQuota=50%`**。*为什么*:编译/composer 不能压垮 3.3G 生产机。
 - **宿主直编(option2)+ 装匹配扩展**(`php7.4-{mysql,mbstring,zip,bcmath,intl,gd,redis,curl,xml,opcache}`,与容器 Dockerfile 同源)。*为什么装匹配扩展*:host composer 平台校验查 ext-*,缺了 `composer install` 失败;装齐才与容器一致、保真。
