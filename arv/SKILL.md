@@ -49,7 +49,12 @@ Report with headings SCOPE_CHECKED / FINDINGS / VERIFIED_OK / CROSS_ASPECT / UNV
 4. Write the review plan (one short block): boundary, files, the specific questions each aspect must answer, known facts to hand over (prior P2s, decided items, conventions such as `.fulltest` isolated packages, MockWebServer-only testing, device API levels if known).
 5. Collect the cheap shared facts once so subagents do not repeat them: `git status --porcelain`, `git log --oneline <range>`, `git diff --stat <range>`, `ls` of the evidence directory. Put the results into `KNOWN CONTEXT`.
 6. Dispatch three `arv-reviewer` agents in ONE message (parallel), names `correctness`, `overdesign`, `impact`, each with the filled brief template. Set `run_in_background: true`.
-7. When all three report: merge findings; drop duplicates; for each `CROSS_ASPECT` item decide whether it is already covered, needs a targeted follow-up agent (dispatch one with a narrow brief), or is out of scope. Settle any contradiction between agents by reading the implicated `file:line` yourself.
+7. When all three report, STRICTLY RE-VERIFY before adjudicating — subagent output is a lead, not a conclusion:
+   7a. For EVERY finding (P0/P1/P2) a subagent reports: open the cited `file:line` yourself (Read ≤50-line window or targeted grep) and confirm the defect is real and the severity is right. Drop or downgrade anything you cannot reproduce; never forward a finding on the subagent's word alone.
+   7b. For each aspect's `VERIFIED_OK`, re-check the decisive claims the verdict rests on (the guard/gate line, the assertion line, the red-log message, the counts file) — at least one concrete `file:line` or log line per aspect, more when the change is security/privacy/data-affecting. A claim that turns out wrong invalidates that aspect's other claims until re-checked.
+   7c. Cross-check the three reports against each other: same file:line cited with different conclusions → read it and settle; a fact one agent asserts that another agent's evidence contradicts → resolve by reading, not by majority.
+   7d. For each `CROSS_ASPECT` item decide: already covered / needs a targeted follow-up agent (narrow brief) / out of scope — and say which in the verdict.
+   7e. Re-rate severity yourself using `reviewer-principles` (subagents often over- or under-rate; e.g. duplicated-gate dead code is P2 over-design, an unguarded env var leaking into delivered builds is P1).
 8. Self-check against `<success_criteria>`; then produce the verdict in `<output_format>` and send it on the requested channel (relay `send` or `SendMessage` to the `from` address). Show the full sent text to the user.
 </instructions>
 
@@ -63,7 +68,7 @@ Report with headings SCOPE_CHECKED / FINDINGS / VERIFIED_OK / CROSS_ASPECT / UNV
 
 **Positive (`--self`):** request = "复核 P1 修正 0d13e65..7b797ba,只改了两个 androidTest 调用和一个测试名" → three-line diff → review directly, compile androidTest sources, reply 通过.
 
-**BAD — do not do this:** reading the whole diff, all tests and all evidence logs yourself in the main session before dispatching; or dispatching one agent for "review everything"; or letting a subagent run `adb`.
+**BAD — do not do this:** reading the whole diff, all tests and all evidence logs yourself in the main session before dispatching; or dispatching one agent for "review everything"; or letting a subagent run `adb`; or pasting subagent findings into the verdict without re-reading the cited lines yourself (a subagent once rated duplicated gate code P1 — re-verification showed it was harmless P2 dead code).
 </examples>
 
 <output_format>
@@ -78,7 +83,7 @@ Report with headings SCOPE_CHECKED / FINDINGS / VERIFIED_OK / CROSS_ASPECT / UNV
 </output_format>
 
 <success_criteria>
-- Every P0/P1/P2 has file:line, cause, fix and verification, and comes from evidence a subagent or you actually read this run.
+- Every P0/P1/P2 has file:line, cause, fix and verification, AND you re-read that file:line yourself this run (7a); every decisive VERIFIED_OK claim was spot-checked (7b).
 - All three aspects reported (or `--self` justified); every `CROSS_ASPECT` item has a disposition.
 - Items the 决策中心 already decided are not re-raised.
 - Verdict sent on the requested channel and the full text shown to the user. STOP after sending.
@@ -86,7 +91,8 @@ Report with headings SCOPE_CHECKED / FINDINGS / VERIFIED_OK / CROSS_ASPECT / UNV
 
 <final_reminders>
 P0 — Never touch a device (no adb / connected* / install); never edit the reviewed tree; subagents are read-only by definition.
-P0 — Every finding is anchored to file:line read this run; unverifiable claims go under 未能核实, never stated as fact.
+P0 — Every finding is anchored to file:line that YOU re-read this run (not only the subagent); unverifiable claims go under 未能核实, never stated as fact.
+P0 — Subagent reports are leads, not verdicts: re-verify each finding and the decisive OK claims before sending (step 7a–7e).
 P1 — Delegate by default; `--self` only for trivial re-checks. One aspect per subagent; cross-aspect notes are routed by you, not judged by the subagent.
 P1 — Do not re-raise decided items; do not demand real-backend smoke (all tests are MockWebServer).
 P2 — Fill every slot of the brief; hand over prior-round findings and conventions so subagents do not rediscover them.
