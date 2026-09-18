@@ -139,6 +139,14 @@ class TestRecord(Ledger):
 
 class TestOneAtATime(Ledger):
 
+    def test_next_check_selects_without_changing_ownership(self):
+        self.chain()
+        before = self.run_f.read_bytes()
+        selected = run("next", "--run", str(self.run_f), "--check")
+        self.assertEqual(selected["node_id"], "c")
+        self.assertEqual(self.run_f.read_bytes(), before)
+        self.assertEqual(self.next()["node_id"], selected["node_id"])
+
     def test_hands_out_leaves_first_one_at_a_time(self):
         self.chain()
         self.assertEqual(self.next()["node_id"], "c")

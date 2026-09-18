@@ -246,8 +246,9 @@ def cmd_next(args):
         return emit(True, {"done": True, "remaining": 0,
                            **({"skipped": skipped} if skipped else {})})
 
-    run["progress"][target]["status"] = "doing"
-    save_run(args.run, run)
+    if not args.check:
+        run["progress"][target]["status"] = "doing"
+        save_run(args.run, run)
 
     node = run["nodes"][target]
     deps = [{"node_id": k, "title": run["nodes"][k].get("title"),
@@ -410,6 +411,7 @@ def main(argv=None):
     st.set_defaults(fn=cmd_status)
 
     nx = sub.add_parser("next", help="交出下一个待做节点并标记 doing")
+    nx.add_argument("--check", action="store_true", help="仅查询下一个节点，不改台账")
     nx.set_defaults(fn=cmd_next)
 
     mk = sub.add_parser("mark", help="标记节点状态")
