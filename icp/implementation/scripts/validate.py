@@ -9,6 +9,7 @@ import argparse
 import json
 import re
 import sys
+import unicodedata
 from pathlib import Path
 
 PLATFORMS = ["android-views", "compose", "flutter", "swiftui", "uikit"]
@@ -127,16 +128,19 @@ def cmd_check_codegen(args):
         clean_source = _COMMENT_STRIP_RE.sub(
             lambda m: m.group(0) if m.group(0)[0] in ('"', "'") else ' ',
             full_source)
-        code_strings = _extract_string_literals(clean_source, platform)
+        code_strings = [unicodedata.normalize("NFC", value)
+                        for value in _extract_string_literals(clean_source, platform)]
+        normalized_resources = unicodedata.normalize("NFC", resource_source)
 
         matched = 0
         missing = []
         for bt in bp_texts:
-            if any(bt in cs for cs in code_strings):
+            normalized_text = unicodedata.normalize("NFC", bt)
+            if any(normalized_text in cs for cs in code_strings):
                 matched += 1
-            elif any(cs in bt for cs in code_strings if len(cs) >= 6):
+            elif any(cs in normalized_text for cs in code_strings if len(cs) >= 6):
                 matched += 1
-            elif bt in resource_source:
+            elif normalized_text in normalized_resources:
                 matched += 1
             else:
                 missing.append(bt[:60])

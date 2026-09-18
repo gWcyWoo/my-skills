@@ -192,7 +192,7 @@ def cmd_status(args):
     pending_discovery = undiscovered(run["nodes"])
     order, cycle_edges, unreachable = plan(run)
     counts = {s: 0 for s in STATUSES}
-    for nid in run["nodes"]:
+    for nid in order:
         counts[run["progress"][nid]["status"]] += 1
 
     out = {"root": run["root"], "role": run.get("role"), "mr": run.get("mr"),
@@ -241,9 +241,10 @@ def cmd_next(args):
             if doing:
                 result["waiting"] = doing
             return emit(True, result)
-        failed = [n for n in order if run["progress"][n]["status"] == "failed"]
+        skipped = [n for n in order
+                   if run["progress"][n]["status"] in ("partial", "failed")]
         return emit(True, {"done": True, "remaining": 0,
-                           **({"skipped": failed} if failed else {})})
+                           **({"skipped": skipped} if skipped else {})})
 
     run["progress"][target]["status"] = "doing"
     save_run(args.run, run)
@@ -259,6 +260,8 @@ def cmd_next(args):
 
 
 def cmd_mark(args):
+    if args.check and args.status != "done":
+        return emit(False, {"errors": [{"code": "check_requires_done"}]}, 1)
     run = load_run(args.run)
     if run is None:
         return emit(False, {"errors": [{"code": "no_run", "where": args.run}]}, 1)
@@ -276,11 +279,49 @@ def cmd_mark(args):
         base = iole_doc_dir.parent.parent
         icp_dir = base / "icp" / title
         required = ["layout-blueprint.json", "api-contract.json"]
+        if args.status == "done":
+            required.append("behavior-result.json")
         missing = [f for f in required if not (icp_dir / f).exists()]
         if missing:
             return emit(False, {"errors": [{"code": "missing_evidence",
                         "icp_dir": str(icp_dir),
                         "detail": f"icp 产物缺失: {missing}"}]}, 1)
+        if args.status == "done":
+            for name in ("layout-blueprint.json", "api-contract.json"):
+                try:
+                    artifact = json.loads((icp_dir / name).read_text(encoding="utf-8"))
+                    valid_artifact = isinstance(artifact, dict) and bool(artifact)
+                except (OSError, UnicodeError, ValueError):
+                    valid_artifact = False
+                if not valid_artifact:
+                    return emit(False, {"errors": [{"code": "invalid_evidence",
+                                "where": str(icp_dir / name),
+                                "detail": "产物须为可读取的非空 JSON 对象"}]}, 1)
+            try:
+                result = json.loads((icp_dir / "behavior-result.json").read_text(encoding="utf-8"))
+                total, passed = result["behavior_total"], result["behavior_passed"]
+                valid = (type(total) is int and type(passed) is int
+                         and total > 0 and passed == total
+                         and result["mock_violations"] == [])
+                group_total = 0
+                for name in ("positive", "negative"):
+                    group = result[name]
+                    count, successes = group["total"], group["passed"]
+                    valid = valid and (type(count) is int and type(successes) is int
+                                       and count >= 0 and successes == count
+                                       and group["failed"] == [])
+                    if type(count) is int:
+                        group_total += count
+                valid = valid and group_total == total
+            except (OSError, UnicodeError, ValueError, TypeError, KeyError):
+                valid = False
+            if not valid:
+                return emit(False, {"errors": [{"code": "invalid_behavior_result",
+                            "icp_dir": str(icp_dir),
+                            "detail": "behavior-result.json 须有非零且全部通过、分组计数一致的有效结果"}]}, 1)
+
+    if args.check:
+        return emit(True, {"node_id": args.node, "checked": "done", "written": False})
 
     cell = run["progress"][args.node]
     cell["status"] = args.status
@@ -376,6 +417,7 @@ def main(argv=None):
     mk.add_argument("--status", required=True, choices=STATUSES)
     mk.add_argument("--pr")
     mk.add_argument("--error")
+    mk.add_argument("--check", action="store_true", help="仅检查 done 前提，不改台账")
     mk.set_defaults(fn=cmd_mark)
 
     pk = sub.add_parser("pick", help="按标题定位节点并标记 doing")

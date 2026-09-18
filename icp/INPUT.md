@@ -47,6 +47,8 @@ icp 不依赖 iole 的行格式（`iole-item.row`）。调用方（iole 或人�
 - `design_json` / `slices_json` / `cover_image` 由 `extract/scripts/lanhu_fetch.py` 一条命令产出，见下方「取数」
 - `ui_description` 为空时传 `null` 或空串，Stage 1 正常工作
 - 字段为空归一为 `null`，不用空串
+- 源表不是唯一需求来源。调用方将当前已确认的用户补充要求合并到相应的 `ui_description`、`interaction_description`、`api_description` 或 `ut` / `it` / `e2e`，标明补充来源与适用范围，保留原始行数据；不新增另一份需求台账。任务中要求变化时更新现有 `input.json` 及受影响的验收映射，不能只修改共享 skill 后继续使用旧输入。
+- 跨任务通知中，重新加载 skill 只更新执行规则，不等于接收了另一任务中的项目要求。经授权同步项目要求时须显式传递其内容与来源；以执行任务的输入及用例映射已更新为生效证据，不能以通知已发送或回复“已理解”代替。
 
 ## 取数
 

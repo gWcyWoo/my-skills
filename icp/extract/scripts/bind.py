@@ -135,6 +135,7 @@ def extract_design_data(node):
                 "gradient_type": g.get("type"),
                 "stops": [{"color": s["color"].get("value"), "position": s.get("position")}
                           for s in g.get("stops", [])],
+                **{key: g[key] for key in ("from", "to", "transform") if key in g},
             })
         elif f["type"] == "image":
             fills.append({"type": "image", "url": f.get("image", {}).get("url")})

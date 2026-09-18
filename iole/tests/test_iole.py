@@ -84,7 +84,13 @@ class Ledger(unittest.TestCase):
             icp_dir = self.base / "icp" / title
             icp_dir.mkdir(parents=True, exist_ok=True)
             for f in ("layout-blueprint.json", "api-contract.json"):
-                (icp_dir / f).write_text("{}")
+                (icp_dir / f).write_text(json.dumps({"components": [{"name": title}]}))
+            if status == "done":
+                (icp_dir / "behavior-result.json").write_text(json.dumps({
+                    "behavior_total": 1, "behavior_passed": 1,
+                    "positive": {"total": 1, "passed": 1, "failed": []},
+                    "negative": {"total": 0, "passed": 0, "failed": []},
+                    "mock_violations": []}))
         return run(*argv, expect=expect)
 
     def status(self, fmt="json", expect=0):
@@ -192,6 +198,19 @@ class TestOneAtATime(Ledger):
         self.assertEqual(self.mark("c", "failed", expect=1)["errors"][0]["code"],
                          "missing_error")
 
+    def test_exhausted_schedule_reports_partial_without_changing_progress(self):
+        self.record({"a": node("A", ["b", "c"]),
+                     "b": node("B"), "c": node("C")}, root="a")
+        self.mark("b", "partial", error="页面接线缺证据")
+        self.mark("c", "failed", error="合同不可用")
+        self.mark("a", "done")
+        before = self.run_f.read_bytes()
+        out = self.next()
+        self.assertTrue(out["done"])  # 调度耗尽，不能据此认定验收通过。
+        self.assertEqual(out["remaining"], 0)
+        self.assertEqual(out["skipped"], ["b", "c"])
+        self.assertEqual(self.run_f.read_bytes(), before)
+
     def test_mark_unknown_node_halts(self):
         self.chain()
         self.assertEqual(self.mark("ghost", "done", expect=1)["errors"][0]["code"],
@@ -202,10 +221,79 @@ class TestOneAtATime(Ledger):
         out = self.mark("c", "done", expect=1, skip_evidence=True)
         self.assertEqual(out["errors"][0]["code"], "missing_evidence")
 
+    def test_done_requires_behavior_result_without_changing_ledger(self):
+        self.record({"a": node("A")}, root="a")
+        self.mark("a", "partial", error="尚未验证")
+        before = self.run_f.read_bytes()
+        out = self.mark("a", "done", expect=1, skip_evidence=True)
+        self.assertEqual(out["errors"][0]["code"], "missing_evidence")
+        self.assertIn("behavior-result.json", out["errors"][0]["detail"])
+        self.assertEqual(self.run_f.read_bytes(), before)
+
     def test_mark_done_with_valid_evidence_accepted(self):
         self.chain()
         out = self.mark("c", "done")
         self.assertEqual(out["status"], "done")
+
+    def test_done_rejects_invalid_or_unsuccessful_behavior_results(self):
+        self.record({"a": node("A")}, root="a")
+        self.mark("a", "done")
+        report = self.base / "icp" / "A" / "behavior-result.json"
+        valid = json.loads(report.read_text())
+        self.mark("a", "pending")
+        before = self.run_f.read_bytes()
+        invalid = ["not json", "[]", "{}"]
+        for changes in (
+            {"behavior_total": 0, "behavior_passed": 0},
+            {"behavior_passed": 0}, {"behavior_total": True},
+            {"positive": {"total": 1, "passed": 1, "failed": ["failure"]}},
+            {"negative": {"total": 1, "passed": 1, "failed": []}},
+            {"negative": {"total": -1, "passed": -1, "failed": []}},
+            {"negative": None}, {"mock_violations": ["chain mock"]},
+        ):
+            invalid.append(json.dumps({**valid, **changes}))
+        for payload in invalid:
+            with self.subTest(payload=payload):
+                self.mark("a", "pending")
+                report.write_text(payload)
+                out = self.mark("a", "done", expect=1, skip_evidence=True)
+                self.assertEqual(out["errors"][0]["code"], "invalid_behavior_result")
+                self.assertEqual(self.run_f.read_bytes(), before)
+        report.write_text(json.dumps(valid))
+        self.assertEqual(self.mark("a", "done", skip_evidence=True)["status"], "done")
+
+    def test_done_rejects_unreadable_or_empty_artifacts(self):
+        self.record({"a": node("A")}, root="a")
+        self.mark("a", "done")
+        for filename in ("layout-blueprint.json", "api-contract.json"):
+            artifact = self.base / "icp" / "A" / filename
+            valid = artifact.read_bytes()
+            for payload in (b"not json", b"{}", b"[]", b"\xff"):
+                with self.subTest(filename=filename, payload=payload):
+                    self.mark("a", "pending")
+                    before = self.run_f.read_bytes()
+                    artifact.write_bytes(payload)
+                    out = self.mark("a", "done", expect=1, skip_evidence=True)
+                    self.assertEqual(out["errors"][0]["code"], "invalid_evidence")
+                    self.assertEqual(self.run_f.read_bytes(), before)
+            artifact.write_bytes(valid)
+
+    def test_completion_preflight_validates_without_writing(self):
+        self.record({"a": node("A")}, root="a")
+        self.mark("a", "done")
+        self.mark("a", "pending")
+        before = self.run_f.read_bytes()
+        args = ["mark", "--run", str(self.run_f), "--node", "a", "--check"]
+        run(*args, "--status", "done")
+        self.assertEqual(self.run_f.read_bytes(), before)
+        out = run(*args, "--status", "pending", expect=1)
+        self.assertEqual(out["errors"][0]["code"], "check_requires_done")
+        self.assertEqual(self.run_f.read_bytes(), before)
+        (self.base / "icp" / "A" / "behavior-result.json").write_text("{}")
+        out = run(*args, "--status", "done", expect=1)
+        self.assertEqual(out["errors"][0]["code"], "invalid_behavior_result")
+        self.assertEqual(self.run_f.read_bytes(), before)
+        self.assertEqual(self.mark("a", "partial", error="待验证", skip_evidence=True)["status"], "partial")
 
     def test_mark_done_missing_title_rejected(self):
         self.record({"x": {"source_skill": "icps", "route": "x",
@@ -243,7 +331,14 @@ class TestTreeShape(Ledger):
 
     def test_unreachable_reported_not_dropped(self):
         self.record({"a": node("A"), "orphan": node("Orphan")}, root="a")
-        self.assertEqual(self.status()["unreachable"], ["orphan"])
+        before = self.run_f.read_bytes()
+        out = self.status()
+        self.assertEqual(out["unreachable"], ["orphan"])
+        self.assertEqual(out["execution_order"], ["a"])
+        self.assertEqual(out["counts"], {"pending": 1, "doing": 0, "done": 0,
+                                         "partial": 0, "failed": 0})
+        self.assertIn("pending=1", self.status(fmt="table"))
+        self.assertEqual(self.run_f.read_bytes(), before)
 
     def test_status_table(self):
         self.chain()

@@ -119,6 +119,10 @@ def extract_fill(member: dict) -> dict | None:
     fills = member.get("fills")
     if not fills:
         return None
+    if len(fills) > 1:
+        layers = [extract_fill({"fills": [fill]}) for fill in fills]
+        # Keep the legacy first-fill summary; layers is the complete ordered fill.
+        return {**layers[0], "layers": layers}
     f = fills[0]
     fill_type = f.get("type", "solid")
     if fill_type == "gradient":
@@ -126,6 +130,7 @@ def extract_fill(member: dict) -> dict | None:
             "type": "gradient",
             "gradient_type": f.get("gradient_type"),
             "stops": f.get("stops", []),
+            **{key: f[key] for key in ("from", "to", "transform") if key in f},
         }
     if fill_type == "image":
         return {"type": "image", "url": f.get("url")}
