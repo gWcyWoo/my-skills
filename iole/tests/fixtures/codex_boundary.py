@@ -45,6 +45,45 @@ claims_path = project / "boundary-claims.json"
 claims = json.loads(claims_path.read_text()) if claims_path.exists() else {}
 run = json.loads(Path(job["run"]).read_text())
 row_id = run["nodes"][node]["row"]["row_id"] if node else None
+storage = run["nodes"][node].get("source_skill", "icpl") if node else "icpl"
+storage_script = "icps/scripts/icps_local.py" if storage == "icps" else "icpl/scripts/icpl.py"
+
+if job.get("preflight_required") and not mode.get("missing_preflight"):
+    source = json.loads(sheet_path.read_text())
+    issues = []
+    for nid in job["preflight_nodes"]:
+        rid = run["nodes"][nid]["row"]["row_id"]
+        cell = next(row for row in source["rows"] if row["row_id"] == rid)["roles"]["frontend"]
+        if cell["status"] == "doing":
+            if cell["lease_token"] != claims.get(nid):
+                issues.append({"node_id": nid, "kind": "foreign_owner", "summary": "Source token is not in this run's claim record"})
+            elif datetime.fromisoformat(cell["lease_until"]) <= datetime.now(timezone.utc):
+                issues.append({"node_id": nid, "kind": "owned_expired", "summary": "Owned lease expired before dispatch"})
+    snapshot = Path(job["preflight_path"]).with_suffix(".source.json")
+    snapshot.write_text(json.dumps(source))
+    report = {"generation": job["generation"], "run": job["run"], "checked": job["preflight_nodes"],
+              "issues": issues, "evidence": [str(snapshot)]}
+    if mode.get("stale_preflight"):
+        report["generation"] = "old-launch"
+    if mode.get("incomplete_preflight"):
+        report["checked"] = report["checked"][1:]
+    Path(job["preflight_path"]).write_text(json.dumps(report))
+
+
+def maintain_lease(cell):
+    operation = "renew" if datetime.fromisoformat(cell["lease_until"]) > datetime.now(timezone.utc) else "recover"
+    result = command(storage_script, operation, "--link", sheet_path, "--role", "frontend",
+                     "--row-id", row_id, "--lease-token", claims[node],
+                     "--expected-lease-until", cell["lease_until"], "--lease-minutes", "60")
+    claims[node] = result["lease_token"]
+    claims_path.write_text(json.dumps(claims))
+    with (project / "lease-operations.jsonl").open("a") as f:
+        f.write(json.dumps({"node": node, "operation": operation, **result}) + "\n")
+    if mode.get("lease_ack_lost") and not (project / "lease-ack-lost").exists():
+        (project / "lease-ack-lost").touch()
+        event({"type": "turn.failed", "error": {"message": "Acknowledgement lost after lease update"}})
+        sys.exit(7)
+    return result
 
 if mode.get("hold_phase") == phase:
     (project / "boundary-ready.json").write_text(json.dumps({"pid": os.getpid()}))
@@ -53,16 +92,25 @@ if mode.get("hold_phase") == phase:
 
 if phase == "prepare":
     if job.get("feedback"):
-        command("icpl/scripts/icpl.py", "claim", "--link", sheet_path, "--role", "frontend",
+        command(storage_script, "claim", "--link", sheet_path, "--role", "frontend",
                 "--row-ids", row_id, "--status", "ready", "--error", "Confirmed tree-audit repair")
     if node in claims and not job.get("feedback"):
         cell = next(row for row in json.loads(sheet_path.read_text())["rows"]
                     if row["row_id"] == row_id)["roles"]["frontend"]
         if cell["lease_token"] != claims[node] or cell["status"] != "doing":
-            raise RuntimeError("Existing claim no longer belongs to this fixture")
-        claim = cell
+            answer.update(outcome="node_blocked", summary="Source belongs to another owner")
+            result_path.write_text(json.dumps(answer))
+            event({"type": "turn.completed", "usage": {}})
+            sys.exit(0)
+        if mode.get("legacy_expiry_block"):
+            answer.update(outcome="blocked", summary="Expired owned lease has no supported recovery operation")
+            result_path.write_text(json.dumps(answer))
+            event({"type": "turn.completed", "usage": {}})
+            sys.exit(0)
+        claim = (maintain_lease(cell) if datetime.fromisoformat(cell["lease_until"]) <= datetime.now(timezone.utc)
+                 else cell)
     else:
-        claim = command("icpl/scripts/icpl.py", "inspect", "--link", sheet_path, "--role", "frontend",
+        claim = command(storage_script, "inspect", "--link", sheet_path, "--role", "frontend",
                         "--title", job["title"], "--claim", "doing", "--lease-minutes", "60")
     claims[node] = claim["lease_token"]
     claims_path.write_text(json.dumps(claims))
@@ -71,23 +119,35 @@ if phase == "prepare":
         answer["lease_until"] = (datetime.now(timezone.utc) + timedelta(seconds=20)).isoformat()
     if mode.get("lease_seconds"):
         answer["lease_until"] = (datetime.now(timezone.utc) + timedelta(seconds=mode["lease_seconds"])).isoformat()
+    if mode.get("lease_soon") or mode.get("lease_seconds"):
+        sheet = json.loads(sheet_path.read_text())
+        next(r for r in sheet["rows"] if r["row_id"] == row_id)["roles"]["frontend"]["lease_until"] = answer["lease_until"]
+        sheet_path.write_text(json.dumps(sheet))
     if mode.get("prepare_blocked"):
         answer.update(outcome="blocked", summary="Preparation prerequisite unavailable")
+    if node in mode.get("node_blocked", []):
+        answer.update(outcome="node_blocked", summary="Page prerequisite unavailable")
     if mode.get("missing_lease"):
         answer["lease_until"] = None
 elif phase == "recover":
     cell = next(row for row in json.loads(sheet_path.read_text())["rows"] if row["row_id"] == row_id)["roles"]["frontend"]
     if cell["status"] == "review" and job["recovering_phase"] == "review":
         answer.update(outcome="ready", source_synced=True)
-    elif (cell["status"] == "doing" and cell["lease_token"] == claims[node]
-          and datetime.fromisoformat(cell["lease_until"]) > datetime.now(timezone.utc)):
-        answer.update(outcome="ready", source_synced=True, lease_until=cell["lease_until"])
+    elif cell["status"] == "doing" and cell["lease_token"] == claims.get(node):
+        if mode.get("recovery_unchanged"):
+            answer.update(outcome="ready", source_synced=True, lease_until=cell["lease_until"])
+        elif mode.get("lease_soon"):
+            answer.update(outcome="node_blocked", summary="Lease recovery prerequisite unavailable")
+        else:
+            lease = (maintain_lease(cell) if mode.get("lease_seconds") or datetime.fromisoformat(cell["lease_until"]) <= datetime.now(timezone.utc)
+                     else cell)
+            answer.update(outcome="ready", source_synced=True, lease_until=lease["lease_until"])
     else:
         answer.update(outcome="blocked", summary="Recorded source ownership is no longer valid")
 elif phase == "implement":
     if mode.get("hold"):
         event({"type": "item.completed", "item": {"type": "agent_message", "text": "Waiting at controlled external boundary"}})
-        ready = project / "grandchild-ready"
+        ready = project / ("grandchild-ready-" + str(os.getpid()))
         child_code = "import signal,time; from pathlib import Path; "
         if mode.get("ignore_term"):
             child_code += "signal.signal(signal.SIGTERM, signal.SIG_IGN); signal.signal(signal.SIGINT, signal.SIG_IGN); "
@@ -122,12 +182,16 @@ elif phase == "review":
         sheet = json.loads(sheet_path.read_text())
         cell = next(row for row in sheet["rows"] if row["row_id"] == row_id)["roles"]["frontend"]
         if cell["status"] != "review":
-            command("icpl/scripts/icpl.py", "claim", "--link", sheet_path, "--role", "frontend",
+            command(storage_script, "claim", "--link", sheet_path, "--role", "frontend",
                     "--row-ids", row_id, "--status", "review", "--lease-token", claims[node])
         if mode.get("writeback_interrupted"):
             event({"type": "turn.failed", "error": {"message": "Connection lost after remote write"}})
             sys.exit(7)
-        command("iole/scripts/iole.py", "mark", "--run", job["run"], "--node", node, "--status", "done")
+        if node in mode.get("partial_nodes", []) and not job.get("feedback"):
+            command("iole/scripts/iole.py", "mark", "--run", job["run"], "--node", node, "--status", "partial", "--error", "Independent acceptance remains")
+            answer.update(outcome="partial")
+        else:
+            command("iole/scripts/iole.py", "mark", "--run", job["run"], "--node", node, "--status", "done")
         answer["source_synced"] = not mode.get("unconfirmed_sync")
 elif phase == "finalize":
     answer["source_synced"] = True
@@ -136,6 +200,10 @@ elif phase == "finalize":
     if mode.get("tree_revision") and not (project / "tree-revision-requested").exists():
         (project / "tree-revision-requested").touch()
         answer.update(outcome="needs_revision", node_id=mode.get("repair_node", "n0"), summary="Repair demonstrated cross-page defect")
+    if mode.get("repair_partials"):
+        partial = next((n for n, p in run["progress"].items() if p["status"] == "partial"), None)
+        if partial:
+            answer.update(outcome="needs_revision", node_id=partial, summary="Close independent retained acceptance")
 
 if mode.get("bad_result") and phase == "implement":
     kind = mode["bad_result"]

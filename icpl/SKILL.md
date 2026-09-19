@@ -35,6 +35,24 @@ claim --link <f> --role <r> --row-ids r1 --status ready --error "原因"
 - `--status ready` + `--error`:失败回退,释放租约,记 last_error
 - `--lease-token`:CAS 校验,不匹配报 `stale_lease`
 
+### renew / recover — owned lease maintenance
+
+```sh
+renew --link <f> --role <r> --row-id r1 --lease-token <t> \
+  --expected-lease-until <deadline> --lease-minutes 180
+recover --link <f> --role <r> --row-id r1 --lease-token <t> \
+  --expected-lease-until <deadline> --lease-minutes 180
+```
+
+Both validate `doing`, the nonempty expected token and exact timezone-aware
+deadline under the local file lock. `renew` extends a live lease and retains its
+token; `recover` rotates an expired lease's token and starts a new duration.
+Both preserve all other data. Stale/replayed requests and nonpositive durations
+are rejected without mutation. The caller must prove ownership from its run's
+claim audit and confirm prior execution stopped; a copied token alone does not
+prove ownership. Preserve operation receipts and reconcile interrupted updates
+before another rotation. These operations do not acquire remote source locks.
+
 ### list-rows
 
 ```
@@ -46,5 +64,5 @@ list-rows --link <f> --role <r>  → [{row_id, title}]
 ## 测试
 
 ```
-cd .. && python3 -m unittest icpl.tests.test_icpl
+cd .. && python3 -m unittest icpl.tests.test_icpl icps.tests.test_lease_maintenance
 ```

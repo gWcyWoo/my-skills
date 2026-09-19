@@ -88,7 +88,7 @@ record --run <f> --nodes <f> [--root --link --role --mr]   # 节点+行数据入
        # 外层必须有 nodes 键，裸 {node_id:{…}} 报 empty_nodes 停机
 status --run <f> [--format table]                          # 计划 + 进度 + 未录入子节点
 next   --run <f>                                           # 交出下一个待做节点,标记 doing
-mark   --run <f> --node <id> --status done|partial|failed|pending [--pr] [--error]
+mark   --run <f> --node <id> --status done|partial|failed|blocked|pending [--pr] [--error]
 mark   --run <f> --node <id> --status done --check           # 写回前校验，不改台账
 pick   --run <f> --title <标题>                            # 按标题定位节点并标记 doing(--fix 用)
 ```
@@ -105,6 +105,7 @@ pick   --run <f> --title <标题>                            # 按标题定位�
   崩溃恢复:`mark --status pending` 显式重置卡住的 `doing` 节点后重新 `next`。
 - **partial**:已实现但有待修复项。`--error` 可选,记录待修复摘要;
   详细问题记在 icp 产物里。不阻塞祖先,下轮可 `mark --status pending` 重入修复。
+- **blocked**:单页前置条件不可用，必须给 `--error`；不等同于 partial，不允许依赖它的节点据此通过派发条件。无头 runner 保留该页执行检查点，继续独立工作；恢复时核验源表与原归属，不清空占用或伪造完成。具体行为见 `HEADLESS.md`。
 - **failed**:输入不可用(如设计稿解析失败),跳过本节点。不阻塞祖先;
   标 failed 必须给 `--error`。可派发工作耗尽时 `next` 返回 `{done: true, skipped: [partial/failed 节点]}`。
 - **done**:本页约定范围及其必要证据已完成。功能树承担的跨页/共享验收单独跟踪，不能仅因父页尚未实现把合格子页退回 ready；本页实际缺陷或缺证据仍须 partial。

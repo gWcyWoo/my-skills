@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 SCHEMA = "iole.run"
-STATUSES = ("pending", "doing", "done", "partial", "failed")
+STATUSES = ("pending", "doing", "done", "partial", "failed", "blocked")
 LOG_DIR = Path.home() / ".codex" / "logs" / "iole"
 
 # 工厂表:域名模式 → (kind, skill)。新增来源只加一行。
@@ -223,10 +223,23 @@ def cmd_next(args):
 
     children = child_map(run["nodes"])
     back = {(a, b) for a, b in cycle_edges}
+    blocked_nodes = {nid for nid in order if run["progress"][nid]["status"] == "blocked"}
     target = None
     for nid in order:
         st = run["progress"][nid]["status"]
         if st != "pending":
+            continue
+        # A back edge does not control topological ordering, but a known blocked
+        # dependency still prevents safely executing the dependent page.
+        search, seen, blocked_dependency = [nid], set(), False
+        while search and not blocked_dependency:
+            dependency = search.pop()
+            if dependency in blocked_nodes:
+                blocked_dependency = True
+            elif dependency not in seen:
+                seen.add(dependency)
+                search.extend(children[dependency])
+        if blocked_dependency:
             continue
         if all(run["progress"][k]["status"] in ("done", "partial", "failed")
                for k in children[nid] if (nid, k) not in back):
@@ -234,12 +247,15 @@ def cmd_next(args):
             break
     if target is None:
         doing = [n for n in order if run["progress"][n]["status"] == "doing"]
+        blocked = [n for n in order if run["progress"][n]["status"] == "blocked"]
         pending = sum(1 for n in order if run["progress"][n]["status"] == "pending")
-        remaining = len(doing) + pending
-        if doing or pending:
+        remaining = len(doing) + len(blocked) + pending
+        if doing or blocked or pending:
             result = {"done": False, "remaining": remaining}
             if doing:
                 result["waiting"] = doing
+            if blocked:
+                result["blocked"] = blocked
             return emit(True, result)
         skipped = [n for n in order
                    if run["progress"][n]["status"] in ("partial", "failed")]
@@ -268,9 +284,9 @@ def cmd_mark(args):
         return emit(False, {"errors": [{"code": "no_run", "where": args.run}]}, 1)
     if args.node not in run["nodes"]:
         return emit(False, {"errors": [{"code": "unknown_node", "where": args.node}]}, 1)
-    if args.status == "failed" and not args.error:
+    if args.status in ("failed", "blocked") and not args.error:
         return emit(False, {"errors": [{"code": "missing_error",
-                                        "detail": "标记 failed 必须给 --error"}]}, 1)
+                                        "detail": "标记 failed/blocked 必须给 --error"}]}, 1)
     if args.status in ("done", "partial"):
         title = run["nodes"][args.node].get("title", "")
         if not title:
@@ -326,7 +342,7 @@ def cmd_mark(args):
 
     cell = run["progress"][args.node]
     cell["status"] = args.status
-    cell["error"] = args.error if args.status in ("failed", "partial") else None
+    cell["error"] = args.error if args.status in ("failed", "partial", "blocked") else None
     if args.pr:
         cell["pr"] = args.pr
     save_run(args.run, run)
@@ -370,7 +386,7 @@ def render(run, out):
     nodes, progress = run["nodes"], run["progress"]
     kids = child_map(nodes)
     name = lambda i: nodes.get(i, {}).get("title", i)
-    mark = {"pending": "·", "doing": "▶", "done": "✓", "partial": "△", "failed": "✗"}
+    mark = {"pending": "·", "doing": "▶", "done": "✓", "partial": "△", "failed": "✗", "blocked": "!"}
     lines = [f"root={name(run['root'])}  role={run.get('role')}  mr={run.get('mr')}  "
              + "  ".join(f"{k}={v}" for k, v in out["counts"].items()),
              "", "| # | 状态 | node | 标题 | 来源 | route | 依赖(先实现) | pr |",

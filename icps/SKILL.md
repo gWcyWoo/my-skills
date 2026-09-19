@@ -64,7 +64,43 @@ claim --link <f> --role <r> --row-ids r1 --status ready --lease-token <t> --erro
 - `--status ready` + `--error`:失败回退,释放租约,记 last_error
 - `--lease-token`:本地 canonical 的 token 比较，不匹配报 `stale_lease`；不验证远端状态，也不以 lease_until 过期自动拒绝
 
-领取时按当前工作范围显式指定 `inspect --lease-minutes <分钟>`，兼顾到期检查与恢复；脚本默认 10 分钟，不能假定为 30/60 分钟。持有租约的迁移应带原 token。现有 CLI 没有 renew 动词，不伪造续租成功或反复改 ready/doing 来模拟原子续租。发现租约将过期时核对源表所有权，使用项目已有且获授权的续租方式；没有可用方式就记录同步风险并协调恢复，不能覆盖其他持有者。
+领取时按当前工作范围显式指定 `inspect --lease-minutes <分钟>`，兼顾到期检查与恢复；脚本默认 10 分钟，不能假定为 30/60 分钟。持有租约的迁移应带当前 token。续租和过期恢复使用下述正式操作，不通过 ready/doing 切换模拟续租。
+
+### renew / recover — owned lease maintenance
+
+```sh
+renew --link <canonical> --role frontend --row-id r7 --lease-token <current-token> \
+  --expected-lease-until <recorded-deadline> --lease-minutes 180
+recover --link <canonical> --role frontend --row-id r7 --lease-token <expired-token> \
+  --expected-lease-until <recorded-deadline> --lease-minutes 180
+```
+
+Both operations require `doing`, a matching nonempty token, an exact matching
+timezone-aware deadline and a positive duration. `renew` extends a live lease
+without changing its token. `recover` accepts an expired lease, rotates its token
+and sets a new deadline. Status, payload, PR, reviews, errors, other rows and roles
+remain unchanged. A stale token/deadline or repeated old request is rejected
+without modifying the canonical file. These are local locked operations only.
+
+Before either operation, IOLE must establish ownership from this run's original
+claim/writeback audit; matching the source token to a cached canonical alone is
+insufficient. Hold the workspace's single-writer control, confirm any interrupted
+child has exited, and freshly compare source status/token/deadline. A proven owned
+lease may be maintained within the existing run authorization without asking the
+user again. Unknown ownership or another writer is not an automatic takeover.
+
+Generate the source payload with `sheet_writeback.py --lease-only` in addition
+to its normal source/role/row arguments. It writes only token/deadline cells;
+it must not rewrite status, PR, reviews or error from a cached canonical.
+Save the actual local operation result and generated writeback payload before
+the source write, then read back the affected fields. After a lost acknowledgement,
+first compare the source with that saved payload; finish missing synchronization
+instead of rotating again. Do not resume implementation until source readback
+confirms the usable lease. An expired root reserved while its children ran uses
+the same recovery path when dispatched; do not pre-claim all queued pages.
+Sheets read/write/readback is not remote CAS: automatic maintenance requires the
+established single-writer source coordination and does not support uncoordinated
+external writers.
 
 ### 写回 Google Sheets
 
@@ -99,7 +135,7 @@ icps 是无状态适配器，自身不写日志。调用方（iole）负责在 `
 ## 测试
 
 ```
-cd .. && python3 -m unittest icps.tests.test_icps_local icps.tests.test_sheet_normalize icps.tests.test_sheet_writeback icps.tests.test_google_sheets_mcp_adapter
+cd .. && python3 -m unittest icps.tests.test_icps_local icps.tests.test_sheet_normalize icps.tests.test_sheet_writeback icps.tests.test_google_sheets_mcp_adapter icps.tests.test_lease_maintenance
 ```
 
-28 tests。
+34 tests，包含 ICPS/ICPL 的租约维护合同。

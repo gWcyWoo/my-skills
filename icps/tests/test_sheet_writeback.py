@@ -54,6 +54,33 @@ class Fixture:
 
 class TestWriteback(unittest.TestCase):
 
+    def test_lease_only_recovery_payload_preserves_every_other_source_cell(self):
+        from datetime import datetime, timedelta, timezone
+        values = [HEADER, row(title="登录", fstatus="doing", ftoken="old",
+                              funtil=(datetime.now(timezone.utc) - timedelta(hours=40)).isoformat())]
+        f = Fixture(values)
+        old = json.loads(f.sheet.read_text())["rows"][0]["roles"]["frontend"]
+        recovered = sh(LOCAL, "recover", "--link", f.sheet, "--role", "frontend", "--row-id", "r2",
+                       "--lease-token", old["lease_token"], "--expected-lease-until", old["lease_until"], "--lease-minutes", "180")
+        payload = sh(*writeback_args(f, "--role", "frontend", "--row-ids", "r2", "--lease-only"))
+        self.assertEqual(payload["count"], 2)
+        self.assertEqual(payload["mcp_args"]["ranges"], {"R2": [[recovered["lease_token"]]], "S2": [[recovered["lease_until"]]]})
+        # Source metadata can differ from the earlier canonical; none may be overwritten.
+        values[1][11] = "newer-source-pr"
+        values[1][12] = "newer-source-review"
+        before = json.loads(json.dumps(values))
+        for update in payload["updates"]:
+            r, c = a1_parse(update["range"])
+            values[r - 1][c] = update["value"]
+        for c in range(len(HEADER)):
+            if c not in (17, 18): self.assertEqual(values[1][c], before[1][c])
+
+    def test_lease_only_never_emits_a_payload_that_clears_ownership(self):
+        f = Fixture([HEADER, row(title="登录", fstatus="ready")])
+        result = sh(*writeback_args(f, "--role", "frontend", "--row-ids", "r2", "--lease-only"), expect=1)
+        self.assertEqual(result["errors"][0]["code"], "invalid_lease")
+        self.assertNotIn("mcp_args", result)
+
     def test_ranges_follow_header_names_not_positions(self):
         """角色列在生产表里不连续,range 必须由表头名字推出。"""
         f = Fixture([HEADER, row(title="登录", fstatus="ready")])

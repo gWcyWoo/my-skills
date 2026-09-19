@@ -22,6 +22,13 @@ working. The ICP job still performs the required implementation and acceptance.
 - Stop the old dispatcher before starting the runner. Its workspace lock excludes
   other runners, not an unrelated agent/editor that ignores that lock. Existing
   `doing` nodes cause startup to refuse ownership instead of resetting them.
+- The first coordinator job after start/resume also batch-checks the remaining
+  nodes' current source leases before mutations. It must save the generation-bound
+  preflight report and actual source snapshots specified in the job. The runner
+  rejects missing, stale or incomplete reports before admitting implementation.
+  Keep this check in the existing job; do not add a polling coordinator or claim
+  every queued page. A root's old source claim can exist while its local ledger
+  is pending, so checking `run.json` alone is insufficient.
 - Supply a short caller-instructions file containing the current scope, user
   additions, TDD choice, allowed modifications, source authorization, and delivery
   limits. Reference existing project/page artifacts instead of copying historical
@@ -70,6 +77,9 @@ IDs and evidence directory. Liveness is not proof of productive work or successf
 acceptance; partial token counters omit the currently unfinished model turn.
 Cached input is included in input; reasoning is included in output. Do not add
 those subsets twice or infer subscription cost from the raw sum.
+It also reports deferred node reasons, the initial source-preflight snapshot and
+terminal notification submission status. Preflight issues are observations at
+launch, not a replacement for current per-page ownership checks.
 
 The supervisor may print changed existing progress at ten-minute intervals. It
 does not ask a model to compose a heartbeat or pretend stale progress is new.
@@ -118,18 +128,38 @@ actual evidence remain mandatory. The runner additionally rejects wrong-node,
 malformed, missing, unsuccessful or incomplete process results and checks that a
 review agrees with the ledger and its existing `mark done --check` gate.
 
-The supervisor stops at a concrete external blocker or failed process rather
-than blindly restarting it. A lease within 60 seconds of expiry pauses
-implementation for ownership recovery; a missing deadline cannot admit an
-implementation job. ICPS currently has no renewal verb:
-never simulate renewal by toggling `ready`/`doing` or override another owner.
-Resume only after the storage workflow establishes a safe current state.
+At 60 seconds before lease expiry the supervisor stops and confirms its owned
+commands, then runs one ownership recovery job. Use ICPS/ICPL's formal `renew` or
+`recover` with original claim provenance, fresh source comparison and confirmed
+writeback/readback. Recovery retains the worker session, original page clock and
+valid evidence. A missing or still unusable deadline cannot admit implementation;
+unchanged failed recovery is not retried in a model loop. Never toggle ready/doing
+to renew or take over an unproven owner. The storage contract describes lost-write
+acknowledgement reconciliation and the single-writer limitation of Sheets.
+
+`blocked` still stops the whole run for shared safety or unresolved synchronization
+problems. `node_blocked` is only for an isolated page prerequisite, with no live
+owned commands and safe independent work. It saves the page's phase/session/evidence
+checkpoint and marks its local ledger `blocked`, preserving the source state.
+The scheduler continues independent pages, and can invoke the existing final
+audit to close independent partials when no pending page is runnable. It does not
+dispatch blocked nodes or their dependency paths, including recorded back edges.
+It cannot declare completion with any blocked/partial/failed/pending/doing node.
+An explicit resume rechecks source state and retries preserved blocked checkpoints;
+completed siblings are not reimplemented. Do not disguise a blocked page as partial.
+
+On complete, blocked or failed, submit one terminal notification per launch/status.
+macOS uses its local notification service; `--notify-command /absolute/executable`
+can provide a verified transport receiving a compact JSON event on stdin. Status
+queries never resend it. A transport failure is recorded without changing the
+business outcome; accepted submission does not prove display or user receipt.
+No periodic model wakeup or automatic desktop conversation is created.
 
 Process metadata and per-job events/results live under the existing run's
 `headless/` directory; `run.json` and the source canonical remain the business
 state. A project-wide `headless.lock` serializes local supervisors and children.
 Keep raw event logs private; they can contain source/tool output. This mechanism
-does not provide remote Sheets transactions or automatic desktop notifications.
+does not provide remote Sheets transactions or automatic desktop conversation updates.
 
 ## Verification
 

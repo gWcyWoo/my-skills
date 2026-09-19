@@ -11,6 +11,7 @@ import sys
 import tempfile
 import time
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 RUNNER = Path(__file__).resolve().parents[1] / "scripts" / "runner.py"
@@ -28,6 +29,9 @@ class RunnerContract(unittest.TestCase):
         self.engine = self.project / "codex-fixture"
         self.engine.write_text(f"#!{sys.executable}\nexec(compile(open({str(BOUNDARY)!r}).read(), {str(BOUNDARY)!r}, 'exec'))\n")
         self.engine.chmod(0o700)
+        self.notifier = self.project / "notify-fixture"
+        self.notifier.write_text(f"#!{sys.executable}\nimport sys\nfrom pathlib import Path\np=Path({str(self.project / 'notifications.jsonl')!r})\nwith p.open('a') as f: f.write(sys.stdin.read()+'\\n')\n")
+        self.notifier.chmod(0o700)
         self.make_tree()
 
     def tearDown(self):
@@ -58,7 +62,7 @@ class RunnerContract(unittest.TestCase):
         command = [sys.executable, str(RUNNER), verb, "--run", str(self.run)]
         if verb == "start":
             command += ["--project", str(self.project), "--instructions", str(self.instructions),
-                        "--codex", str(self.engine), "--skip-git-repo-check"]
+                        "--codex", str(self.engine), "--skip-git-repo-check", "--notify-command", str(self.notifier)]
         proc = subprocess.run(command + list(args), capture_output=True, text=True, timeout=20)
         if expect is not None:
             self.assertEqual(proc.returncode, expect, proc.stdout + proc.stderr)
@@ -87,7 +91,7 @@ class RunnerContract(unittest.TestCase):
         def done():
             result = self.cli("status")
             s = result["runner"]
-            return result if s and s["status"] in {"complete", "failed", "blocked", "stopped"} and not s["child_alive"] else None
+            return result if s and s["status"] in {"complete", "failed", "blocked", "stopped"} and not s["child_alive"] and not s["supervisor_alive"] else None
         return self.await_condition(done, "runner did not reach an observed terminal state")
 
     def held(self):
@@ -364,13 +368,13 @@ class RunnerContract(unittest.TestCase):
             self.tearDown()
             self.setUp()
 
-    def test_lease_risk_stops_before_another_implementation_call(self):
+    def test_unrecoverable_lease_stops_before_any_implementation(self):
         self.mode(lease_soon=True)
         self.cli("start")
         result = self.finished()
         self.assertEqual(result["runner"]["status"], "blocked", result)
-        self.assertIn("Lease", result["runner"]["error"])
-        self.assertEqual([c["phase"] for c in self.calls()], ["prepare"])
+        self.assertIn("Lease", result["runner"]["blocked_nodes"]["n0"])
+        self.assertEqual([c["phase"] for c in self.calls()], ["prepare", "recover"])
 
     def test_missing_lease_does_not_bypass_ownership_protection(self):
         self.mode(missing_lease=True)
@@ -379,14 +383,22 @@ class RunnerContract(unittest.TestCase):
         self.assertEqual(result["runner"]["status"], "failed", result)
         self.assertEqual([c["phase"] for c in self.calls()], ["prepare"])
 
-    def test_lease_deadline_interrupts_an_active_worker(self):
+    def test_lease_deadline_stops_owned_commands_renews_and_resumes_same_worker(self):
         self.mode(hold=True, lease_seconds=62)
         self.cli("start")
-        self.held()
+        first = self.held()
+        self.await_condition(lambda: len([c for c in self.calls() if c["phase"] == "implement"]) == 2,
+                             "worker was not resumed after lease renewal")
+        check = subprocess.run(["ps", "-p", str(first["grandchild"]), "-o", "stat="], capture_output=True, text=True)
+        self.assertTrue(check.returncode or check.stdout.strip().startswith("Z"), check.stdout)
+        self.await_condition(lambda: self.held().get("grandchild") != first["grandchild"], "resumed worker not ready")
+        (self.project / "boundary-release").touch()
         result = self.finished()
-        self.assertEqual(result["runner"]["status"], "blocked", result)
+        self.assertEqual(result["runner"]["status"], "complete", result)
         self.assertFalse(result["runner"]["child_alive"])
-        self.assertNotIn("review", [c["phase"] for c in self.calls()])
+        workers = [c for c in self.calls() if c["phase"] == "implement"]
+        self.assertEqual(workers[0]["session"], workers[1]["session"])
+        self.assertIn("recover", [c["phase"] for c in self.calls()])
 
     def test_resume_refuses_a_foreign_source_owner(self):
         self.mode(hold=True)
@@ -475,6 +487,184 @@ class RunnerContract(unittest.TestCase):
         self.mode()
         self.cli("resume")
         self.assertEqual(self.finished()["runner"]["status"], "complete")
+
+
+    def expired_owned(self, node="n0", storage="icps"):
+        run = json.loads(self.run.read_text())
+        run["nodes"][node]["source_skill"] = storage
+        self.run.write_text(json.dumps(run))
+        path = self.project / "source.json"
+        source = json.loads(path.read_text())
+        row = next(r for r in source["rows"] if r["row_id"] == run["nodes"][node]["row"]["row_id"])
+        row["roles"]["frontend"].update(status="doing", lease_token="original-owned-token",
+                                     lease_until=(datetime.now(timezone.utc) - timedelta(hours=40)).isoformat())
+        path.write_text(json.dumps(source))
+        (self.project / "boundary-claims.json").write_text(json.dumps({node: "original-owned-token"}))
+        return row
+
+    def independent_tree(self):
+        self.make_tree(3)
+        run = json.loads(self.run.read_text())
+        run["nodes"]["n1"]["children"] = []
+        run["nodes"]["n2"]["children"] = ["n0", "n1"]
+        self.run.write_text(json.dumps(run))
+
+    def test_preflight_finds_old_root_lease_before_leaves_and_recovers_with_real_icps(self):
+        self.make_tree(2)
+        self.expired_owned("n1")
+        self.cli("start")
+        result = self.finished()
+        self.assertEqual(result["runner"]["status"], "complete", result)
+        report = json.loads(Path(result["runner"]["preflight"]["path"]).read_text())
+        self.assertEqual(report["checked"], ["n0", "n1"])
+        self.assertEqual([(i["node_id"], i["kind"]) for i in report["issues"]], [("n1", "owned_expired")])
+        snapshot = json.loads(Path(report["evidence"][0]).read_text())
+        self.assertEqual(snapshot["rows"][0]["roles"]["frontend"]["status"], "ready")
+        ops = [json.loads(s) for s in (self.project / "lease-operations.jsonl").read_text().splitlines()]
+        self.assertEqual([(o["node"], o["operation"]) for o in ops], [("n1", "recover")])
+        self.assertNotEqual(ops[0]["lease_token"], "original-owned-token")
+        self.assertEqual(result["ledger"]["counts"]["done"], 2)
+
+    def test_lease_update_ack_loss_reconciles_without_second_rotation(self):
+        self.expired_owned()
+        self.mode(lease_ack_lost=True)
+        self.cli("start")
+        self.assertEqual(self.finished()["runner"]["status"], "failed")
+        token = json.loads((self.project / "boundary-claims.json").read_text())["n0"]
+        self.mode()
+        self.cli("resume")
+        self.assertEqual(self.finished()["runner"]["status"], "complete")
+        self.assertEqual(json.loads((self.project / "boundary-claims.json").read_text())["n0"], token)
+        self.assertEqual(len((self.project / "lease-operations.jsonl").read_text().splitlines()), 1)
+
+    def test_legacy_expired_prepare_checkpoint_resumes_without_new_session_or_page_clock(self):
+        self.expired_owned()
+        self.mode(legacy_expiry_block=True)
+        self.cli("start")
+        first = self.finished()
+        self.assertEqual(first["runner"]["status"], "blocked")
+        self.assertFalse((self.project / "lease-operations.jsonl").exists())
+        self.mode()
+        self.cli("resume")
+        result = self.finished()
+        self.assertEqual(result["runner"]["status"], "complete", result)
+        prepares = [c for c in self.calls() if c["phase"] == "prepare"]
+        self.assertEqual(prepares[0]["session"], prepares[1]["session"])
+        self.assertEqual(prepares[0]["job"]["page_started_at"], prepares[1]["job"]["page_started_at"])
+        self.assertEqual(len([c for c in self.calls() if c["phase"] == "implement"]), 1)
+
+    def test_unchanged_recovery_deadline_cannot_spin_or_admit_work(self):
+        self.mode(lease_soon=True, recovery_unchanged=True)
+        self.cli("start")
+        result = self.finished()
+        self.assertEqual(result["runner"]["status"], "blocked")
+        self.assertIn("usable deadline", result["runner"]["error"])
+        self.assertEqual([c["phase"] for c in self.calls()], ["prepare", "recover"])
+
+    def test_foreign_owner_is_untouched_while_independent_page_completes(self):
+        self.independent_tree()
+        self.expired_owned()
+        path = self.project / "source.json"
+        source = json.loads(path.read_text())
+        foreign = source["rows"][0]
+        foreign["roles"]["frontend"]["lease_token"] = "other-run-token"
+        path.write_text(json.dumps(source))
+        self.cli("start")
+        result = self.finished()
+        self.assertEqual(result["runner"]["status"], "blocked", result)
+        self.assertEqual(json.loads(path.read_text())["rows"][0], foreign)
+        run = json.loads(self.run.read_text())
+        self.assertEqual(run["progress"]["n0"]["status"], "blocked")
+        self.assertEqual(run["progress"]["n1"]["status"], "done")
+        self.assertEqual(run["progress"]["n2"]["status"], "pending")
+        self.assertEqual([c["node"] for c in self.calls() if c["phase"] == "implement"], ["n1"])
+
+    def test_deferred_node_resume_preserves_identity_and_never_repeats_completed_sibling(self):
+        self.independent_tree()
+        self.mode(node_blocked=["n0"])
+        self.cli("start")
+        first = self.finished()
+        self.assertEqual(first["runner"]["status"], "blocked")
+        checkpoint = json.loads((self.run.parent / "headless/state.json").read_text())["blocked_nodes"]["n0"]
+        self.mode()
+        self.cli("resume")
+        result = self.finished()
+        self.assertEqual(result["runner"]["status"], "complete", result)
+        prep = [c for c in self.calls() if c["phase"] == "prepare" and c["node"] == "n0"]
+        self.assertEqual(len(prep), 2)
+        self.assertEqual(prep[0]["session"], prep[1]["session"])
+        self.assertEqual(prep[1]["job"]["page_started_at"], checkpoint["page_started_at"])
+        self.assertEqual(len([c for c in self.calls() if c["phase"] == "implement" and c["node"] == "n1"]), 1)
+
+    def test_crash_between_block_checkpoint_and_ledger_write_keeps_original_owner(self):
+        for ledger_status in ("doing", "blocked"):
+            with self.subTest(ledger_status=ledger_status):
+                self.mode(node_blocked=["n0"])
+                self.cli("start")
+                self.assertEqual(self.finished()["runner"]["status"], "blocked")
+                path = self.run.parent / "headless/state.json"
+                state = json.loads(path.read_text())
+                checkpoint = state["blocked_nodes"]["n0"]
+                state.update({k: v for k, v in checkpoint.items() if k != "reason"})
+                state.update(status="running", daemon=None, child=None)
+                path.write_text(json.dumps(state))
+                run = json.loads(self.run.read_text())
+                run["progress"]["n0"]["status"] = ledger_status
+                self.run.write_text(json.dumps(run))
+                self.mode()
+                self.cli("resume")
+                result = self.finished()
+                self.assertEqual(result["runner"]["status"], "complete", result)
+                prepare = [c for c in self.calls() if c["phase"] == "prepare"]
+                self.assertEqual(prepare[0]["session"], prepare[1]["session"])
+            self.tearDown()
+            self.setUp()
+
+    def test_blocked_root_does_not_prevent_independent_partial_acceptance(self):
+        self.independent_tree()
+        self.mode(node_blocked=["n2"], partial_nodes=["n0"], repair_partials=True)
+        self.cli("start")
+        result = self.finished()
+        self.assertEqual(result["runner"]["status"], "blocked", result)
+        self.assertEqual(result["ledger"]["counts"]["done"], 2)
+        self.assertEqual(result["ledger"]["counts"]["partial"], 0)
+        self.assertEqual(result["ledger"]["counts"]["blocked"], 1)
+        self.assertEqual(len([c for c in self.calls() if c["phase"] == "implement" and c["node"] == "n0"]), 2)
+        self.assertFalse(any(c["phase"] == "implement" and c["node"] == "n2" for c in self.calls()))
+
+    def test_missing_stale_or_incomplete_preflight_never_admits_implementation(self):
+        for mode in ("missing_preflight", "stale_preflight", "incomplete_preflight"):
+            with self.subTest(mode=mode):
+                self.mode(**{mode: True})
+                self.cli("start")
+                result = self.finished()
+                self.assertEqual(result["runner"]["status"], "failed", result)
+                self.assertFalse(any(c["phase"] == "implement" for c in self.calls()))
+            self.tearDown()
+            self.setUp()
+
+    def test_terminal_notification_is_once_per_transition_and_queries_never_resend(self):
+        self.mode(prepare_blocked=True)
+        self.cli("start")
+        result = self.finished()
+        self.assertEqual(result["runner"]["notification"]["submission"], "accepted")
+        for _ in range(3):
+            self.cli("status")
+        path = self.project / "notifications.jsonl"
+        events = [json.loads(s) for s in path.read_text().splitlines()]
+        self.assertEqual([e["status"] for e in events], ["blocked"])
+        self.mode()
+        self.cli("resume")
+        self.assertEqual(self.finished()["runner"]["status"], "complete")
+        events = [json.loads(s) for s in path.read_text().splitlines()]
+        self.assertEqual([e["status"] for e in events], ["blocked", "complete"])
+
+    def test_notification_failure_is_visible_without_changing_business_result(self):
+        self.notifier.write_text(f"#!{sys.executable}\nraise SystemExit(9)\n")
+        self.cli("start")
+        result = self.finished()
+        self.assertEqual(result["runner"]["status"], "complete")
+        self.assertEqual(result["runner"]["notification"]["submission"], "failed")
 
 
 if __name__ == "__main__":

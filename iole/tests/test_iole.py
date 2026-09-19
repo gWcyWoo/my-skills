@@ -108,7 +108,7 @@ class TestRecord(Ledger):
         self.assertEqual(out["added"], ["a"])
         self.assertEqual(self.status()["counts"], {"pending": 1, "doing": 0,
                                                    "done": 0, "partial": 0,
-                                                   "failed": 0})
+                                                   "failed": 0, "blocked": 0})
 
     def test_row_data_from_icpx_is_persisted(self):
         self.record({"a": node("A", row={"route": "signin", "ui_description": "结构分为4部份"})},
@@ -344,7 +344,7 @@ class TestTreeShape(Ledger):
         self.assertEqual(out["unreachable"], ["orphan"])
         self.assertEqual(out["execution_order"], ["a"])
         self.assertEqual(out["counts"], {"pending": 1, "doing": 0, "done": 0,
-                                         "partial": 0, "failed": 0})
+                                         "partial": 0, "failed": 0, "blocked": 0})
         self.assertIn("pending=1", self.status(fmt="table"))
         self.assertEqual(self.run_f.read_bytes(), before)
 
@@ -417,6 +417,41 @@ class TestPick(Ledger):
         out = self.next()
         self.assertFalse(out["done"])
         self.assertIn("b", out["waiting"])
+
+
+class TestBlockedDependencies(Ledger):
+    def test_blocked_branch_keeps_independent_work_dispatchable_without_false_completion(self):
+        self.record({"root": node("Root", ["a", "b"]), "a": node("A"), "b": node("B")}, root="root")
+        self.mark("a", "blocked", error="Ownership not established")
+        self.assertEqual(self.next()["node_id"], "b")
+        self.mark("b", "done")
+        result = self.next()
+        self.assertFalse(result["done"])
+        self.assertEqual(result["blocked"], ["a"])
+        self.assertEqual(result["remaining"], 2)
+        self.assertEqual(self.status()["counts"]["blocked"], 1)
+        self.mark("a", "pending")
+        self.assertEqual(self.next()["node_id"], "a")
+
+    def test_recorded_back_edge_to_blocked_node_does_not_bypass_dependency(self):
+        self.record({"a": node("A", ["b"]), "b": node("B", ["a"])}, root="a")
+        self.mark("a", "blocked", error="Missing prerequisite")
+        before = self.run_f.read_bytes()
+        result = self.next()
+        self.assertFalse(result["done"])
+        self.assertNotIn("node_id", result)
+        self.assertEqual(self.run_f.read_bytes(), before)
+
+    def test_blocked_requires_reason_and_preserves_existing_evidence(self):
+        self.record({"a": node("A")}, root="a")
+        self.mark("a", "blocked", expect=1)
+        self.mark("a", "done", pr="existing-pr")
+        evidence = self.base / "icp/A/behavior-result.json"
+        original = evidence.read_bytes()
+        self.mark("a", "blocked", error="New required input")
+        row = json.loads(self.run_f.read_text())["progress"]["a"]
+        self.assertEqual(row, {"status": "blocked", "pr": "existing-pr", "error": "New required input"})
+        self.assertEqual(evidence.read_bytes(), original)
 
 
 if __name__ == "__main__":
