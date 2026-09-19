@@ -9,7 +9,9 @@ working. The ICP job still performs the required implementation and acceptance.
 
 - Use a POSIX host with Python 3, Codex CLI, and the project's working tools.
   Confirm `codex exec` and `codex exec resume` support `--json`,
-  `--output-schema`, and `-o`. Keep the configured model and reasoning settings.
+  `--output-schema`, `-o`, and `-c`. Keep the configured model. The runner fixes
+  reasoning effort at `medium` for every new and resumed job, overriding the
+  inherited configuration or prior session effort. Do not use `xhigh`.
 - Verify the CLI's actual required capabilities once per environment: local
   commands, image observation, the platform tools, and read access through the
   required MCP services. Desktop-only tools are not assumed to exist in CLI.

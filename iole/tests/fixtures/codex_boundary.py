@@ -19,7 +19,7 @@ result_path = Path(sys.argv[sys.argv.index("-o") + 1])
 resume = len(sys.argv) > 2 and sys.argv[2] == "resume"
 session = sys.argv[-2] if resume else str(uuid.uuid4())
 record = {"phase": phase, "node": node, "session": session, "resume": resume,
-          "prompt": prompt, "job": job, "pid": os.getpid()}
+          "prompt": prompt, "job": job, "pid": os.getpid(), "argv": sys.argv[1:]}
 with (project / "boundary-calls.jsonl").open("a") as f:
     f.write(json.dumps(record) + "\n")
 

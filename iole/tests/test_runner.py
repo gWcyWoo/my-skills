@@ -68,6 +68,12 @@ class RunnerContract(unittest.TestCase):
         path = self.project / "boundary-calls.jsonl"
         return [json.loads(s) for s in path.read_text().splitlines()] if path.exists() else []
 
+    def assert_medium_jobs(self, calls):
+        for call in calls:
+            argv = call["argv"]
+            overrides = [argv[i + 1] for i, arg in enumerate(argv[:-1]) if arg in ("-c", "--config")]
+            self.assertIn('model_reasoning_effort="medium"', overrides, call["phase"])
+
     def await_condition(self, predicate, description):
         limit = time.monotonic() + 15
         while time.monotonic() < limit:
@@ -95,6 +101,7 @@ class RunnerContract(unittest.TestCase):
         result = self.finished()
         self.assertEqual(result["runner"]["status"], "complete", result)
         calls = self.calls()
+        self.assert_medium_jobs(calls)
         self.assertEqual([(x["node"], x["phase"]) for x in calls], [
             ("n0", "prepare"), ("n0", "implement"), ("n0", "review"),
             ("n1", "prepare"), ("n1", "implement"), ("n1", "review"), (None, "finalize")])
@@ -145,6 +152,7 @@ class RunnerContract(unittest.TestCase):
         result = self.finished()
         self.assertEqual(result["runner"]["status"], "complete", result)
         calls = self.calls()
+        self.assert_medium_jobs(calls)
         workers = [x for x in calls if x["phase"] == "implement"]
         self.assertEqual(len(workers), 2)
         self.assertEqual(workers[0]["session"], workers[1]["session"])

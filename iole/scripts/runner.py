@@ -308,7 +308,8 @@ def execute_job(state, lock_fd):
     command = [state["codex"], "exec"]
     if session:
         command += ["resume"]
-    command += ["--json", "--output-schema", str(schema_path), "-o", str(result_path)]
+    command += ["--json", "--output-schema", str(schema_path), "-o", str(result_path),
+                "-c", 'model_reasoning_effort="medium"']
     if state.get("sandbox"):
         command += ["-c", 'sandbox_mode="' + state["sandbox"] + '"']
     if state.get("skip_git_repo_check"):
