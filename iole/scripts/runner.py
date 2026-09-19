@@ -375,6 +375,18 @@ def prompt_for(state, phase):
         "recover": "Read IOLE and the storage skill; recover ownership for this SAME node before execution resumes. The runner has confirmed its previous child stopped. Check current source status/lease and this run's original claim/writeback evidence, including possibly successful interrupted writes. For a proven owned lease use the storage renew/recover operation and confirmed source readback, preserving status and evidence. Never reset ready/doing, take over an unproven owner or invent a renewal. Return ready only with a confirmed lease more than 60 seconds in the future, or when review synchronization already completed and can be reconciled. Do not redo page implementation or change nodes. Use node_blocked only for an isolated page prerequisite; shared ownership/process/synchronization uncertainty is blocked.",
         "finalize": "Read IOLE completion/delivery rules. Scheduling is exhausted, not necessarily accepted. Audit reachable pages, skipped items, real cross-page/shared integration and confirmed source synchronization against the caller's scope. Reuse valid evidence. Return needs_revision with the responsible node_id for a concrete fix, or blocked for an external prerequisite. Only return done, node_id empty and source_synced=true when the full agreed tree and authorized mr delivery actually pass. Do not raise mr or push without the user's authorization. Do not run another waiting coordinator or implementation worker.",
     }[phase]
+    if phase == "implement":
+        instructions += (
+            " For local commands, follow ICP's Waiting for local commands templates. "
+            "When no independent work is available, set functions.exec's first-line "
+            "// @exec: {\"yield_time_ms\": 60000} wrapper pragma; start exec_command with "
+            "yield_time_ms=30000 and continue a returned process session with empty-input "
+            "write_stdin at 45000. If the wrapper yields a cell_id, await that cell with "
+            "functions.wait at 60000 before touching the process session again. These are "
+            "maximum waits, subject to host limits and nearer control deadlines; completion "
+            "returns early. Never short-poll an unchanged wait, restart the command, or "
+            "replace final exit-code/test-count verification with silence."
+        )
     return ("IOLE_JOB_JSON\n" + json.dumps(job, ensure_ascii=False) + "\nEND_IOLE_JOB_JSON\n"
             "You are one bounded headless job. The local runner owns waiting, process control and sequencing. "
             "Finish this phase and return the required JSON; never poll/wait for other agents. "

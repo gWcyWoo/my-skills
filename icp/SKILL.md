@@ -32,9 +32,44 @@ icp 不依赖调用方的数据格式。调用方（iole 或人）第一步将�
 - 业务数据必须经接口模型绑定到真实页面。默认按 [接口数据渲染与数据源切换](implementation/STAGE.md#接口数据渲染与数据源切换) 实现：已核实正式合同但未配置地址时使用正式 shape 的模拟响应，配置后自动走真实接口，复用同一解析与渲染链；只有用户明确排除此能力时才省略，不以源表未写或未再次提出为由漏掉。
 - 固定顺序：先依据 Stage 1/2 一次性完整实现 UI，UI 不做单元/集成测试；再按源交互描述拆解用例，实现行为、接口、埋点及对应代码测试；全部完成后编译、渲染并与设计稿比对。代码用例全部通过且 UI 比对通过后，最后才集中启动一次真实页面操作验收，不按每个用例反复启动。交互实现阶段的代码测试禁止使用模拟器、真机或 UI 自动化；TDD 已选定时遵守 `../tdd/SKILL.md` 的代码测试要求，不提前执行页面操作验收。设计稿比对最多 5 轮，每轮完整检查所有组件和页面级差异，记录全部差异后集中修复；上限不代表验收通过。模拟器/设备只用于后段渲染比对及最后的真实页面操作。具体执行见 [Stage 3](implementation/STAGE.md)。
 - 一个页面任务由一个负责人持续推进。写测试、运行、实现是逻辑阶段，不默认拆成多个 worker；采用外部 worker 时遵守项目角色边界。
-- 连续的确定性命令在同一执行段完成，失败即停并保留结果；编译、测试和日志提取直接用工具执行，不为每条命令另启模型。没有可并行的实际工作时，首次启动就使用原生阻塞等待（通常 30 秒，依工具上限），不先以 1 秒返回 session 再让模型单独发起等待；超出首次等待才继续原生等待或完成通知，保留最终退出码与结果，轮询只读新增摘要。
+- 连续的确定性命令在同一执行段完成，失败即停并保留结果；编译、测试和日志提取直接用工具执行，不为每条命令另启模型。没有可并行的实际工作时，按下方 [Waiting for local commands](#waiting-for-local-commands) 对齐内外层原生等待；保留最终退出码与实际执行数量，轮询只读新增摘要。
 - 每页使用下方 30 分钟检查点；超限触发复盘优化，不表示验收通过、终止页面或自动降级为 partial。
 - 原始日志与大产物落盘。交接只提供当前用例、变更文件、真实测试结果、证据路径和待决策问题；已验收且输入未变的部分不重复探索或追加一轮独立审查。
+
+## Waiting for local commands
+
+When waiting is the only useful next action, use completion-sensitive native
+waits. These durations are upper bounds: completion returns immediately.
+Preserve the command's existing timeout, cancellation and result checks.
+
+With `exec_command` / `write_stdin` inside `functions.exec`, keep the wrapper's
+wait longer than the inner operation. Start a command once:
+
+```javascript
+// @exec: {"yield_time_ms": 60000, "max_output_tokens": 2000}
+text(await tools.exec_command({cmd: "<command>", yield_time_ms: 30000, max_output_tokens: 2000}));
+```
+
+After that wrapper completes, if the command returned a `session_id`, continue
+the same process without sending input:
+
+```javascript
+// @exec: {"yield_time_ms": 60000, "max_output_tokens": 2000}
+text(await tools.write_stdin({session_id: SESSION_ID, chars: "", yield_time_ms: 45000, max_output_tokens: 2000}));
+```
+
+If the **wrapper** instead returns `Script running with cell ID ...`, use
+`functions.wait` with that `cell_id` and `yield_time_ms: 60000` until the wrapper
+completes. A cell ID is not a process session ID. Do not issue another
+`write_stdin`, status probe or log read for that same command while its wrapper
+is still waiting. Do not omit the outer wait duration or replace it with a
+one-second poll, fixed sleep or a command restart.
+
+Respect the exposed host limits and any nearer control deadline. A shorter wait
+needs an actual deadline or independent action to perform; unchanged output is
+not a reason. Required progress updates reuse available output without launching
+another status query. After completion, retain the exit code and actual
+executed/passed/failed/skipped counts; silence alone is not success.
 
 ## 时间预算与项目经验
 
