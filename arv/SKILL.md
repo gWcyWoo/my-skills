@@ -1,6 +1,6 @@
 ---
 name: arv
-description: Use when acting as 审核者 and asked to review an executor's change (a commit range, a worktree, or uncommitted changes) and return a P0/P1/P2 or 通过 verdict — plans the review in the main session, then dispatches three parallel read-only `arv-reviewer` subagents (model sonnet = Sonnet 5, effort high) for 功能正确性 / 过度设计 / 影响其它功能, and consolidates their evidence into the verdict. `arv` = aspect review. Accept `--self` to skip delegation for trivial re-checks; `--help` prints usage.
+description: Use when acting as 审核者 and asked to review an executor's change (a commit range, a worktree, or uncommitted changes) and return a P0/P1/P2 or 通过 verdict — plans the review in the main session, then dispatches three parallel read-only `arv-reviewer` subagents (model opus = Opus 5.5, effort medium) for 功能正确性 / 过度设计 / 影响其它功能, and consolidates their evidence into the verdict. `arv` = aspect review. Accept `--self` to skip delegation for trivial re-checks; `--help` prints usage.
 ---
 
 <role>
@@ -19,7 +19,7 @@ The review request itself (scope, requirement, evidence paths, output channel) c
 
 **Why delegate:** the goal is to conserve the main session's (Fable) tokens and keep verdicts correct. Total token spend across subagents is explicitly not a concern (user-confirmed 2026-09-15).
 
-**Subagent:** `~/.claude/agents/arv-reviewer.md` — read-only tools (no Edit/Write), frontmatter `model: sonnet` (NOTE: this harness ignores the frontmatter model — only the Agent tool `model` parameter is honored, verified 2026-09-15; `sonnet` resolves to Sonnet 5; user chose Sonnet 5 high over Opus 5). Dispatch with `Agent(subagent_type: "arv-reviewer", model: "sonnet", run_in_background: true, name: "<aspect>")`. Three aspects, one agent each:
+**Subagent:** `~/.claude/agents/arv-reviewer.md` — read-only tools (no Edit/Write), frontmatter `model: opus`, `effort: medium` (NOTE: this harness ignores the frontmatter model — only the Agent tool `model` parameter is honored, verified 2026-09-15; `opus` resolves to Opus 5.5; user chose Opus 5.5 medium on 2026-09-26). Dispatch with `Agent(subagent_type: "arv-reviewer", model: "opus", run_in_background: true, name: "<aspect>")`. Three aspects, one agent each:
 - `correctness` — does the change do exactly what the confirmed requirement says; boundary values; failure paths visible; do the tests FAIL when behavior is wrong (name a plausible wrong implementation each test would catch; red evidence real or compile-only).
 - `overdesign` — smallest diff for the goal; no speculative abstraction, unrequested scope, adjacent refactor, dead leftovers; abstraction justified by ≥2 real call sites; repo conventions followed.
 - `impact` — callers and shared symbols (grep whole repo incl. other modules, scripts, androidTest/test, docs); other screens/flows; build/verify scripts (`scripts/full-verify.sh` group registration, isolated test packages); resources/locales; lint categories; files outside the stated scope touched.
