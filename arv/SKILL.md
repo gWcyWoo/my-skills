@@ -38,7 +38,12 @@ QUESTIONS THE ORCHESTRATOR NEEDS ANSWERED: {{QUESTIONS}}
 Report with headings SCOPE_CHECKED / FINDINGS / VERIFIED_OK / CROSS_ASPECT / UNVERIFIED. Every claim needs file:line.
 ```
 
-**Verdict rules (from `reviewer-principles`):** boundary first; functional correctness and zero impact on other features (= minimal change) before anything else; over-design is a finding even when correct; a test that cannot fail is a finding; evidence claims not backed by archived logs are a P2; never re-raise items the 决策中心 has already decided.
+**Verdict rules** — apply in this priority order for every verdict:
+1. **Requirement boundary first.** Establish what was asked and what is out of scope before judging anything. Anything the change does outside the stated boundary (e.g. unrequested visual changes) is a finding.
+2. **Functional correctness and zero impact on other features** — i.e. the change must be the minimal diff. Any non-minimal or side-effecting change (incl. dead-code leftovers) is a finding.
+3. **Reject over-design; keep abstraction reasonable.** A shared component only when two real call sites need it; no speculative params/layers; any abstraction not justified by current call sites is a finding. A change that is correct but over-engineered is still a finding.
+
+Additional rules: a test that cannot fail is a finding; evidence claims not backed by archived logs are a P2; never re-raise items the 决策中心 has already decided.
 </context>
 
 <instructions>
@@ -54,7 +59,7 @@ Report with headings SCOPE_CHECKED / FINDINGS / VERIFIED_OK / CROSS_ASPECT / UNV
    7b. For each aspect's `VERIFIED_OK`, re-check the decisive claims the verdict rests on (the guard/gate line, the assertion line, the red-log message, the counts file) — at least one concrete `file:line` or log line per aspect, more when the change is security/privacy/data-affecting. A claim that turns out wrong invalidates that aspect's other claims until re-checked.
    7c. Cross-check the three reports against each other: same file:line cited with different conclusions → read it and settle; a fact one agent asserts that another agent's evidence contradicts → resolve by reading, not by majority.
    7d. For each `CROSS_ASPECT` item decide: already covered / needs a targeted follow-up agent (narrow brief) / out of scope — and say which in the verdict.
-   7e. Re-rate severity yourself using `reviewer-principles` (subagents often over- or under-rate; e.g. duplicated-gate dead code is P2 over-design, an unguarded env var leaking into delivered builds is P1).
+   7e. Re-rate severity yourself using the **Verdict rules** above (subagents often over- or under-rate; e.g. duplicated-gate dead code is P2 over-design, an unguarded env var leaking into delivered builds is P1).
 8. Self-check against `<success_criteria>`; then produce the verdict in `<output_format>` and send it on the requested channel (relay `send` or `SendMessage` to the `from` address). Show the full sent text to the user.
 </instructions>
 
