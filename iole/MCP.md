@@ -12,7 +12,7 @@ IOLE 只安装它实际调用的外部 MCP。来源适配、设计取数和本�
 以下能力不加入外部 MCP 安装清单：
 
 - 周期执行使用 Codex Desktop 内置的 `mcp__codex_app__automation_update`，无需安装。
-- 蓝湖设计数据由 `icp/extract/scripts/lanhu_fetch.py` 获取，不经蓝湖 MCP。
+- 设计稿数据由 `icp/extract/scripts/design_fetch.py` 按引用地址分流到平台适配器获取（蓝湖 `lanhu_fetch.py`、自建平台 `selfhost_fetch.py`），不经任何设计平台 MCP。
 - 本地 JSON 来源由 `icpl` 读取，不需要 MCP。
 - Git 提交、推送和 MR 交付不是 IOLE 取数 MCP。
 - Android 运行和视觉验证不是 IOLE 取数 MCP。

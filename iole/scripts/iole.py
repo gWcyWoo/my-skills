@@ -11,7 +11,7 @@
 
 台账让长流程可中断续跑:处理一个标记一个,进度不丢、节点不漏、不重做。
 
-iole 不读表(适配 skill 读)、不调蓝湖 API(icp 调)、不解析设计、不写代码。
+iole 不读表(适配 skill 读)、不调设计平台 API(icp 调)、不解析设计、不写代码。
 """
 import argparse
 import json

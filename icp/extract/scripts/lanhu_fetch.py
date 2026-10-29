@@ -95,6 +95,15 @@ def parse_lanhu_url(url):
     }
 
 
+def parse_ref(ref, base):
+    """design_fetch 的离线校验入口。缺 image_id/pid 抛 ValueError。"""
+    parsed = parse_lanhu_url(ref)
+    for field in ("image_id", "project_id"):
+        if not parsed[field]:
+            raise ValueError(f"URL 缺少 {field}(pid/image_id)")
+    return parsed
+
+
 def http_get(url, cookie, timeout=30):
     req = urllib.request.Request(url, headers={
         "Cookie": cookie,
@@ -228,7 +237,7 @@ def png_size(path):
 
 # ---------------------------------------------------------------- main
 
-def main():
+def main(argv=None):
     ap = argparse.ArgumentParser(
         description="蓝湖设计稿 URL → icp Stage 1 契约四件套")
     ap.add_argument("--url", required=True, help="含 image_id 的蓝湖 URL")
@@ -236,7 +245,7 @@ def main():
     ap.add_argument("--cookie", default=None, help="覆盖 cookie(否则走 env/dotenv)")
     ap.add_argument("--skip-cover", action="store_true",
                     help="不下载整页截图(crop 步骤将无输入)")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     cookie = resolve_cookie(args.cookie)
     if not cookie:
@@ -244,10 +253,10 @@ def main():
                           "设置 $LANHU_COOKIE，或在 ~/.codex/mcp/lanhu-mcp/.env "
                           "写 LANHU_COOKIE=...")
 
-    parsed = parse_lanhu_url(args.url)
-    for field in ("image_id", "project_id"):
-        if not parsed[field]:
-            return emit_error("bad_url", f"URL 缺少 {field}(pid/image_id)", 2)
+    try:
+        parsed = parse_ref(args.url, None)
+    except ValueError as e:
+        return emit_error("bad_url", str(e), 2)
 
     try:
         meta = fetch_image_meta(cookie, parsed["image_id"],
@@ -324,6 +333,16 @@ def _count_nodes(node):
     if not isinstance(node, dict):
         return 0
     return 1 + sum(_count_nodes(c) for c in (node.get("layers") or []))
+
+
+def fetch(ref, base, out_dir, cookie=None, skip_cover=False, http_get=None):
+    """design_fetch 的取数入口；蓝湖走自己的 HTTP(带 Referer)，不用注入的 http_get。"""
+    argv = ["--url", ref, "--out-dir", str(out_dir)]
+    if cookie:
+        argv.append(f"--cookie={cookie}")  # 值以 "-" 开头时也不会被当成选项
+    if skip_cover:
+        argv.append("--skip-cover")
+    return main(argv)
 
 
 if __name__ == "__main__":

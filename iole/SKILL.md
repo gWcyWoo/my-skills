@@ -5,7 +5,7 @@ description: 任务调度器。按周期 loop:识别任务表链接类型经工�
 
 # IOLE
 
-调度器。不读表(存储 skill 读)、不调蓝湖 API(icp 调)、不解析设计、不写代码。
+调度器。不读表(存储 skill 读)、不调设计平台 API(icp 调)、不解析设计、不写代码。
 
 外部 MCP 的必需/可选边界、安装和验证见 [`MCP.md`](MCP.md)。
 
@@ -196,7 +196,7 @@ DFS 后序只约束导航依赖；同层页面不一定能安全并行。默认�
    同一来源快照中的标题/global 行只取一次并复用；刷新或源数据变化后重新核对受影响节点。该缓存不替代领取与写回前的最新状态检查。
 4. `status --format table` 给人看计划
 5. 循环 `next`:
-   - 返回 `node_id` → 按存储 skill 核对该行最新状态并领取对应租约（根行复用当前已持有租约，不能把根行 token 用在子行）→ 按「页面执行上下文」派发 ICP，核实本页约定范围；通过且 `mark --status done --check` 校验成功后 →
+   - 返回 `node_id` → 按存储 skill 核对该行最新状态并领取对应租约（根行复用当前已持有租约，不能把根行 token 用在子行）→ 对该行每条设计稿引用跑离线格式校验 `python3 ../icp/extract/scripts/design_fetch.py check --ref "<引用>"`（不联网；`ok:false` 即按第 7 步记 failed 并释放租约，错误写回源表。无头 runner 的 prepare 只能返回 ready/blocked/node_blocked，不在 prepare 做此校验：由 implement 取数时报同样的错并返回 failed，review 按第 7 步写回）→ 按「页面执行上下文」派发 ICP，核实本页约定范围；通过且 `mark --status done --check` 校验成功后 →
      `claim --status review --row-ids <node_row_id> --lease-token <本页token> --pr <pr地址>` 改 canonical，
      再按该 skill 的写回步骤把改动同步回源表（icps 见其 SKILL.md「写回 Google Sheets」）→
      `mark --status done --pr <pr地址>`
@@ -206,7 +206,9 @@ DFS 后序只约束导航依赖；同层页面不一定能安全并行。默认�
 6. 按 `mr` 档位交付:0 不提交 / 1 提交当前分支 / 2 提 MR 合入 `dev`
 7. 输入不可用(设计稿解析失败)→ `mark --status failed --error <因>`,
    并经 skill `claim --status ready --row-ids <node_row_id> --lease-token <本页token> --error <因>` 释放所持租约;
-   不阻塞其他节点,继续 `next`
+   不阻塞其他节点,继续 `next`。
+   例外:取数报 `no_cookie` / `cookie_rejected` 是登录环境问题、不是本页输入问题——不记 failed;
+   设计平台登录视为阻止剩余工作的外部前提，停下请用户按 `../icp/INPUT.md`「取数」更新 cookie(无头 job 返回 `blocked`)
 
 按 `interval` 重复。
 

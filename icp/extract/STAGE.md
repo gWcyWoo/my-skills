@@ -1,14 +1,14 @@
 # Stage 1 — extract
 
-从蓝湖设计稿提取语义组件规格。后续阶段（交互分析、代码实现）的一切基础。
+从设计稿（蓝湖或自建平台）提取语义组件规格。后续阶段（交互分析、代码实现）的一切基础。
 
 ## 流程
 
 ```
-输入: ui_description(可空) + 蓝湖设计稿 URL
+输入: ui_description(可空) + 设计稿引用(蓝湖 URL 或自建平台三级引用)
   ↓
-Step 0  lanhu_fetch: URL → design.json + slices.json + cover.png + assets/
-         (走静态版本数据，不经 lanhu MCP / DDS；详见 ../INPUT.md「取数」)
+Step 0  design_fetch: 引用 → 按地址分流到平台适配器 → design.json + slices.json + cover.png + assets/
+         (不经任何设计平台 MCP；详见 ../INPUT.md「取数」)
   ↓
 Step 1  prepare: 读 JSON 生成节点摘要(树+扁平列表,标记系统组件)
   ↓
@@ -19,7 +19,7 @@ Step 3  bind: 按分组绑定设计数据 → 完备性检查
          └─ 全覆盖 ↓
 Step 4  clean: 删除系统组件(Status Bar / Home Indicator)
   ↓
-Step 5  enrich: 合并蓝湖切片数据(多倍率 URL) + 标记缺失图片资源
+Step 5  enrich: 合并切片数据(slices.json) + 标记缺失图片资源
          (后代含 textLayer 的节点不附加切片,保留图层数据供逐层还原)
   ↓
 Step 6  crop: 按 frame 坐标从整页截图裁切图标 → 写回 asset_path
@@ -31,11 +31,14 @@ Step 6  crop: 按 frame 坐标从整页截图裁切图标 → 写回 asset_path
 
 ## 脚本
 
-`scripts/lanhu_fetch.py` — 取数（Step 0）:
+`scripts/design_fetch.py` — 取数入口（Step 0），按引用开头的地址查 `DESIGNS` 登记表分流:
 
 | 命令 | 输入 | 输出 |
 |---|---|---|
-| （无子命令） | `--url` `--out-dir` `--cookie`(可选) `--skip-cover`(可选) | design.json + slices.json + cover.png + assets/ |
+| `check` | `--ref` | 离线格式校验：一行 JSON（平台 + 解析结果），不联网 |
+| `fetch` | `--ref` `--out-dir` `--cookie`(可选) `--skip-cover`(可选) | design.json + slices.json + cover.png + assets/ |
+
+平台适配器 `scripts/lanhu_fetch.py`（蓝湖）、`scripts/selfhost_fetch.py`（自建平台）各自实现 `parse_ref` / `fetch`。
 
 `scripts/bind.py` — 6 个子命令:
 
@@ -113,7 +116,7 @@ bind 错误类型:
 ## 职责划分
 
 脚本(确定性):
-- 读蓝湖 sketch JSON，建 id→node 索引
+- 读统一设计数据(蓝湖结构的 design.json)，建 id→node 索引
 - 按 node_id 绑定设计数据，子树自动展开（遇其他组显式声明的节点停止）
 - 完备性检查，输出未覆盖节点列表
 - 删除系统组件、合并切片、裁切图标
