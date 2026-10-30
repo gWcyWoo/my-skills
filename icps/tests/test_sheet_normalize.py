@@ -88,7 +88,7 @@ class TestSheetNormalize(unittest.TestCase):
 
     def test_design_refs_of_both_platforms_kept_verbatim(self):
         lanhu = "https://lanhuapp.com/web/#/item/project/detailDetach?pid=p&image_id=be0332b9"
-        selfhost = "https://47.84.143.250.sslip.io:哈萨克标准化产品-Nomad Credit-安卓设计图-调查问卷-1（俄语）"
+        selfhost = "https://47.84.143.250.sslip.io/?project=17&design=748"
         _, backend = run([HEADER, row(title="问卷", design=f"{lanhu}\n{selfhost}")])
         self.assertEqual(backend["rows"][0]["payload"]["design_urls"], [lanhu, selfhost])
 

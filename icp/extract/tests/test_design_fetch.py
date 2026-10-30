@@ -31,23 +31,16 @@ def run(argv, **kw):
 
 
 class CheckSelfhostRefTest(unittest.TestCase):
-    def test_splits_on_platform_level_when_names_contain_hyphens(self):
-        code, out = run(["check", "--ref",
-                         f"{SELFHOST}:哈萨克标准化产品-Nomad Credit-安卓设计图-调查问卷-返回1（俄语）"])
-        self.assertEqual(code, 0)
-        self.assertEqual(out, {
-            "ok": True,
-            "design": "selfhost",
-            "project": "哈萨克标准化产品-Nomad Credit",
-            "platform": "android",
-            "name": "调查问卷-返回1（俄语）",
-        })
-
-    def test_ios_level_maps_to_ios(self):
-        code, out = run(["check", "--ref", f"{SELFHOST}: 会员中心-iOS 设计图-首页 "])
-        self.assertEqual(code, 0)
-        self.assertEqual((out["project"], out["platform"], out["name"]),
-                         ("会员中心", "ios", "首页"))
+    def test_design_link_yields_project_and_design_ids(self):
+        # 就是平台里打开设计图时地址栏的链接；参数顺序与其它参数不影响
+        for ref in (f"{SELFHOST}/?project=17&design=748",
+                    f" {SELFHOST}?design=748&project=17 ",
+                    f"{SELFHOST}/?share=abc&project=17&design=748#top"):
+            with self.subTest(ref=ref):
+                code, out = run(["check", "--ref", ref])
+                self.assertEqual(code, 0, out)
+                self.assertEqual(out, {"ok": True, "design": "selfhost",
+                                       "project_id": 17, "design_id": 748})
 
 
 class CheckLanhuRefTest(unittest.TestCase):
@@ -103,7 +96,7 @@ class CheckUnknownRefTest(unittest.TestCase):
         for ref in ("https://www.figma.com/file/abc",
                     "见上一行",
                     "https://lanhuapp.com.evil.com/web/#/item?pid=p-1&image_id=i-1",
-                    f"{SELFHOST}.evil.com:会员中心-安卓设计图-首页"):
+                    f"{SELFHOST}.evil.com/?project=17&design=748"):
             with self.subTest(ref=ref):
                 code, out = run(["check", "--ref", ref])
                 self.assertNotEqual(code, 0)
@@ -113,15 +106,23 @@ class CheckUnknownRefTest(unittest.TestCase):
 
 class CheckBadSelfhostRefTest(unittest.TestCase):
     def test_malformed_selfhost_refs_are_bad_ref(self):
-        for ref in (f"{SELFHOST}:会员中心-首页",
-                    f"{SELFHOST}:会员中心-安卓设计图-旧版-iOS 设计图-首页",
-                    f"{SELFHOST}:-安卓设计图-首页",
-                    f"{SELFHOST}:会员中心-安卓设计图- ",
-                    f"{SELFHOST}/会员中心-安卓设计图-首页",
-                    f"{SELFHOST}会员中心-安卓设计图-首页",
-                    # 只认平台上的写法：半角冒号、「iOS 设计图」带空格
-                    f"{SELFHOST}：会员中心-iOS 设计图-首页",
-                    f"{SELFHOST}:会员中心-iOS设计图-首页"):
+        for ref in (# 旧的「项目名-平台-设计稿名」写法不再支持
+                    f"{SELFHOST}:会员中心-安卓设计图-首页",
+                    f"{SELFHOST}/",
+                    f"{SELFHOST}/?project=17",
+                    f"{SELFHOST}/?design=748",
+                    f"{SELFHOST}/?project=17&prototype=12",
+                    f"{SELFHOST}/?project=17&design=",
+                    f"{SELFHOST}/?project=17&design=748&design=749",
+                    f"{SELFHOST}/?project=0&design=748",
+                    f"{SELFHOST}/?project=17&design=-748",
+                    f"{SELFHOST}/?project=17&design=7.5",
+                    f"{SELFHOST}/?project=17&design=+748",
+                    f"{SELFHOST}/?project=17&design=%20748",
+                    f"{SELFHOST}/?project=17&design=٧٤٨",
+                    f"{SELFHOST}/?project=17&design=abc",
+                    f"{SELFHOST}/projects?project=17&design=748",
+                    f"{SELFHOST}:8443/?project=17&design=748"):
             with self.subTest(ref=ref):
                 code, out = run(["check", "--ref", ref])
                 self.assertNotEqual(code, 0)
@@ -134,7 +135,7 @@ class CheckBadSelfhostRefTest(unittest.TestCase):
 PROJECT = "哈萨克标准化产品-Nomad Credit"
 ROOT = "1644:2015"
 COOKIE = "sess=abc"
-REF = f"{SELFHOST}:{PROJECT}-安卓设计图-调查问卷-1（俄语）"
+REF = f"{SELFHOST}/?project=17&design=802"
 
 
 def layer(lid, parent, name, ltype, x, y, w, h, **style):
@@ -227,67 +228,52 @@ def fetch(tmp, platform, ref=REF, cookie=COOKIE):
 
 
 class SelfhostFetchSelectionTest(unittest.TestCase):
-    def test_picks_newest_upload_of_requested_platform(self):
+    def test_fetches_exactly_the_linked_upload(self):
+        # 链接钉住一次上传：同画板的旧版、之后的重传版、同名 iOS 版与原型都不取
         old = asset(797, "Figma · 调查问卷-1（俄语）", "android",
                     "2026-10-20T00:00:00.000Z", page_layers("旧版标题"))
-        new = asset(802, "Figma · 调查问卷-1（俄语）", "android",
-                    "2026-10-25T00:00:00.000Z", page_layers("新版标题"))
+        linked = asset(802, "Figma · 调查问卷-1（俄语）", "android",
+                       "2026-10-25T00:00:00.000Z", page_layers("链接版标题"))
+        newer = asset(805, "Figma · 调查问卷-1（俄语）", "android",
+                      "2026-10-28T00:00:00.000Z", page_layers("重传版标题"))
         ios = asset(810, "Figma · 调查问卷-1（俄语）", "ios",
                     "2026-10-27T00:00:00.000Z",
                     [layer("9:1", "9:0", "iOS 标题", "TEXT", 0, 0, 10, 10)])
-        other = asset(820, "Figma · 提款账户列表", "android",
-                      "2026-10-28T00:00:00.000Z", page_layers("提款"))
         prototype = dict(asset(830, "Figma · 调查问卷-1（俄语）", "android",
                                "2026-10-29T00:00:00.000Z", page_layers("原型")), kind="axure")
-        platform = FakePlatform(platform_routes([old, new, ios, other, prototype]))
+        platform = FakePlatform(platform_routes([old, linked, newer, ios, prototype]))
 
         with tempfile.TemporaryDirectory() as td:
             code, out = fetch(Path(td), platform)
             self.assertEqual(code, 0, out)
-            self.assertEqual((out["ok"], out["design_id"]), (True, 802))
+            self.assertEqual((out["ok"], out["design_id"], out["design_name"]),
+                             (True, 802, "调查问卷-1（俄语）"))
             self.assertEqual((Path(td) / "cover.png").read_bytes(), b"PNG-802")
-            design = json.loads((Path(td) / "design.json").read_text(encoding="utf-8"))
-            self.assertIn("新版标题", json.dumps(design, ensure_ascii=False))
-            self.assertNotIn("旧版标题", json.dumps(design, ensure_ascii=False))
+            design = json.dumps(json.loads((Path(td) / "design.json").read_text(encoding="utf-8")),
+                                ensure_ascii=False)
+            self.assertIn("链接版标题", design)
+            self.assertNotIn("旧版标题", design)
+            self.assertNotIn("重传版标题", design)
 
         urls = [u for u, _ in platform.requests]
-        for forbidden in (f"{SELFHOST}/api/assets/797", f"{SELFHOST}/api/assets/810",
-                          f"{SELFHOST}/api/assets/820", f"{SELFHOST}/api/assets/830",
+        for forbidden in (f"{SELFHOST}/api/assets/797", f"{SELFHOST}/api/assets/805",
+                          f"{SELFHOST}/api/assets/810", f"{SELFHOST}/api/assets/830",
                           f"{SELFHOST}/api/projects/18/assets"):
             self.assertNotIn(forbidden, urls)
 
-    def test_missing_platform_counts_as_android_and_name_may_lack_prefix(self):
+    def test_device_and_name_come_from_the_linked_upload(self):
         # 平台前端按 figmaPlatform ?? 'android' 归类；非插件上传的资产名不带「Figma · 」
-        page = asset(805, "调查问卷-1（俄语）", None,
-                     "2026-10-25T00:00:00.000Z", page_layers("标题"))
-        with tempfile.TemporaryDirectory() as td:
-            code, out = fetch(Path(td), FakePlatform(platform_routes([page])))
-        self.assertEqual(code, 0, out)
-        self.assertEqual(out["design_id"], 805)
-
-    def test_layerless_older_upload_does_not_block_newer_one(self):
-        # bad_design_data 让设计师重传；旧的无图层 asset 仍留在项目里
-        empty = asset(797, "Figma · 调查问卷-1（俄语）", "android",
-                      "2026-10-20T00:00:00.000Z", [])
-        new = asset(802, "Figma · 调查问卷-1（俄语）", "android",
-                    "2026-10-25T00:00:00.000Z", page_layers("新版标题"))
-        with tempfile.TemporaryDirectory() as td:
-            code, out = fetch(Path(td), FakePlatform(platform_routes([empty, new])))
-        self.assertEqual(code, 0, out)
-        self.assertEqual(out["design_id"], 802)
-
-    def test_upload_hidden_by_the_platform_is_ignored(self):
-        # 平台前端只列 kind=ui 且有 preview 的资产；用户看不到的那版不能被取到
-        shown = asset(797, "Figma · 调查问卷-1（俄语）", "android",
-                      "2026-10-20T00:00:00.000Z", page_layers("可见版"))
-        hidden = dict(asset(802, "Figma · 调查问卷-1（俄语）", "android",
-                            "2026-10-25T00:00:00.000Z", page_layers("隐藏版")), preview=None)
-        platform = FakePlatform(platform_routes([shown, hidden]))
-        with tempfile.TemporaryDirectory() as td:
-            code, out = fetch(Path(td), platform)
-            self.assertEqual(code, 0, out)
-            self.assertEqual(out["design_id"], 797)
-            self.assertEqual((Path(td) / "cover.png").read_bytes(), b"PNG-797")
+        for platform, device in (("ios", "ios"), (None, "android")):
+            with self.subTest(platform=platform):
+                page = asset(802, "调查问卷-1（俄语）", platform,
+                             "2026-10-25T00:00:00.000Z", page_layers("标题"))
+                with tempfile.TemporaryDirectory() as td:
+                    code, out = fetch(Path(td), FakePlatform(platform_routes([page])))
+                    self.assertEqual(code, 0, out)
+                    design = json.loads((Path(td) / "design.json").read_text(encoding="utf-8"))
+                self.assertEqual((design["meta"]["device"], design["artboard"]["name"],
+                                  out["design_name"]),
+                                 (device, "调查问卷-1（俄语）", "调查问卷-1（俄语）"))
 
 
 BIND = Path(__file__).resolve().parents[1] / "scripts" / "bind.py"
@@ -527,7 +513,7 @@ class SelfhostCookieTest(unittest.TestCase):
     """cookie 取值顺序：--cookie → $SELFHOST_COOKIE → ~/.config/icp/selfhost.env。"""
 
     def fetch_with(self, env_cookie=None, cli_cookie=None, file_text=None):
-        page = asset(797, "Figma · 调查问卷-1（俄语）", "android",
+        page = asset(802, "Figma · 调查问卷-1（俄语）", "android",
                      "2026-10-23T07:51:13.444Z", page_layers("标题"))
         platform = FakePlatform(platform_routes([page]))
         with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as out:
@@ -578,10 +564,9 @@ class SelfhostFetchFailureTest(unittest.TestCase):
         self.assertEqual(downloads, [])
         return platform, out
 
-    def page(self, aid, platform="android", root=ROOT, created="2026-10-25T00:00:00.000Z"):
-        layers = [dict(l, parentId=root) if l["parentId"] == ROOT else l
-                  for l in page_layers("标题")]
-        return asset(aid, "Figma · 调查问卷-1（俄语）", platform, created, layers)
+    def page(self, aid):
+        return asset(aid, "Figma · 调查问卷-1（俄语）", "android",
+                     "2026-10-25T00:00:00.000Z", page_layers("标题"))
 
     def test_no_cookie_sends_no_request(self):
         platform, out = self.assert_fails("no_cookie", [self.page(802)], cookie=None)
@@ -589,40 +574,34 @@ class SelfhostFetchFailureTest(unittest.TestCase):
         self.assertIn("~/.config/icp/selfhost.env", out["errors"][0]["detail"])
 
     def test_unknown_project(self):
-        self.assert_fails("project_not_found", [self.page(802)],
-                          ref=f"{SELFHOST}:不存在的项目-安卓设计图-调查问卷-1（俄语）")
-
-    def test_duplicate_project_names_are_ambiguous(self):
+        # 平台对不存在/无权限的项目，assets 接口一律回 403：要报 project_not_found 而不是接口失败
+        url = f"{SELFHOST}/api/projects/99/assets"
         routes = platform_routes([self.page(802)])
-        routes[f"{SELFHOST}/api/projects"] = {"projects": [
-            {"id": 17, "name": PROJECT}, {"id": 19, "name": PROJECT}]}
-        self.assert_fails("ambiguous_project", [], routes=routes)
+        routes[url] = self.http_error(url, 403)
+        self.assert_fails("project_not_found", [], routes=routes,
+                          ref=f"{SELFHOST}/?project=99&design=802")
 
     def test_unknown_design(self):
-        self.assert_fails("design_not_found", [self.page(802, platform="ios")])
-        # 缺省平台只算安卓
-        self.assert_fails("design_not_found", [self.page(802, platform=None)],
-                          ref=f"{SELFHOST}:{PROJECT}-iOS 设计图-调查问卷-1（俄语）")
-
-    def test_same_name_on_different_frames_is_ambiguous(self):
-        _, out = self.assert_fails("ambiguous_design",
-                                   [self.page(802), self.page(805, root="1700:1")])
-        self.assertIn("802", out["errors"][0]["detail"])
-        self.assertIn("805", out["errors"][0]["detail"])
+        # 与平台前端打开链接一致：只认有 preview 的 UI 设计图
+        prototype = dict(self.page(802), kind="axure")
+        hidden = dict(self.page(802), preview=None)
+        for label, assets in (("missing", [self.page(801)]), ("prototype", [prototype]),
+                              ("no_preview", [hidden])):
+            with self.subTest(label):
+                self.assert_fails("design_not_found", assets)
 
     def test_unusable_layer_data(self):
         broken = self.page(802)
         broken["layers"][0]["parentId"] = "9999:1"  # 两个找不到的父 id
-        empty = asset(803, "Figma · 调查问卷-1（俄语）", "android", "2026-10-25", [])
-        # 最新一次上传坏了：报错让设计师重传，不能悄悄退回旧版
-        newest_empty = asset(804, "Figma · 调查问卷-1（俄语）", "android",
-                             "2026-10-28T00:00:00.000Z", [])
+        # 链接的那次上传坏了：报错让设计师重传，不能悄悄换成同画板的另一版
+        empty = asset(802, "Figma · 调查问卷-1（俄语）", "android", "2026-10-25", [])
         # parentId 互相成环、挂不到画板上的图层不能被悄悄丢掉
-        cyclic = self.page(805)
+        cyclic = self.page(802)
         cyclic["layers"] += [layer("9:1", "9:2", "A", "RECTANGLE", 0, 0, 1, 1),
                              layer("9:2", "9:1", "B", "RECTANGLE", 0, 0, 1, 1)]
-        for assets in ([broken], [empty], [self.page(801), newest_empty], [cyclic]):
-            with self.subTest(assets=[a["id"] for a in assets]):
+        for label, assets in (("broken", [broken]), ("empty", [self.page(801), empty]),
+                              ("cyclic", [cyclic])):
+            with self.subTest(label):
                 self.assert_fails("bad_design_data", assets)
 
     def test_malformed_platform_data(self):

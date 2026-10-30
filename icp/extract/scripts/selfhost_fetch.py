@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""自建设计平台适配器 — 把一条三级引用解析成 INPUT.md 契约要求的四件套。
+"""自建设计平台适配器 — 把一条设计图链接解析成 INPUT.md 契约要求的四件套。
 
-引用格式: <平台地址>:<项目名>-<安卓设计图|iOS 设计图>-<设计稿名>
-项目名与设计稿名都可能含 "-"，所以以中间的平台级为界切分，该级须恰好出现一次。
+引用格式: <平台地址>/?project=<项目 id>&design=<设计图 id>，即平台里打开设计图时地址栏的链接。
 
 Cookie 解析顺序: --cookie → $SELFHOST_COOKIE → ~/.config/icp/selfhost.env 里的 SELFHOST_COOKIE=…
 """
@@ -13,6 +12,7 @@ import os
 import re
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections import Counter
 
@@ -34,31 +34,19 @@ LAYER_TYPES = {
     "BOOLEAN_OPERATION": "shapeLayer",
 }
 
-PLATFORM_LEVELS = {
-    "安卓设计图": "android",
-    "iOS 设计图": "ios",
-}
-
 
 def parse_ref(ref, base):
-    rest = ref[len(base):]
-    if rest[:1] != ":":
-        raise ValueError(f"平台地址后须紧跟冒号: {ref}")
-    body = rest[1:].strip()
-    hits = []
-    for level, platform in PLATFORM_LEVELS.items():
-        token = f"-{level}-"
-        start = body.find(token)
-        while start != -1:
-            hits.append((start, token, platform))
-            start = body.find(token, start + 1)
-    if len(hits) != 1:
-        raise ValueError(f"须恰好出现一次 -安卓设计图- 或 -iOS 设计图-，实际 {len(hits)} 次: {ref}")
-    start, token, platform = hits[0]
-    project, name = body[:start].strip(), body[start + len(token):].strip()
-    if not project or not name:
-        raise ValueError(f"项目名与设计稿名都不能为空: {ref}")
-    return {"project": project, "platform": platform, "name": name}
+    parts = urllib.parse.urlsplit(ref[len(base):])
+    if parts.path not in ("", "/"):
+        raise ValueError(f"须是平台首页链接 {base}/?project=…&design=…: {ref}")
+    query = urllib.parse.parse_qs(parts.query)
+    ids = {}
+    for key in ("project", "design"):
+        values = query.get(key, [])
+        if len(values) != 1 or not re.fullmatch(r"[0-9]+", values[0]) or int(values[0]) == 0:
+            raise ValueError(f"链接须带且只带一个正整数 {key}=…: {ref}")
+        ids[f"{key}_id"] = int(values[0])
+    return ids
 
 
 # ---------------------------------------------------------------- HTTP
@@ -134,36 +122,20 @@ def root_id(layers):
     return roots.pop() if len(roots) == 1 else None
 
 
-def pick_project(projects, name):
-    hits = [p for p in projects if p.get("name") == name]
-    if not hits:
+def check_project(projects, project_id):
+    """项目不存在或无权限时 assets 接口一律 403，先查可见项目才能报清楚。"""
+    if not any(p.get("id") == project_id for p in projects):
         raise FetchError("project_not_found",
-                         f"当前账号可见的项目里没有「{name}」(名称须完全一致，或账号无该项目权限)")
-    if len(hits) > 1:
-        raise FetchError("ambiguous_project",
-                         f"有 {len(hits)} 个项目都叫「{name}」: id={[p.get('id') for p in hits]}")
-    return hits[0]
+                         f"当前账号可见的项目里没有 project={project_id}(链接有误，或账号无该项目权限)")
 
 
-def pick_asset(assets, platform, name):
-    """同平台同名的 UI 设计图里取最新上传的一版(同一画板重传会生成新 asset)；
-    同名但画板不同 → 歧义，不猜。"""
-    ui = [a for a in assets
-          # 与平台前端一致：只列有 preview 的 UI 图，平台缺省按安卓
-          if a.get("kind") == "ui" and a.get("preview")
-          and (a.get("figmaPlatform") or "android") == platform]
-    candidates = [a for a in ui if display_name(a) == name]
-    if not candidates:
-        names = sorted({display_name(a) for a in ui})
-        raise FetchError("design_not_found",
-                         f"项目里没有{platform}设计图「{name}」。现有: {names}")
-    # 无图层的旧上传不算另一个画板；最新一次若无图层，由 build_artboard 报 bad_design_data
-    roots = {root_id(a.get("layers") or []) for a in candidates} - {None}
-    if len(roots) > 1:
-        raise FetchError("ambiguous_design",
-                         f"「{name}」对应多个不同画板，请设计师改名: asset id="
-                         f"{sorted(a.get('id') for a in candidates)}")
-    return max(candidates, key=lambda a: (a.get("createdAt") or "", a.get("id") or 0))
+def pick_asset(assets, design_id):
+    """链接钉住的那次上传；与平台前端打开链接一致，只认有 preview 的 UI 图。"""
+    for a in assets:
+        if a.get("id") == design_id and a.get("kind") == "ui" and a.get("preview"):
+            return a
+    raise FetchError("design_not_found",
+                     f"项目里没有可打开的 UI 设计图 design={design_id}(链接有误或设计图已删除)")
 
 
 # ---------------------------------------------------------------- 转换
@@ -375,13 +347,15 @@ def fetch(ref, base, out_dir, cookie=None, skip_cover=False, http_get=None):
     # 定位与转换全部成功之前不落任何产物
     try:
         projects = request_json(http_get, f"{base}/api/projects", cookie).get("projects") or []
-        project = pick_project(projects, parsed["project"])
-        assets = request_json(http_get, f"{base}/api/projects/{project['id']}/assets",
+        check_project(projects, parsed["project_id"])
+        assets = request_json(http_get, f"{base}/api/projects/{parsed['project_id']}/assets",
                               cookie).get("assets") or []
-        chosen = pick_asset(assets, parsed["platform"], parsed["name"])
-        artboard = build_artboard(chosen.get("layers") or [], parsed["name"])
-        # 顶层与蓝湖一致(meta + artboard)，bind.py 各命令自己取 .artboard
-        design = {"meta": {"device": parsed["platform"], "plugin": "selfhost",
+        chosen = pick_asset(assets, parsed["design_id"])
+        name = display_name(chosen)
+        artboard = build_artboard(chosen.get("layers") or [], name)
+        # 顶层与蓝湖一致(meta + artboard)，bind.py 各命令自己取 .artboard；平台缺省按安卓
+        design = {"meta": {"device": chosen.get("figmaPlatform") or "android",
+                           "plugin": "selfhost",
                            "asset_id": chosen["id"]},
                   "artboard": artboard}
         warnings = []
@@ -419,7 +393,7 @@ def fetch(ref, base, out_dir, cookie=None, skip_cover=False, http_get=None):
         "design_json": str(out_dir / "design.json"),
         "slices_json": str(out_dir / "slices.json"),
         "cover_image": str(cover_path) if cover_path else None,
-        "design_name": parsed["name"],
+        "design_name": name,
         "design_id": chosen["id"],
         "slices_total": len(slices),
         "slices_downloaded": sum(1 for s in slices if s["local_png"]),

@@ -25,7 +25,7 @@ iole 与 icp 只认这个形状,后端切换时两者零改动。
 
 - `title` 是**交互引用的唯一键**:`toggle:/redirect:/reference:` 按 title 查行,故 title 必须全表唯一(重复即报 `duplicate_title` 停机)。
 - `design_urls` 是数组:一行可挂多张设计稿(如"权限声明"有 2 张)，每行一条引用。非 http(s) 内容(如"无")丢弃。
-  引用按开头的平台地址分流(见 `../icp/INPUT.md`「取数」):蓝湖用原链接 `https://lanhuapp.com/...image_id=...`;自建平台写 `https://47.84.143.250.sslip.io:{项目名}-{安卓设计图|iOS 设计图}-{设计稿名}`。
+  引用按开头的平台地址分流(见 `../icp/INPUT.md`「取数」):蓝湖用原链接 `https://lanhuapp.com/...image_id=...`;自建平台用平台里打开设计图时地址栏的链接 `https://47.84.143.250.sslip.io/?project=…&design=…`。
 - 角色字段值为空时归一为 `null`,不是空串——`status=null` 表示该角色此行不可领取。
 - `row_id` = `r<表格行号>`,始终能指回原表格行。
 

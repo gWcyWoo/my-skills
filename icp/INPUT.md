@@ -64,7 +64,7 @@ python3 extract/scripts/design_fetch.py fetch --ref "<设计稿引用>" --out-di
 | 平台 | 引用格式 | 适配器 | 鉴权 |
 |---|---|---|---|
 | 蓝湖（老平台） | `https://lanhuapp.com/...pid=…&image_id=…`（原链接，须以 `https://lanhuapp.com/` 开头） | `lanhu_fetch.py` | `$LANHU_COOKIE`，或 `~/.codex/mcp/lanhu-mcp/.env` 里的 `LANHU_COOKIE=…` |
-| 自建平台 | `https://47.84.143.250.sslip.io:{项目名}-{安卓设计图\|iOS 设计图}-{设计稿名}` | `selfhost_fetch.py` | `$SELFHOST_COOKIE`，或 `~/.config/icp/selfhost.env` 里的 `SELFHOST_COOKIE=…` |
+| 自建平台 | `https://47.84.143.250.sslip.io/?project={项目 id}&design={设计图 id}`（平台里打开设计图时地址栏的链接） | `selfhost_fetch.py` | `$SELFHOST_COOKIE`，或 `~/.config/icp/selfhost.env` 里的 `SELFHOST_COOKIE=…` |
 
 两个平台都可用 `--cookie` 覆盖，优先级 `--cookie` → 环境变量 → 文件。新增平台只加 `DESIGNS` 一行 +
 一个实现 `parse_ref` / `fetch` 的适配器模块，产物契约不变。
@@ -97,8 +97,8 @@ cover 下载失败只记 warning，`cover_image` 为 `null`。
 （`hasExportImage` + `image.imageUrl/svgUrl`），无需单独接口。
 URL 缺 `tid` 不影响——cookie 已确定团队。
 
-**自建平台**：按「项目名 → 安卓/iOS → 设计稿名」逐级寻址（设计稿名不带插件加的
-`Figma · ` 前缀）。同一画板多次上传取最新一次；不同画板同名报 `ambiguous_design`。
+**自建平台**：取链接里 `design` 指的那一次上传，与在平台里点开链接看到的一致（同一画板重传会生成新的
+`design` id，旧链接仍取旧版）；安卓/iOS 跟随该图（缺省按安卓），设计稿名取图名（去掉插件加的 `Figma · ` 前缀）。
 扁平图层按 `parentId` 还原成蓝湖结构的节点树（类型、圆角、颜色、文字度量换成蓝湖单位），
 切图按名称 + 位置尺寸归组、按位置尺寸（同名优先）挂到图层上，只把最大倍率下载到 `assets/`
 （远端需要 cookie，下游只用本地 `local_png`，`download_url`/`scale_urls` 为 `null`）；
@@ -111,11 +111,11 @@ URL 缺 `tid` 不影响——cookie 已确定团队。
 | type | 含义 |
 |---|---|
 | `unknown_design` | 引用开头不是登记过的平台地址 |
-| `bad_ref` | 引用格式不对（蓝湖缺 `pid`/`image_id`；自建平台地址后不是半角冒号、缺项目名/设计稿名，或一级名不是 `安卓设计图`/`iOS 设计图`） |
+| `bad_ref` | 引用格式不对（蓝湖缺 `pid`/`image_id`；自建平台不是 `/?project=…&design=…` 链接，或 `project`/`design` 缺失、重复、不是正整数） |
 | `no_cookie` | 缺登录 cookie（不发任何请求） |
 | `cookie_rejected` | 自建平台返回 401：Cookie 无效或已过期 |
-| `project_not_found` / `ambiguous_project` | 自建平台找不到项目 / 项目重名 |
-| `design_not_found` / `ambiguous_design` | 自建平台找不到设计稿 / 不同画板同名 |
+| `project_not_found` | 自建平台当前账号看不到链接里的项目（id 不对或无权限） |
+| `design_not_found` | 自建平台项目里没有链接里的 UI 设计图（id 不对、已删除或不是 UI 设计图） |
 | `bad_design_data` | 自建平台设计稿没有图层、画板根节点不唯一或有图层挂不到根节点（需用新版插件重传），或接口数据结构不符合预期 |
 | `request_failed` | 自建平台接口报错 |
 
