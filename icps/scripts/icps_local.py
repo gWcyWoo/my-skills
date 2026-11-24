@@ -165,6 +165,50 @@ def cmd_claim(args):
     return emit(True, {"row_ids": want, "status": target_status})
 
 
+def cmd_lease(args):
+    """Maintain one proven-owned canonical lease; remote ownership is caller-owned."""
+    def reject(code):
+        return emit(False, {"errors": [{"code": code, "where": args.row_id}]}, 1)
+
+    if not args.lease_token.strip() or not args.expected_lease_until:
+        return reject("missing_lease_identity")
+    if args.lease_minutes <= 0:
+        return reject("invalid_lease_duration")
+    backend = Path(args.link)
+    with Lock(backend):
+        doc = load(backend)
+        row = next((r for r in doc.get("rows", []) if r["row_id"] == args.row_id), None)
+        if row is None:
+            return reject("unknown_row")
+        cell = row.get("roles", {}).get(args.role)
+        if not isinstance(cell, dict) or cell.get("status") != "doing":
+            return reject("lease_not_owned")
+        if cell.get("lease_token") != args.lease_token:
+            return reject("stale_lease")
+        if cell.get("lease_until") != args.expected_lease_until:
+            return reject("lease_version_changed")
+        try:
+            deadline = datetime.fromisoformat(cell["lease_until"])
+            if deadline.utcoffset() is None:
+                raise ValueError("timezone required")
+        except (TypeError, ValueError):
+            return reject("invalid_lease_deadline")
+        current = now()
+        if args.cmd == "renew" and deadline <= current:
+            return reject("lease_expired")
+        if args.cmd == "recover" and deadline > current:
+            return reject("lease_still_live")
+        try:
+            until = ((deadline if args.cmd == "renew" else current)
+                     + timedelta(minutes=args.lease_minutes)).isoformat()
+        except OverflowError:
+            return reject("invalid_lease_duration")
+        token = cell["lease_token"] if args.cmd == "renew" else secrets.token_hex(8)
+        cell.update(lease_token=token, lease_until=until)
+        save(backend, doc)
+    return emit(True, {"row_id": args.row_id, "lease_token": token, "lease_until": until})
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="icps_local.py")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -192,6 +236,16 @@ def main(argv=None):
     cl.add_argument("--pr")
     cl.add_argument("--error")
     cl.set_defaults(fn=cmd_claim)
+
+    for verb in ("renew", "recover"):
+        operation = sub.add_parser(verb)
+        operation.add_argument("--link", required=True)
+        operation.add_argument("--role", required=True)
+        operation.add_argument("--row-id", required=True)
+        operation.add_argument("--lease-token", required=True)
+        operation.add_argument("--expected-lease-until", required=True)
+        operation.add_argument("--lease-minutes", type=int, required=True)
+        operation.set_defaults(fn=cmd_lease)
 
     args = ap.parse_args(argv)
     return args.fn(args)

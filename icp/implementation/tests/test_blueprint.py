@@ -1,6 +1,9 @@
 """Tests for blueprint.py — layout inference and data extraction."""
 import unittest
 import sys
+import json
+import subprocess
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
@@ -776,6 +779,87 @@ class TestChildrenWidthsSizeFloor(unittest.TestCase):
         for cw in cws:
             self.assertEqual(cw["width"], "fixed",
                              f"{cw['name']} should be fixed, not fill")
+
+
+class TestDesignPipeline(unittest.TestCase):
+    """The public extraction commands must not discard frozen design values."""
+
+    def _run_pipeline(self, fills, child_fills=None):
+        icp = Path(__file__).resolve().parents[2]
+        frame = {"left": 0, "top": 0, "width": 100, "height": 40}
+        child = {"id": "child", "name": "child", "type": "shapeLayer",
+                 "frame": frame, "style": {"fills": child_fills or []}}
+        button = {"id": "button", "name": "button", "type": "symbolInstence",
+                  "frame": frame, "style": {"fills": fills}, "layers": [child]}
+        design = {"artboard": {"id": "root", "name": "root", "type": "artboard",
+                               "frame": frame, "layers": [button]}}
+        grouping = {"groups": [
+            {"name": "root", "role": "content", "node_ids": ["root"]},
+            {"name": "button", "role": "action", "node_ids": ["button"]},
+        ]}
+        with tempfile.TemporaryDirectory() as td:
+            work = Path(td)
+            for name, value in [("design", design), ("grouping", grouping),
+                                ("slices", {"slices": []})]:
+                (work / f"{name}.json").write_text(json.dumps(value), encoding="utf-8")
+            bind = str(icp / "extract/scripts/bind.py")
+            commands = [
+                [bind, "bind", "--design-json", "design.json", "--grouping", "grouping.json", "--output", "bound.json"],
+                [bind, "clean", "--bound-json", "bound.json", "--output", "cleaned.json"],
+                [bind, "enrich", "--bound-json", "cleaned.json", "--slices-json", "slices.json", "--design-json", "design.json", "--output", "enriched.json"],
+                [str(icp / "implementation/scripts/blueprint.py"), "--enriched", "enriched.json", "--design", "design.json", "--slices", "slices.json", "--output", "blueprint.json"],
+            ]
+            for command in commands:
+                result = subprocess.run([sys.executable, *command], cwd=work,
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+            self.assertEqual(json.loads((work / "design.json").read_text()), design)
+            return json.loads((work / "blueprint.json").read_text())["components"][0]
+
+    def test_gradient_geometry_survives_extraction(self):
+        # Same stops with different geometry must not collapse into one gradient.
+        for start, end, transform in [
+            ({"x": 2.17, "y": 0.5}, {"x": -1.17, "y": 0.5},
+             [[-1, 0, 1], [0, -0.3, 0.65]]),
+            ({"x": 0.5, "y": 1}, {"x": 0.5, "y": 0},
+             [[0, 1, 0], [-1, 0, 1]]),
+        ]:
+            with self.subTest(start=start):
+                gradient = {"type": 0, "from": start, "to": end, "transform": transform,
+                            "stops": [{"color": {"value": "#2B6D45"}, "position": 0},
+                                      {"color": {"value": "#5BAB70"}, "position": 1}]}
+                fill = {"type": "gradient", "gradient": gradient}
+                result = self._run_pipeline([fill], [fill])
+                for actual in [result["fill"], result["child_fills"][0]]:
+                    self.assertEqual(actual.get("from"), start)
+                    self.assertEqual(actual.get("to"), end)
+                    self.assertEqual(actual.get("transform"), transform)
+                    self.assertEqual(actual["stops"], [
+                        {"color": "#2B6D45", "position": 0},
+                        {"color": "#5BAB70", "position": 1},
+                    ])
+
+    def test_layered_fills_survive_in_order(self):
+        white = {"type": "color", "color": {"value": "rgba(255,255,255,1)"}}
+        overlay = {"type": "color", "color": {"value": "rgba(51,123,85,0.06)"}}
+        disabled = {"type": "color", "color": {"value": "#FF0000"}, "isEnabled": False}
+        gradient = {"type": "gradient", "gradient": {
+            "type": 0, "from": {"x": 1, "y": 0}, "to": {"x": 0, "y": 0},
+            "stops": [{"color": {"value": "#00FF00"}, "position": 0}],
+        }}
+        expected_white = {"type": "color", "color": "rgba(255,255,255,1)"}
+        for inputs, expected in [
+            ([white, disabled, overlay], [expected_white, {"type": "color", "color": "rgba(51,123,85,0.06)"}]),
+            ([white, gradient], [expected_white, {"type": "gradient", "gradient_type": 0,
+                "from": {"x": 1, "y": 0}, "to": {"x": 0, "y": 0},
+                "stops": [{"color": "#00FF00", "position": 0}]}]),
+        ]:
+            with self.subTest(inputs=inputs):
+                result = self._run_pipeline(inputs, inputs)
+                for actual in [result["fill"], result["child_fills"][0]]:
+                    self.assertEqual(actual.get("layers"), expected)
+                    # Existing consumers of the first-fill summary stay compatible.
+                    self.assertEqual(actual["color"], "rgba(255,255,255,1)")
 
 
 if __name__ == "__main__":

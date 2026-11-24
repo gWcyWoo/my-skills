@@ -28,7 +28,7 @@ Step 3  交互拆解
         模型：解析 api_description → 语义端点列表(semantic_hint)
         模型：用 Apifox MCP 查每个语义端点的真实 schema → resolved
               ├─ 命中 → 填 path/method/auth/request/response/deprecated
-              └─ 未命中 → resolved: null (Stage 3 走 mock)
+              └─ 未命中 → resolved: null，记录合同缺口；继续独立工作，不默认生成 mock 完成功能
         模型：拆解 interaction_description → 原子交互 + 触发图
         validate.py check-interactions --component-spec ──errors──→ 修正 → 重验
         └─ ok → 填 checklist Step 3 → check.py --step 3
@@ -150,22 +150,20 @@ Sheet `api` 列只有语义提示（如 `/support`、`/feedback/types`），路�
 ### 解析流程
 
 1. 从 `api_description` 提取语义端点列表，记为 `semantic_hint`
-2. 用 Apifox MCP 读取可访问项目与结构（`mcp__apifox_new_mcp__listAccessibleProjects` + `mcp__apifox_new_mcp__getStructureInfo`），按语义匹配真实端点：
-   - `/support` → `GET /support/customerService`（语义匹配：客服）
-   - `/auth/otp-requests` → `POST /auth/sendVerifyCode`（语义匹配：发送验证码）
-   - `/feedback` → `POST /feedback/record`（语义匹配：意见反馈）
+2. 使用用户指定或项目已确认的 Apifox 项目；未确定时读取可访问项目（`mcp__apifox_new_mcp__listAccessibleProjects`）核实，再用 `mcp__apifox_new_mcp__getStructureInfo` 按语义匹配真实端点，不猜项目或路径。
 3. 用 `mcp__apifox_new_mcp__readEntityDetails` 拉匹配到的端点详情（完整定义：method、path、
    headers、parameters、security、requestBody、responses、deprecated、descriptions）。
    模型理解完整定义 + 项目已有网络层代码（API client、auth 模式、DTO 风格），综合产出 `resolved`：
    - `path` + `method`：真实路径
    - `auth`：综合 `security`、`parameters` 中的 `Authorization` header、描述文本判定：
      无鉴权 → `"public"`；必须鉴权 → `"bearer"`；可选鉴权（如 `required: false`）→ `"optional"`
-   - `request`：requestBody schema 的顶层字段 + 类型
-   - `response`：responses.200 schema 的 `data` 字段结构，用 JSON 原生类型表达：
+   - `request`：按正式 parameters/requestBody 区分 path、query、header 与 body，保留实际 Content-Type；无请求体不能擅自补 `{}`。
+   - `response`：按正式成功状态码及实际包裹层（如 result/data 或无包裹）提取业务结构，不默认 `200.data`；用 JSON 原生类型表达：
      简单字段写类型字符串(`"string"`/`"integer"`/`"number"`/`"boolean"`)，
-     嵌套对象写 `{}`，数组写 `[{}]`；`check-interactions` 校验格式
+     嵌套对象写 `{}`；对象数组写 `[{...}]`，基础类型数组写 `["integer"]` / `["string"]` / `["number"]` / `["boolean"]`，恰好一个元素描述 item 类型。禁止把基础类型数组投影成 `[{}]`；`check-interactions` 校验格式，`contract.py` 原样保留类型。
    - `deprecated`：是否废弃（废弃端点标注替代方案）
-4. 无法匹配 → `resolved: null`，Stage 3 生成 mock Repository
+   保存正式定义及 project/entity 标识、版本或读取时间作为来源证据，解析相关 `$ref`；简化的 `resolved` 不能替代完整 shape。实现与测试还须按原定义核对 required/nullable、类型/枚举、嵌套结构、成功及错误状态码和错误体；不能把所有字段改成可选或默认空值来掩盖不匹配。需求表描述冲突时按正式接口 shape 实现并记录差异；语义仍不明确时记录缺口，不自行发明业务规则。
+4. 无法匹配或关键定义缺失 → `resolved: null` 或保留具体合同缺口，继续不依赖该定义的工作；不能推断字段生成假接口并标成功。只有用户明确要求原型/mock 时才生成对应替代，且不宣称真实接口功能完成。已核实且来源未变的合同复用，不逐页重复全量读取。
 
 ### apis 字段说明
 
@@ -174,10 +172,10 @@ Sheet `api` 列只有语义提示（如 `/support`、`/feedback/types`），路�
 | `semantic_hint` | Sheet/api_description 里的原始端点，保留作追溯 |
 | `resolved` | Apifox 解析结果，null 表示未匹配 |
 | `resolved.path` | Apifox 真实路径（代码里用这个） |
-| `resolved.method` | GET/POST |
+| `resolved.method` | 正式 HTTP method |
 | `resolved.auth` | `"public"` / `"bearer"` / `"optional"` |
 | `resolved.request` | 请求体字段 schema（GET 则为 query params） |
-| `resolved.response` | 响应体 `data` 字段 schema |
+| `resolved.response` | 正式成功响应业务结构；状态码、包裹层及完整约束回查来源定义 |
 | `resolved.deprecated` | 是否废弃；废弃时附 `alternative` 说明替代方案 |
 
 ### 废弃端点处理

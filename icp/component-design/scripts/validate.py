@@ -263,10 +263,12 @@ def _check_response_schema(obj, api_hint, path=""):
         elif isinstance(val, dict):
             errors.extend(_check_response_schema(val, api_hint, field_path))
         elif isinstance(val, list):
+            if len(val) == 1 and isinstance(val[0], str) and val[0] in VALID_RESPONSE_LEAF_TYPES:
+                continue
             if len(val) != 1 or not isinstance(val[0], dict):
                 errors.append({"type": "invalid_response_schema", "api": api_hint,
                                "field": field_path,
-                               "detail": "数组必须写成 [{...}] 形式(恰好一个对象元素描述 item schema)"})
+                               "detail": "数组须用恰好一个对象或合法基础类型字符串描述 item schema"})
             else:
                 errors.extend(_check_response_schema(val[0], api_hint, f"{field_path}[]"))
         else:

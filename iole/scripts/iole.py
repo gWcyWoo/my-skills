@@ -11,7 +11,7 @@
 
 台账让长流程可中断续跑:处理一个标记一个,进度不丢、节点不漏、不重做。
 
-iole 不读表(适配 skill 读)、不调蓝湖 API(icp 调)、不解析设计、不写代码。
+iole 不读表(适配 skill 读)、不调设计平台 API(icp 调)、不解析设计、不写代码。
 """
 import argparse
 import json
@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 SCHEMA = "iole.run"
-STATUSES = ("pending", "doing", "done", "partial", "failed")
+STATUSES = ("pending", "doing", "done", "partial", "failed", "blocked")
 LOG_DIR = Path.home() / ".codex" / "logs" / "iole"
 
 # 工厂表:域名模式 → (kind, skill)。新增来源只加一行。
@@ -192,7 +192,7 @@ def cmd_status(args):
     pending_discovery = undiscovered(run["nodes"])
     order, cycle_edges, unreachable = plan(run)
     counts = {s: 0 for s in STATUSES}
-    for nid in run["nodes"]:
+    for nid in order:
         counts[run["progress"][nid]["status"]] += 1
 
     out = {"root": run["root"], "role": run.get("role"), "mr": run.get("mr"),
@@ -223,10 +223,23 @@ def cmd_next(args):
 
     children = child_map(run["nodes"])
     back = {(a, b) for a, b in cycle_edges}
+    blocked_nodes = {nid for nid in order if run["progress"][nid]["status"] == "blocked"}
     target = None
     for nid in order:
         st = run["progress"][nid]["status"]
         if st != "pending":
+            continue
+        # A back edge does not control topological ordering, but a known blocked
+        # dependency still prevents safely executing the dependent page.
+        search, seen, blocked_dependency = [nid], set(), False
+        while search and not blocked_dependency:
+            dependency = search.pop()
+            if dependency in blocked_nodes:
+                blocked_dependency = True
+            elif dependency not in seen:
+                seen.add(dependency)
+                search.extend(children[dependency])
+        if blocked_dependency:
             continue
         if all(run["progress"][k]["status"] in ("done", "partial", "failed")
                for k in children[nid] if (nid, k) not in back):
@@ -234,19 +247,24 @@ def cmd_next(args):
             break
     if target is None:
         doing = [n for n in order if run["progress"][n]["status"] == "doing"]
+        blocked = [n for n in order if run["progress"][n]["status"] == "blocked"]
         pending = sum(1 for n in order if run["progress"][n]["status"] == "pending")
-        remaining = len(doing) + pending
-        if doing or pending:
+        remaining = len(doing) + len(blocked) + pending
+        if doing or blocked or pending:
             result = {"done": False, "remaining": remaining}
             if doing:
                 result["waiting"] = doing
+            if blocked:
+                result["blocked"] = blocked
             return emit(True, result)
-        failed = [n for n in order if run["progress"][n]["status"] == "failed"]
+        skipped = [n for n in order
+                   if run["progress"][n]["status"] in ("partial", "failed")]
         return emit(True, {"done": True, "remaining": 0,
-                           **({"skipped": failed} if failed else {})})
+                           **({"skipped": skipped} if skipped else {})})
 
-    run["progress"][target]["status"] = "doing"
-    save_run(args.run, run)
+    if not args.check:
+        run["progress"][target]["status"] = "doing"
+        save_run(args.run, run)
 
     node = run["nodes"][target]
     deps = [{"node_id": k, "title": run["nodes"][k].get("title"),
@@ -259,14 +277,16 @@ def cmd_next(args):
 
 
 def cmd_mark(args):
+    if args.check and args.status != "done":
+        return emit(False, {"errors": [{"code": "check_requires_done"}]}, 1)
     run = load_run(args.run)
     if run is None:
         return emit(False, {"errors": [{"code": "no_run", "where": args.run}]}, 1)
     if args.node not in run["nodes"]:
         return emit(False, {"errors": [{"code": "unknown_node", "where": args.node}]}, 1)
-    if args.status == "failed" and not args.error:
+    if args.status in ("failed", "blocked") and not args.error:
         return emit(False, {"errors": [{"code": "missing_error",
-                                        "detail": "标记 failed 必须给 --error"}]}, 1)
+                                        "detail": "标记 failed/blocked 必须给 --error"}]}, 1)
     if args.status in ("done", "partial"):
         title = run["nodes"][args.node].get("title", "")
         if not title:
@@ -276,15 +296,53 @@ def cmd_mark(args):
         base = iole_doc_dir.parent.parent
         icp_dir = base / "icp" / title
         required = ["layout-blueprint.json", "api-contract.json"]
+        if args.status == "done":
+            required.append("behavior-result.json")
         missing = [f for f in required if not (icp_dir / f).exists()]
         if missing:
             return emit(False, {"errors": [{"code": "missing_evidence",
                         "icp_dir": str(icp_dir),
                         "detail": f"icp 产物缺失: {missing}"}]}, 1)
+        if args.status == "done":
+            for name in ("layout-blueprint.json", "api-contract.json"):
+                try:
+                    artifact = json.loads((icp_dir / name).read_text(encoding="utf-8"))
+                    valid_artifact = isinstance(artifact, dict) and bool(artifact)
+                except (OSError, UnicodeError, ValueError):
+                    valid_artifact = False
+                if not valid_artifact:
+                    return emit(False, {"errors": [{"code": "invalid_evidence",
+                                "where": str(icp_dir / name),
+                                "detail": "产物须为可读取的非空 JSON 对象"}]}, 1)
+            try:
+                result = json.loads((icp_dir / "behavior-result.json").read_text(encoding="utf-8"))
+                total, passed = result["behavior_total"], result["behavior_passed"]
+                valid = (type(total) is int and type(passed) is int
+                         and total > 0 and passed == total
+                         and result["mock_violations"] == [])
+                group_total = 0
+                for name in ("positive", "negative"):
+                    group = result[name]
+                    count, successes = group["total"], group["passed"]
+                    valid = valid and (type(count) is int and type(successes) is int
+                                       and count >= 0 and successes == count
+                                       and group["failed"] == [])
+                    if type(count) is int:
+                        group_total += count
+                valid = valid and group_total == total
+            except (OSError, UnicodeError, ValueError, TypeError, KeyError):
+                valid = False
+            if not valid:
+                return emit(False, {"errors": [{"code": "invalid_behavior_result",
+                            "icp_dir": str(icp_dir),
+                            "detail": "behavior-result.json 须有非零且全部通过、分组计数一致的有效结果"}]}, 1)
+
+    if args.check:
+        return emit(True, {"node_id": args.node, "checked": "done", "written": False})
 
     cell = run["progress"][args.node]
     cell["status"] = args.status
-    cell["error"] = args.error if args.status in ("failed", "partial") else None
+    cell["error"] = args.error if args.status in ("failed", "partial", "blocked") else None
     if args.pr:
         cell["pr"] = args.pr
     save_run(args.run, run)
@@ -328,7 +386,7 @@ def render(run, out):
     nodes, progress = run["nodes"], run["progress"]
     kids = child_map(nodes)
     name = lambda i: nodes.get(i, {}).get("title", i)
-    mark = {"pending": "·", "doing": "▶", "done": "✓", "partial": "△", "failed": "✗"}
+    mark = {"pending": "·", "doing": "▶", "done": "✓", "partial": "△", "failed": "✗", "blocked": "!"}
     lines = [f"root={name(run['root'])}  role={run.get('role')}  mr={run.get('mr')}  "
              + "  ".join(f"{k}={v}" for k, v in out["counts"].items()),
              "", "| # | 状态 | node | 标题 | 来源 | route | 依赖(先实现) | pr |",
@@ -369,6 +427,7 @@ def main(argv=None):
     st.set_defaults(fn=cmd_status)
 
     nx = sub.add_parser("next", help="交出下一个待做节点并标记 doing")
+    nx.add_argument("--check", action="store_true", help="仅查询下一个节点，不改台账")
     nx.set_defaults(fn=cmd_next)
 
     mk = sub.add_parser("mark", help="标记节点状态")
@@ -376,6 +435,7 @@ def main(argv=None):
     mk.add_argument("--status", required=True, choices=STATUSES)
     mk.add_argument("--pr")
     mk.add_argument("--error")
+    mk.add_argument("--check", action="store_true", help="仅检查 done 前提，不改台账")
     mk.set_defaults(fn=cmd_mark)
 
     pk = sub.add_parser("pick", help="按标题定位节点并标记 doing")

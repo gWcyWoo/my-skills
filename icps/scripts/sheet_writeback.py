@@ -15,6 +15,7 @@
 import argparse
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -46,6 +47,7 @@ def main(argv=None):
     ap.add_argument("--sheet", required=True, help="工作表名,如 Sheet1")
     ap.add_argument("--role", required=True)
     ap.add_argument("--row-ids", required=True, help="逗号分隔,如 r2,r8")
+    ap.add_argument("--lease-only", action="store_true", help="Only token/deadline cells for renew/recover")
     args = ap.parse_args(argv)
 
     raw = json.loads(Path(args.values).read_text(encoding="utf-8"))
@@ -79,7 +81,16 @@ def main(argv=None):
         row = by_id[rid]
         row_index = int(rid[1:])  # row_id 始终指回原表格行号
         cells = row.get("roles", {}).get(args.role, {})
-        for field in ROLE_FIELDS:
+        if args.lease_only:
+            try:
+                valid = (cells.get("status") == "doing" and isinstance(cells.get("lease_token"), str)
+                         and bool(cells["lease_token"].strip())
+                         and datetime.fromisoformat(cells["lease_until"]).utcoffset() is not None)
+            except (KeyError, TypeError, ValueError):
+                valid = False
+            if not valid:
+                return emit(False, {"errors": [{"code": "invalid_lease", "where": rid}]}, 1)
+        for field in (("lease_token", "lease_until") if args.lease_only else ROLE_FIELDS):
             cell_range = f"{a1_col(idx[f'{args.role}.{field}'])}{row_index}"
             value = cell_text(cells.get(field))
             updates.append({

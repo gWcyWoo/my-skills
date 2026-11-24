@@ -6,6 +6,8 @@ import json
 import sys
 import tempfile
 import unittest
+import subprocess
+import unicodedata
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
@@ -332,6 +334,54 @@ class TestTextCoverageMultiSpan(unittest.TestCase):
         result = self._run_check(src, ["已阅读并同意《用户服务协议》和《隐私政策》"])
         errs = [e for e in result["errors"] if e["type"] == "low_text_coverage"]
         self.assertEqual(len(errs), 0)
+
+
+class TestCanonicalTextCLI(unittest.TestCase):
+    def test_canonically_equivalent_text_matches_without_hiding_copy_errors(self):
+        # r41's title contains й encoded as either one or two Unicode code points.
+        title = "«Договор онлайн микрокредита без залога»"
+        formats = [("swiftui", "Screen.swift"), ("uikit", "Screen.m"),
+                   ("compose", "Screen.kt"), ("android-views", "Screen.java"),
+                   ("flutter", "screen.dart")]
+        variants = [("NFD", "NFC", True), ("NFC", "NFD", True),
+                    ("NFC", "different", False), ("NFC", "case", False),
+                    ("NFC", "punctuation", False), ("NFC", "missing", False),
+                    ("NFC", "compatibility", False)]
+        incorrect = {
+            "different": title.replace("онлайн", "оффлайн"),
+            "case": title.replace("онлайн", "онлайН"),
+            "punctuation": title.replace("онлайн ", "онлайн, "),
+            "missing": title.replace("онлайн", "онлан"),
+            "compatibility": title.replace(" ", "\u00a0"),
+        }
+        script = Path(__file__).resolve().parents[1] / "scripts/validate.py"
+        for platform, filename in formats:
+            for location in ["source", "resource"]:
+                for bp_form, code_form, expected in variants:
+                    with self.subTest(platform=platform, location=location, code_form=code_form):
+                        blueprint_text = unicodedata.normalize(bp_form, title)
+                        code_text = (incorrect[code_form] if code_form in incorrect
+                                     else unicodedata.normalize(code_form, title))
+                        with tempfile.TemporaryDirectory() as td:
+                            work = Path(td)
+                            (work / "bp.json").write_text(json.dumps({"components": [
+                                {"texts": [{"value": blueprint_text}]}]}), encoding="utf-8")
+                            (work / "ct.json").write_text('{"apis": []}', encoding="utf-8")
+                            gen = work / "gen"
+                            gen.mkdir()
+                            (gen / filename).write_text(
+                                f'let title = "{code_text}"' if location == "source" else 'class Screen {}',
+                                encoding="utf-8")
+                            if location == "resource":
+                                (gen / "Localizable.strings").write_text(f'"title" = "{code_text}";', encoding="utf-8")
+                            before = {p: p.read_bytes() for p in work.rglob('*') if p.is_file()}
+                            run = subprocess.run([sys.executable, str(script), "check-codegen",
+                                "--blueprint", str(work / "bp.json"), "--contract", str(work / "ct.json"),
+                                "--gen-dir", str(gen), "--platform", platform], capture_output=True, text=True)
+                            result = json.loads(run.stdout)
+                            self.assertEqual(result["ok"], expected, result)
+                            self.assertEqual(run.returncode, 0 if expected else 1)
+                            self.assertEqual({p: p.read_bytes() for p in before}, before)
 
 
 if __name__ == "__main__":
