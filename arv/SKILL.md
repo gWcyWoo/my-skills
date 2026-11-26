@@ -1,6 +1,6 @@
 ---
 name: arv
-description: Use when acting as 审核者 and asked to review an executor's change (a commit range, a worktree, or uncommitted changes) and return a P0/P1/P2 or 通过 verdict — plans the review in the main session, then dispatches four parallel read-only `arv-reviewer` subagents (model opus = Opus 5.5, effort high) for 超出需求范围 / 功能正确性 / 过度设计 / 影响其它功能, and consolidates their evidence into the verdict. `arv` = aspect review. Accept `--self` to skip delegation for trivial re-checks; `--help` prints usage.
+description: Use when acting as 审核者 and asked to review an executor's change (a commit range, a worktree, or uncommitted changes) and return a 通过 verdict, or a 不通过 verdict with its P0/P1/P2 findings — plans the review in the main session, then dispatches four parallel read-only `arv-reviewer` subagents (model opus = Opus 5.5, effort high) for 超出需求范围 / 功能正确性 / 过度设计 / 影响其它功能, and consolidates their evidence into the verdict. `arv` = aspect review. Accept `--self` to skip delegation for trivial re-checks; `--help` prints usage.
 ---
 
 <role>
@@ -44,6 +44,8 @@ Report with headings SCOPE_CHECKED / FINDINGS / VERIFIED_OK / CROSS_ASPECT / UNV
 2. **Functional correctness and zero impact on other features** — i.e. the change must be the minimal diff. Any non-minimal or side-effecting change (incl. dead-code leftovers) is a finding.
 3. **Reject over-design; keep abstraction reasonable.** A shared component only when two real call sites need it; no speculative params/layers; any abstraction not justified by current call sites is a finding. A change that is correct but over-engineered is still a finding.
 
+**Pass standard — two verdicts only, 通过 or 不通过 (never 有条件通过).** 通过 only when there is no P0/P1/P2 finding and 未能核实 is empty.
+
 Additional rules: a test that cannot fail is a finding; evidence claims not backed by archived logs are a P2; never re-raise items the 决策中心 has already decided.
 </context>
 
@@ -56,10 +58,10 @@ Additional rules: a test that cannot fail is a finding; evidence claims not back
 5. Collect the cheap shared facts once so subagents do not repeat them: `git status --porcelain`, `git log --oneline <range>`, `git diff --stat <range>`, `ls` of the evidence directory. Put the results into `KNOWN CONTEXT`.
 6. Dispatch four `arv-reviewer` agents in ONE message (parallel), names `boundary`, `correctness`, `overdesign`, `impact`, each with the filled brief template; `{{ASPECT}}` = the aspect name plus its definition line above. Set `run_in_background: true`.
 7. When all four report, STRICTLY RE-VERIFY before adjudicating — subagent output is a lead, not a conclusion:
-   7a. For EVERY finding (P0/P1/P2) a subagent reports: open the cited `file:line` yourself (Read ≤50-line window or targeted grep) and confirm the defect is real and the severity is right. Drop or downgrade anything you cannot reproduce; never forward a finding on the subagent's word alone.
+   7a. For EVERY finding (P0/P1/P2) a subagent reports: open the cited `file:line` yourself (Read ≤50-line window or targeted grep) and confirm the defect is real and the severity is right. Drop or downgrade only what lines you read refute; a finding you can neither confirm nor refute is handled as an `UNVERIFIED` item in 7d. Never forward a finding on the subagent's word alone.
    7b. For each aspect's `VERIFIED_OK`, re-check the decisive claims the verdict rests on (the guard/gate line, the assertion line, the red-log message, the counts file) — at least one concrete `file:line` or log line per aspect, more when the change is security/privacy/data-affecting. A claim that turns out wrong invalidates that aspect's other claims until re-checked.
    7c. Cross-check the four reports against each other: same file:line cited with different conclusions → read it and settle; a fact one agent asserts that another agent's evidence contradicts → resolve by reading, not by majority.
-   7d. For each `CROSS_ASPECT` item decide: already covered / needs a targeted follow-up agent (narrow brief) / out of scope — and say which in the verdict.
+   7d. For each `CROSS_ASPECT` item and each subagent `UNVERIFIED` item decide: already covered (a finding or `VERIFIED_OK` you re-checked in 7a/7b settles it; cite that file:line) / needs a targeted follow-up agent (narrow brief; dispatch it and put its result through 7a–7e before the verdict) / out of scope (an item step 2 lists as out of scope and that is not an effect of the reviewed change, or a check this skill says not to demand) — and say which in the verdict. Only an item none of these settles goes under 未能核实.
    7e. Re-rate severity yourself using the **Verdict rules** above (subagents often over- or under-rate; e.g. duplicated-gate dead code is P2 over-design, an unguarded env var leaking into delivered builds is P1).
 8. Self-check against `<success_criteria>`; then produce the verdict in `<output_format>` and send it on the requested channel (relay `send` or `SendMessage` to the `from` address). Show the full sent text to the user.
 </instructions>
@@ -70,27 +72,29 @@ Additional rules: a test that cannot fail is a finding; evidence claims not back
 </input>
 
 <examples>
-**Positive:** request = "审核执行者 1 的 solar_ad_id 缓存,范围 40baede 未提交改动 8 文件,证据 /tmp/cs-gaid-…" → plan lists the cache class, the two wiring points, the four test files; `boundary` is asked "does every hunk in the 8 files map to the cache requirement, and is any changed file not needed by it"; `correctness` is asked "does refresh dedupe in-flight, does failure keep the old value, does each test fail on a plausible wrong impl"; `overdesign` is asked "is the default `AndroidDeviceSnapshotCollector(context)` parameter needed, any speculative API"; `impact` is asked "every construction site of AndroidRiskSignalCollector/AndroidDeviceSnapshotCollector in main+androidTest, and whether prod paths can bypass the cache". Verdict merges: 通过 + P2 (privacy semantics of LAT null-not-overwriting) + P2 (default param trap).
+**Positive:** request = "审核执行者 1 的 solar_ad_id 缓存,范围 40baede 未提交改动 8 文件,证据 /tmp/cs-gaid-…" → plan lists the cache class, the two wiring points, the four test files; `boundary` is asked "does every hunk in the 8 files map to the cache requirement, and is any changed file not needed by it"; `correctness` is asked "does refresh dedupe in-flight, does failure keep the old value, does each test fail on a plausible wrong impl"; `overdesign` is asked "is the default `AndroidDeviceSnapshotCollector(context)` parameter needed, any speculative API"; `impact` is asked "every construction site of AndroidRiskSignalCollector/AndroidDeviceSnapshotCollector in main+androidTest, and whether prod paths can bypass the cache". Verdict merges: 不通过 + P2 (privacy semantics of LAT null-not-overwriting) + P2 (default param trap).
 
 **Positive (`--self`):** request = "复核 P1 修正 0d13e65..7b797ba,只改了两个 androidTest 调用和一个测试名" → three-line diff → review directly, compile androidTest sources, reply 通过.
 
-**BAD — do not do this:** reading the whole diff, all tests and all evidence logs yourself in the main session before dispatching; or dispatching one agent for "review everything"; or letting a subagent run `adb`; or pasting subagent findings into the verdict without re-reading the cited lines yourself (a subagent once rated duplicated gate code P1 — re-verification showed it was harmless P2 dead code).
+**BAD — do not do this:** reading the whole diff, all tests and all evidence logs yourself in the main session before dispatching; or dispatching one agent for "review everything"; or letting a subagent run `adb`; or pasting subagent findings into the verdict without re-reading the cited lines yourself (a subagent once rated duplicated gate code P1 — re-verification showed it was P2 dead code).
 </examples>
 
 <output_format>
 ```
-【审核结论·<executor/task>(<scope>)】结论:通过 | 不通过 | 有条件通过
+【审核结论·<executor/task>(<scope>)】结论:通过 | 不通过
 == P0/P1/P2 ==
 <n>. <file:line> — <what is wrong> — <why / concrete failure> — <smallest fix> — <how to verify>
 == 已核实通过的审核点 ==  (per aspect, with file:line evidence from the subagents)
-== 未能核实 ==  (anything no agent could confirm, and why)
+== 7d 处置 ==  (one line each: <item> → covered <file:line> | follow-up: <result> | out of scope: <reason>)
+== 未能核实 ==  (requirement questions from rule 1 / step 2 and items 7d leaves unsettled; why, and what clears each from whom)
 本会话未接触设备。
 ```
 </output_format>
 
 <success_criteria>
 - Every P0/P1/P2 has file:line, cause, fix and verification, AND you re-read that file:line yourself this run (7a); every decisive VERIFIED_OK claim was spot-checked (7b).
-- All four aspects reported (or `--self` justified); no change outside the confirmed requirement is passed or rated below P1; every `CROSS_ASPECT` item has a disposition.
+- All four aspects reported (or `--self` justified); no change outside the confirmed requirement is passed or rated below P1; every `CROSS_ASPECT` and `UNVERIFIED` item has a 7d disposition or a 未能核实 line.
+- The verdict is 通过 or 不通过 only, and 通过 only when the **Pass standard** holds.
 - Items the 决策中心 already decided are not re-raised.
 - Verdict sent on the requested channel and the full text shown to the user. STOP after sending.
 </success_criteria>
@@ -100,6 +104,7 @@ P0 — Never touch a device (no adb / connected* / install); never edit the revi
 P0 — Every finding is anchored to file:line that YOU re-read this run (not only the subagent); unverifiable claims go under 未能核实, never stated as fact.
 P0 — Subagent reports are leads, not verdicts: re-verify each finding and the decisive OK claims before sending (step 7a–7e).
 P0 — A change outside the confirmed requirement is forbidden: at least P1, fix = revert the hunk, 不通过 while one remains.
+P0 — Only 通过 or 不通过; 通过 only with no P0/P1/P2 finding and an empty 未能核实.
 P1 — Delegate by default; `--self` only for trivial re-checks. One aspect per subagent; cross-aspect notes are routed by you, not judged by the subagent.
 P1 — Do not re-raise decided items; do not demand real-backend smoke (all tests are MockWebServer).
 P2 — Fill every slot of the brief; hand over prior-round findings and conventions so subagents do not rediscover them.
