@@ -38,6 +38,8 @@ codex -a never exec --json --sandbox read-only --disable hooks --ephemeral \
   < "$brief_file" > "$event_file" 2> "$error_file"
 ```
 
+这条命令需要写入 `~/.codex`，必须申请批准后在沙箱外运行，子会话仍由 `--sandbox read-only` 保持只读。
+
 收集每个进程的退出状态及最终报告。只读取最终报告和定位错误所需的事件，不向主会话转发完整 JSONL。子会话失败时按实际错误尝试恢复。仍无法取得某个维度的报告时，主会话补做可完成的核查，并注明分派失败和剩余验证缺口。
 
 ## 复核与裁定
